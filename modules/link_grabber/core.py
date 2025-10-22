@@ -1,13 +1,3 @@
-"""
-modules/link_grabber/core.py
-Fast link grabber (single-file) using yt-dlp subprocess for speed.
-- Manual cookies in cookies/ preferred (names: youtube_cookies.txt, instagram_cookies.txt, tiktok_cookies.txt, facebook_cookies.txt, twitter_cookies.txt)
-- Fallback to browser_cookie3 if available (temporary cookies)
-- Produces page URLs (not media stream URLs)
-- Emits signals expected by GUI:
-    progress(str), progress_percent(int), link_found(str, str), finished(bool, str, list), save_triggered(str, list)
-"""
-
 from PyQt5.QtCore import QThread, pyqtSignal
 from pathlib import Path
 import os
@@ -15,7 +5,7 @@ import subprocess
 import shlex
 import tempfile
 import re
-import json
+import time
 import typing
 
 # Helper: sanitize filenames

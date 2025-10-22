@@ -1,0 +1,377 @@
+import os
+from PyQt5.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTextEdit, QPushButton,
+    QProgressBar, QComboBox, QCheckBox, QFileDialog, QMessageBox,
+    QListWidget, QGroupBox, QLineEdit, QMenu, QListWidgetItem 
+)
+from PyQt5.QtGui import QClipboard
+from PyQt5.QtCore import Qt
+from PyQt5 import QtWidgets
+from pathlib import Path
+from datetime import datetime
+from .core import VideoDownloaderThread
+
+class VideoDownloaderPage(QWidget):
+    def __init__(self, back_callback=None, links=None):
+        super().__init__()
+        self.back_callback = back_callback
+        self.downloader_thread = None
+        self.links = links if links is not None else []
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QVBoxLayout()
+        layout.setAlignment(Qt.AlignTop)
+        layout.setSpacing(15)
+        layout.setContentsMargins(15, 15, 15, 15)
+
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #23272A;
+                color: #F5F6F5;
+                font-family: Arial, sans-serif;
+            }
+        """)
+
+        self.title = QLabel("⬇️ Video Downloader")
+        self.title.setStyleSheet("font-size: 24px; font-weight: bold; color: #1ABC9C; margin-bottom: 15px;")
+        layout.addWidget(self.title)
+
+        self.url_input = QTextEdit()
+        self.url_input.setPlaceholderText("Paste video URL(s) (multiple lines or comma-separated)")
+        self.url_input.setStyleSheet("""
+            QTextEdit {
+                background-color: #2C2F33; color: #F5F6F5; border: 2px solid #4B5057;
+                padding: 10px; border-radius: 8px; font-size: 16px;
+            }
+            QTextEdit:focus { border: 2px solid #1ABC9C; }
+        """)
+        self.url_input.setMinimumHeight(80)
+        layout.addWidget(self.url_input)
+
+        self.link_list = QListWidget()
+        self.link_list.setSelectionMode(QListWidget.SingleSelection)
+        self.link_list.setEditTriggers(QListWidget.DoubleClicked | QListWidget.EditKeyPressed)
+        self.link_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.link_list.itemClicked.connect(self.select_link)
+        self.link_list.customContextMenuRequested.connect(self.show_context_menu)
+        self.link_list.setStyleSheet("""
+            QListWidget {
+                background-color: #2C2F33; color: #F5F6F5; border: 2px solid #4B5057;
+                border-radius: 8px; padding: 10px; font-size: 14px;
+            }
+            QListWidget::item:selected { background-color: #1ABC9C; color: #F5F6F5; }
+            QListWidget::item:hover { background-color: #3A3D41; }
+        """)
+        layout.addWidget(self.link_list)
+
+        settings_group = QGroupBox("Download Settings")
+        settings_group.setStyleSheet("""
+            QGroupBox { color: #1ABC9C; border: 2px solid #4B5057; border-radius: 8px;
+                        margin-top: 12px; padding-top: 15px; background-color: #2C2F33;
+                        font-weight: bold; font-size: 14px; }
+            QGroupBox::title { subcontrol-origin: margin; left: 15px; padding: 0 8px; }
+        """)
+        settings_layout = QVBoxLayout()
+
+        path_layout = QHBoxLayout()
+        path_label = QLabel("📁 Save to:")
+        path_label.setStyleSheet("color: #F5F6F5; font-size: 16px;")
+        self.path_input = QLineEdit()
+        self.path_input.setText(str(Path.home() / "Desktop" / "Toseeq Downloads"))
+        self.path_input.setStyleSheet("""
+            QLineEdit { background-color: #2C2F33; color: #F5F6F5; border: 2px solid #4B5057;
+                        padding: 10px; border-radius: 8px; font-size: 16px; }
+            QLineEdit:focus { border: 2px solid #1ABC9C; }
+        """)
+        browse_btn = QPushButton("Browse")
+        browse_btn.setStyleSheet("""
+            QPushButton { background-color: #1ABC9C; color: #F5F6F5; border: none;
+                         padding: 10px 20px; border-radius: 8px; font-size: 16px; font-weight: bold; }
+            QPushButton:hover { background-color: #16A085; }
+            QPushButton:pressed { background-color: #128C7E; }
+        """)
+        browse_btn.clicked.connect(self.browse_folder)
+        path_layout.addWidget(path_label)
+        path_layout.addWidget(self.path_input)
+        path_layout.addWidget(browse_btn)
+        settings_layout.addLayout(path_layout)
+
+        quality_layout = QHBoxLayout()
+        quality_label = QLabel("🎥 Quality:")
+        quality_label.setStyleSheet("color: #F5F6F5; font-size: 16px;")
+        self.quality_combo = QComboBox()
+        self.quality_combo.addItems(["Best", "Medium (720p)", "Low (480p)"])
+        self.quality_combo.setStyleSheet("""
+            QComboBox { background-color: #2C2F33; color: #F5F6F5; border: 2px solid #4B5057;
+                        padding: 8px; border-radius: 8px; font-size: 16px; }
+            QComboBox:focus { border: 2px solid #1ABC9C; }
+            QComboBox::drop-down { border: none; }
+            QComboBox QAbstractItemView { background-color: #2C2F33; color: #F5F6F5;
+                                         selection-background-color: #1ABC9C; }
+        """)
+        quality_layout.addWidget(quality_label)
+        quality_layout.addWidget(self.quality_combo)
+        settings_layout.addLayout(quality_layout)
+
+        options_layout = QHBoxLayout()
+        self.playlist_check = QCheckBox("📑 Playlist")
+        self.subtitle_check = QCheckBox("📝 Subtitles")
+        self.thumbnail_check = QCheckBox("🖼️ Thumbnail")
+        for cb in [self.playlist_check, self.subtitle_check, self.thumbnail_check]:
+            cb.setStyleSheet("""
+                QCheckBox { color: #F5F6F5; font-size: 16px; font-weight: bold;
+                            background-color: #2C2F33; padding: 8px; border-radius: 5px; }
+                QCheckBox::indicator { width: 24px; height: 24px; background-color: #2C2F33;
+                                      border: 2px solid #4B5057; border-radius: 4px; }
+                QCheckBox::indicator:checked { background-color: #1ABC9C; border: 2px solid #1ABC9C; }
+            """)
+        options_layout.addWidget(self.playlist_check)
+        options_layout.addWidget(self.subtitle_check)
+        options_layout.addWidget(self.thumbnail_check)
+        options_layout.addStretch()
+        settings_layout.addLayout(options_layout)
+
+        settings_group.setLayout(settings_layout)
+        layout.addWidget(settings_group)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+        self.back_btn = QPushButton("⬅ Back")
+        self.start_btn = QPushButton("⬇ Start")
+        self.cancel_btn = QPushButton("❌ Cancel")
+        self.clear_btn = QPushButton("🗑️ Clear")
+        button_style = """
+            QPushButton { background-color: #1ABC9C; color: #F5F6F5; border: none;
+                         padding: 10px 20px; border-radius: 8px; font-size: 16px; font-weight: bold; }
+            QPushButton:hover { background-color: #16A085; }
+            QPushButton:pressed { background-color: #128C7E; }
+            QPushButton:disabled { background-color: #4B5057; color: #888; }
+        """
+        for btn in [self.back_btn, self.start_btn, self.cancel_btn, self.clear_btn]:
+            btn.setStyleSheet(button_style)
+        self.cancel_btn.setVisible(False)
+        btn_row.addWidget(self.back_btn)
+        btn_row.addWidget(self.start_btn)
+        btn_row.addWidget(self.cancel_btn)
+        btn_row.addWidget(self.clear_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setStyleSheet("""
+            QProgressBar { background-color: #2C2F33; border: 2px solid #4B5057;
+                          border-radius: 8px; text-align: center; color: #F5F6F5; font-size: 14px; }
+            QProgressBar::chunk { background-color: #1ABC9C; border-radius: 6px; }
+        """)
+        layout.addWidget(self.progress_bar)
+
+        info_layout = QHBoxLayout()
+        self.speed_label = QLabel("Speed: --")
+        self.eta_label = QLabel("ETA: --")
+        for label in [self.speed_label, self.eta_label]:
+            label.setStyleSheet("color: #F5F6F5; font-size: 14px;")
+            label.setVisible(False)
+        info_layout.addWidget(self.speed_label)
+        info_layout.addWidget(self.eta_label)
+        info_layout.addStretch()
+        layout.addLayout(info_layout)
+
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        self.log_text.setStyleSheet("""
+            QTextEdit { background-color: #2C2F33; color: #F5F6F5; border: 2px solid #4B5057;
+                        border-radius: 8px; padding: 10px; font-size: 14px; }
+        """)
+        layout.addWidget(self.log_text)
+
+        self.setLayout(layout)
+
+        self.back_btn.clicked.connect(self.back_callback if self.back_callback else lambda: None)
+        self.start_btn.clicked.connect(self.start_download)
+        self.cancel_btn.clicked.connect(self.cancel_download)
+        self.clear_btn.clicked.connect(self.clear_all)
+
+        self.log_message("✓ Video Downloader ready")
+        self.log_message("💡 Supports YouTube, TikTok, Instagram, and more")
+        self.update_links(self.links)
+
+    def show_context_menu(self, pos):
+        item = self.link_list.itemAt(pos)
+        if not item:
+            return
+        menu = QMenu(self)
+        edit_act = menu.addAction("Edit")
+        copy_act = menu.addAction("Copy")
+        delete_act = menu.addAction("Delete")
+        select_all_act = menu.addAction("Select All")
+        action = menu.exec_(self.link_list.mapToGlobal(pos))
+        if action == edit_act:
+            self.link_list.editItem(item)
+        elif action == copy_act:
+            clipboard = QtWidgets.QApplication.clipboard()
+            clipboard.setText(item.text())
+            self.log_message("📋 Copied to clipboard")
+        elif action == delete_act:
+            row = self.link_list.row(item)
+            self.link_list.takeItem(row)
+            if row < len(self.links):
+                del self.links[row]
+            self.log_message("🗑️ Link deleted")
+        elif action == select_all_act:
+            self.link_list.selectAll()
+
+    def clear_all(self):
+        reply = QMessageBox.question(self, "Clear All?", "Clear URLs, logs, and links list?",
+                                    QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            self.url_input.clear()
+            self.log_text.clear()
+            self.progress_bar.setValue(0)
+            self.speed_label.setText("Speed: --")
+            self.eta_label.setText("ETA: --")
+            self.link_list.clear()
+            self.links = []
+            self.log_message("🗑️ Cleared everything")
+
+    def update_links(self, links):
+        """Update link list - make all items editable"""
+        self.links = links if links else []
+        self.link_list.clear()
+        
+        for link in self.links:
+            # Handle both string and dict
+            if isinstance(link, str):
+                url = link
+            elif isinstance(link, dict):
+                url = link.get('url', '')
+            else:
+                url = str(link)
+
+            if url:
+                item = QListWidgetItem(url)
+                # Make item FULLY editable
+                item.setFlags(
+                    Qt.ItemIsSelectable | 
+                    Qt.ItemIsEditable | 
+                    Qt.ItemIsEnabled | 
+                    Qt.ItemIsDragEnabled
+                )
+                self.link_list.addItem(item)
+        
+        # Drag and drop enabled
+        self.link_list.setDragEnabled(True)
+        self.link_list.setDragDropMode(QListWidget.InternalMove)
+                
+        if self.links:
+            self.log_message(f"📋 Loaded {len(self.links)} link(s) from Link Grabber")
+
+    def select_link(self, item):
+        self.url_input.setPlainText(item.text())
+
+    def browse_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select Download Folder", self.path_input.text())
+        if folder:
+            self.path_input.setText(folder)
+            self.log_message(f"📁 Save location: {folder}")
+
+    def start_download(self):
+        if self.downloader_thread and self.downloader_thread.isRunning():
+            QMessageBox.warning(self, "Busy", "Download in progress. Wait or cancel.")
+            return
+
+        raw_urls = self.url_input.toPlainText().strip()
+        if not raw_urls:
+            if self.links:
+                raw_urls = '\n'.join([link.get('url', str(link)) if isinstance(link, dict) else str(link) for link in self.links])
+                self.url_input.setPlainText(raw_urls)
+            else:
+                QMessageBox.warning(self, "Error", "Paste at least one URL or grab links first.")
+                return
+
+        urls = [u.strip() for u in raw_urls.replace(',', '\n').splitlines() if u.strip() and u.startswith(('http://', 'https://'))]
+        if not urls:
+            QMessageBox.warning(self, "Error", "No valid URLs found.")
+            return
+
+        save_path = self.path_input.text().strip()
+        if not save_path:
+            QMessageBox.warning(self, "Error", "Select save folder.")
+            return
+
+        if not os.path.exists(save_path):
+            reply = QMessageBox.question(self, "Create?", f"Folder not found:\n{save_path}\n\nCreate it?",
+                                        QMessageBox.Yes | QMessageBox.No)
+            if reply == QMessageBox.Yes:
+                try:
+                    os.makedirs(save_path, exist_ok=True)
+                except Exception as e:
+                    QMessageBox.critical(self, "Error", f"Cannot create folder: {str(e)[:100]}")
+                    return
+            else:
+                return
+
+        quality_map = {0: 'Best', 1: 'Medium', 2: 'Low'}
+        quality = quality_map.get(self.quality_combo.currentIndex(), 'Best')
+        options = {
+            'quality': quality,
+            'playlist': self.playlist_check.isChecked(),
+            'subtitles': self.subtitle_check.isChecked(),
+            'thumbnail': self.thumbnail_check.isChecked()
+        }
+
+        self.start_btn.setEnabled(False)
+        self.cancel_btn.setVisible(True)
+        self.progress_bar.setValue(0)
+        self.speed_label.setVisible(True)
+        self.eta_label.setVisible(True)
+
+        self.log_message("="*60)
+        self.log_message(f"🔗 URLs: {len(urls)}")
+        self.log_message(f"📁 Save: {save_path}")
+        self.log_message(f"🎥 Quality: {quality}")
+        if options['playlist']:
+            self.log_message("📑 Playlist mode: ON")
+        if options['subtitles']:
+            self.log_message("📝 Subtitles: ON")
+        if options['thumbnail']:
+            self.log_message("🖼️ Thumbnails: ON")
+        self.log_message("="*60)
+
+        self.downloader_thread = VideoDownloaderThread(urls, save_path, options)
+        self.downloader_thread.progress.connect(self.log_message)
+        self.downloader_thread.progress_percent.connect(self.progress_bar.setValue)
+        self.downloader_thread.download_speed.connect(lambda s: self.speed_label.setText(f"Speed: {s}"))
+        self.downloader_thread.eta.connect(lambda e: self.eta_label.setText(f"ETA: {e}"))
+        self.downloader_thread.video_complete.connect(lambda f: self.log_message(f"✅ Saved: {f}"))
+        self.downloader_thread.finished.connect(self.download_finished)
+        self.downloader_thread.start()
+
+    def cancel_download(self):
+        if self.downloader_thread and self.downloader_thread.isRunning():
+            self.downloader_thread.cancel()
+            self.log_message("⚠️ Cancelling download...")
+
+    def log_message(self, message):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.log_text.append(f"[{timestamp}] {message}")
+        self.log_text.ensureCursorVisible()
+
+    def download_finished(self, success, message):
+        self.log_message(message)
+        self.log_message("=" * 60)
+        self.start_btn.setEnabled(True)
+        self.cancel_btn.setVisible(False)
+        self.speed_label.setVisible(False)
+        self.eta_label.setVisible(False)
+        self.progress_bar.setValue(100 if success else 0)
+
+        folder = self.path_input.text().strip()
+        if success and folder and os.path.isdir(folder):
+            import subprocess
+            subprocess.Popen(['explorer', folder])
+
+        if success:
+            QMessageBox.information(self, "Done!", f"{message}\n\nVideos saved in: {folder}")
+        else:
+            QMessageBox.critical(self, "Failed", message)

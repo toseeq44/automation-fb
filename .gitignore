@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+.Python
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs & Database
+*.log
+*.db
+*.sqlite
+
+# Environment variables
+.env
+config.ini
+secrets.json
+
+# Executables
+chromedriver.exe
+geckodriver.exe
+*.exe

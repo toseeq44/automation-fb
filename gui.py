@@ -81,14 +81,17 @@ class MainMenuPage(QWidget):
 
 class VideoToolSuiteGUI(QMainWindow):
     """Main application window with page navigation"""
-    def __init__(self):
+    def __init__(self, license_manager, config):
         super().__init__()
+        self.license_manager = license_manager
+        self.config = config
         self.links = []  # Shared list for grabbed links
         self.init_ui()
         self.apply_dark_theme()
+        self.update_license_status()
 
     def init_ui(self):
-        self.setWindowTitle("Toseeq Video Tool Suite")
+        self.setWindowTitle("ContentFlow Pro - Video Automation Suite")
         self.setGeometry(100, 100, 950, 750)
 
         self.stacked_widget = QStackedWidget()
@@ -112,6 +115,14 @@ class VideoToolSuiteGUI(QMainWindow):
 
         for btn in self.main_menu.buttons:
             btn.clicked.connect(self.navigate_to_module)
+
+        # Add status bar
+        self.status_bar = self.statusBar()
+        self.license_status_label = QLabel()
+        self.status_bar.addPermanentWidget(self.license_status_label)
+        self.license_status_label.setStyleSheet("padding: 5px 10px; font-weight: bold;")
+        self.license_status_label.setCursor(Qt.PointingHandCursor)
+        self.license_status_label.mousePressEvent = lambda event: self.show_license_info()
 
     def apply_dark_theme(self):
         self.setStyleSheet("""
@@ -140,3 +151,22 @@ class VideoToolSuiteGUI(QMainWindow):
     def go_to_main_menu(self):
         self.video_downloader.update_links(self.links)  # Update downloader links before switching
         self.stacked_widget.setCurrentIndex(0)
+
+    def update_license_status(self):
+        """Update license status in status bar"""
+        status_text = self.license_manager.get_license_status_text()
+        self.license_status_label.setText(status_text)
+
+        # Color based on status
+        if "✅" in status_text:
+            self.license_status_label.setStyleSheet("padding: 5px 10px; font-weight: bold; color: #1ABC9C;")
+        else:
+            self.license_status_label.setStyleSheet("padding: 5px 10px; font-weight: bold; color: #E74C3C;")
+
+    def show_license_info(self):
+        """Show license information dialog"""
+        from modules.ui import LicenseInfoDialog
+        dialog = LicenseInfoDialog(self.license_manager, self)
+        dialog.exec_()
+        # Update status after dialog closes
+        self.update_license_status()

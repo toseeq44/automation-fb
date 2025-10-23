@@ -27,7 +27,7 @@ def _safe_filename(s: str) -> str:
     s = re.sub(r'[<>:"/\\|?*\n\r\t]+', '_', s)
     s = re.sub(r'\s+', '_', s)
     if not s:
-        return "links"
+        return "unknown"
     return s[:200]
 
 

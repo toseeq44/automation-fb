@@ -27,7 +27,7 @@ def _safe_filename(s: str) -> str:
     s = re.sub(r'[<>:"/\\|?*\n\r\t]+', '_', s)
     s = re.sub(r'\s+', '_', s)
     if not s:
-        return "unknown"
+        return "links"
     return s[:200]
 
 
@@ -37,11 +37,9 @@ def _extract_creator_from_url(url: str, platform_key: str) -> str:
         u = url.strip().rstrip('/')
         
         if platform_key == 'youtube':
-            # @username format
             m = re.search(r'@([A-Za-z0-9_\-\.]+)', u)
             if m:
                 return m.group(1)
-            # /channel/ID format
             m = re.search(r'/channel/([^/?#]+)', u)
             if m:
                 return m.group(1)
@@ -117,7 +115,7 @@ def _detect_platform_key(url: str) -> str:
         return 'instagram'
     if 'tiktok.com' in u:
         return 'tiktok'
-    if 'facebook.com' in u or 'fb.com' in u or 'fb.watch' in u:
+    if 'facebook.com' in u or 'fb.com' in u:
         return 'facebook'
     if 'twitter.com' in u or 'x.com' in u:
         return 'twitter'
@@ -260,6 +258,13 @@ def _extract_browser_cookies(platform_key: str) -> typing.Optional[str]:
     logging.warning("⚠️ Could not extract cookies from any browser")
     return None
 
+class LinkGrabberThread(QThread):
+    """Single-URL fast link grabber (yt-dlp subprocess)"""
+    progress = pyqtSignal(str)
+    progress_percent = pyqtSignal(int)
+    link_found = pyqtSignal(str, str)
+    finished = pyqtSignal(bool, str, list)
+    save_triggered = pyqtSignal(str, list)
 
 # ============================================
 # EXTRACTION METHODS
@@ -728,7 +733,7 @@ class LinkGrabberThread(QThread):
                 self.finished.emit(False, "❌ No URL provided", [])
                 return
 
-            self.progress.emit("🔍 Detecting platform...")
+            self.progress.emit("🔍 Detecting platform and preparing...")
             self.progress_percent.emit(5)
             
             platform_key = _detect_platform_key(self.url)
@@ -862,6 +867,33 @@ class BulkLinkGrabberThread(QThread):
         this_file = Path(__file__).resolve()
         self.cookies_dir = this_file.parent.parent.parent / "cookies"
         self.cookies_dir.mkdir(parents=True, exist_ok=True)
+        self._temp_cookie_files = []
+
+    def _cleanup_temp_cookies(self):
+        for tf in list(self._temp_cookie_files):
+            try:
+                if os.path.exists(tf):
+                    os.unlink(tf)
+            except Exception:
+                pass
+        self._temp_cookie_files = []
+
+    def _save_links_to_desktop_file(self, links: typing.List[dict]) -> str:
+        desktop = Path.home() / "Desktop"
+        folder = desktop / "Toseeq Links Grabber"
+        folder.mkdir(parents=True, exist_ok=True)
+        filename = "bulk_links.txt"
+        filepath = folder / filename
+        with open(filepath, "w", encoding="utf-8") as f:
+            for link in links:
+                f.write(f"{link['url']}\n")
+        return str(filepath)
+
+    def save_to_file(self):
+        """Trigger file save and emit signal with path"""
+        if self.found_links:
+            saved_path = self._save_links_to_desktop_file(self.found_links)
+            self.save_triggered.emit(saved_path, self.found_links)
 
     def run(self):
         try:
@@ -913,6 +945,7 @@ class BulkLinkGrabberThread(QThread):
                 # Update progress
                 pct = int((i / total_urls) * 95)
                 self.progress_percent.emit(pct)
+                runner._cleanup_temp_cookies()
 
             if self.is_cancelled:
                 self.finished.emit(
@@ -1000,3 +1033,4 @@ class BulkLinkGrabberThread(QThread):
 
     def cancel(self):
         self.is_cancelled = True
+        self._cleanup_temp_cookies()

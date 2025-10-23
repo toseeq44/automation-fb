@@ -27,18 +27,22 @@ class VideoDownloaderThread(QThread):
 
     def __init__(self, urls, save_path, options, parent=None):
         super().__init__(parent)
-        
+
         # Handle both string and list inputs
         if isinstance(urls, str):
             self.urls = [u.strip() for u in urls.replace(',', '\n').splitlines() if u.strip()]
         else:
             self.urls = [u.strip() for u in urls if u.strip()]
-        
+
         self.save_path = save_path
         self.options = options
         self.cancelled = False
         self.success_count = 0
         self._temp_files = []
+
+        # Auto-retry settings
+        self.max_retries = options.get('max_retries', 3)
+        self.retry_count = {}  # Track retries per URL
     
     def get_cookie_file_triple_fallback(self, url):
         """
@@ -240,26 +244,35 @@ class VideoDownloaderThread(QThread):
         # Get cookies using triple fallback
         cookie_file = self.get_cookie_file_triple_fallback(self.urls[0]) if self.urls else None
 
-        # Quality settings
+        # Enhanced quality settings
         quality_map = {
+            'Mobile': 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]/best',
+            'HD': 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]/best',
+            '4K': 'bestvideo[height<=2160][ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best',
             'Best': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
             'Medium': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]/best',
             'Low': 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]/best'
         }
-        
-        quality = self.options.get('quality', 'Best')
-        format_string = quality_map.get(quality, quality_map['Best'])
 
-        # Configure yt-dlp
+        quality = self.options.get('quality', 'HD')
+        format_string = quality_map.get(quality, quality_map['HD'])
+
+        # Custom bitrate if specified
+        custom_bitrate = self.options.get('bitrate')
+        if custom_bitrate:
+            format_string = f'bestvideo[vbr<={custom_bitrate}]+bestaudio/best'
+
+        # Configure yt-dlp with auto-retry and resume
         ydl_opts = {
             'format': format_string,
             'outtmpl': os.path.join(self.save_path, '%(title)s.%(ext)s'),
             'merge_output_format': 'mp4',  # Force merge to mp4
             'progress_hooks': [self.progress_hook],
-            'retries': 5,
-            'fragment_retries': 5,
+            'retries': 10,  # Increased retries
+            'fragment_retries': 10,
+            'file_access_retries': 5,
             'ignoreerrors': False,
-            'continuedl': True,
+            'continuedl': True,  # Resume broken downloads
             'noplaylist': not self.options.get('playlist', False),
             'restrict_filenames': True,
             'windowsfilenames': True,
@@ -267,6 +280,8 @@ class VideoDownloaderThread(QThread):
             'quiet': False,
             'no_check_certificate': True,
             'keepvideo': False,  # Don't keep separate video/audio files
+            'nocheckcertificate': True,
+            'prefer_insecure': True,
             'postprocessors': [{
                 'key': 'FFmpegVideoConvertor',
                 'preferedformat': 'mp4',  # Convert to mp4
@@ -291,16 +306,45 @@ class VideoDownloaderThread(QThread):
         if self.options.get('thumbnail'):
             ydl_opts['writethumbnail'] = True
 
-        # Start download
+        # Remove duplicates
+        self.urls = self.remove_duplicates(self.urls)
+
+        # Start download with auto-retry
         try:
             self.progress.emit(f"🚀 Starting download of {len(self.urls)} video(s)...")
-            
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download(self.urls)
-            
+            self.progress.emit(f"✅ Duplicates removed - {len(self.urls)} unique URLs")
+
+            # Download with retry logic
+            for url in self.urls:
+                if self.cancelled:
+                    break
+
+                retry_attempt = 0
+                max_attempts = self.max_retries
+                downloaded = False
+
+                while retry_attempt <= max_attempts and not downloaded and not self.cancelled:
+                    try:
+                        if retry_attempt > 0:
+                            self.progress.emit(f"🔄 Retry {retry_attempt}/{max_attempts} for URL...")
+
+                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                            ydl.download([url])
+
+                        downloaded = True
+
+                    except Exception as e:
+                        retry_attempt += 1
+                        if retry_attempt <= max_attempts:
+                            self.progress.emit(f"⚠️ Error, retrying in 3s... ({retry_attempt}/{max_attempts})")
+                            import time
+                            time.sleep(3)
+                        else:
+                            self.progress.emit(f"❌ Failed after {max_attempts} retries: {str(e)[:100]}")
+
             # Cleanup
             self.cleanup_temp_files()
-            
+
             # Success message
             if self.success_count == len(self.urls):
                 msg = f"✅ Success! Downloaded {self.success_count}/{len(self.urls)} videos"
@@ -308,14 +352,35 @@ class VideoDownloaderThread(QThread):
                 msg = f"⚠️ Partial: {self.success_count}/{len(self.urls)} videos downloaded"
             else:
                 msg = f"❌ Failed: 0/{len(self.urls)} videos downloaded"
-            
+
             self.finished.emit(self.success_count > 0, msg)
-        
+
         except Exception as e:
             self.cleanup_temp_files()
             error = str(e)[:200]
             self.progress.emit(f"❌ Error: {error}")
             self.finished.emit(False, f"❌ Download failed: {error}")
+
+    def remove_duplicates(self, urls):
+        """Remove duplicate URLs while preserving order"""
+        seen = set()
+        unique = []
+        duplicates = 0
+
+        for url in urls:
+            # Normalize URL (remove query parameters for comparison)
+            normalized = url.split('?')[0].lower()
+
+            if normalized not in seen:
+                seen.add(normalized)
+                unique.append(url)
+            else:
+                duplicates += 1
+
+        if duplicates > 0:
+            self.progress.emit(f"🔍 Removed {duplicates} duplicate URL(s)")
+
+        return unique
 
     def cancel(self):
         """Cancel download"""

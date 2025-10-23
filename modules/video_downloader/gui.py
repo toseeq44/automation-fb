@@ -367,11 +367,33 @@ class VideoDownloaderPage(QWidget):
         self.progress_bar.setValue(100 if success else 0)
 
         folder = self.path_input.text().strip()
-        if success and folder and os.path.isdir(folder):
-            import subprocess
-            subprocess.Popen(['explorer', folder])
 
+        # Show notification popup (NO AUTO-OPEN FOLDER)
         if success:
-            QMessageBox.information(self, "Done!", f"{message}\n\nVideos saved in: {folder}")
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Information)
+            msg_box.setWindowTitle("✅ Download Complete!")
+            msg_box.setText(message)
+            msg_box.setInformativeText(f"📁 Location: {folder}")
+
+            # Add button to open folder manually (optional)
+            open_folder_btn = msg_box.addButton("Open Folder", QMessageBox.ActionRole)
+            msg_box.addButton("Close", QMessageBox.AcceptRole)
+
+            msg_box.exec_()
+
+            # Only open if user clicks "Open Folder"
+            if msg_box.clickedButton() == open_folder_btn:
+                if folder and os.path.isdir(folder):
+                    import subprocess
+                    import platform
+
+                    # Cross-platform folder opening
+                    if platform.system() == 'Windows':
+                        subprocess.Popen(['explorer', folder])
+                    elif platform.system() == 'Darwin':  # macOS
+                        subprocess.Popen(['open', folder])
+                    else:  # Linux
+                        subprocess.Popen(['xdg-open', folder])
         else:
-            QMessageBox.critical(self, "Failed", message)
+            QMessageBox.critical(self, "❌ Download Failed", message)

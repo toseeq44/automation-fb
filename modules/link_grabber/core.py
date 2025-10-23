@@ -1,27 +1,28 @@
 """
-modules/link_grabber/core.py - ENHANCED VERSION
-Multi-platform link grabber with multiple fallback methods
+Enhanced Link Grabber - Multi-method approach for maximum success rate
 Supports: YouTube, Instagram, TikTok, Facebook, Twitter
-Features:
-- Creator-specific folders
-- Duplicate detection
-- Multiple extraction methods per platform
-- Comprehensive error handling
+Methods: yt-dlp, gallery-dl, instaloader, requests-based scraping
+Cookie priority: manual files > desktop file > browser extraction
 """
 
 from PyQt5.QtCore import QThread, pyqtSignal
 from pathlib import Path
 import os
 import subprocess
-import shlex
 import tempfile
 import re
-import json
-import typing
 import time
+import typing
+import json
+import logging
 
-# Helper: sanitize filenames
+
+# ============================================
+# HELPER FUNCTIONS
+# ============================================
+
 def _safe_filename(s: str) -> str:
+    """Sanitize filename for filesystem"""
     s = s.strip()
     s = re.sub(r'[<>:"/\\|?*\n\r\t]+', '_', s)
     s = re.sub(r'\s+', '_', s)
@@ -29,12 +30,12 @@ def _safe_filename(s: str) -> str:
         return "unknown"
     return s[:200]
 
-# Helper: extract creator/username from URL
+
 def _extract_creator_from_url(url: str, platform_key: str) -> str:
+    """Extract creator username from URL"""
     try:
         u = url.strip().rstrip('/')
-
-        # YouTube
+        
         if platform_key == 'youtube':
             # @username format
             m = re.search(r'@([A-Za-z0-9_\-\.]+)', u)
@@ -44,64 +45,75 @@ def _extract_creator_from_url(url: str, platform_key: str) -> str:
             m = re.search(r'/channel/([^/?#]+)', u)
             if m:
                 return m.group(1)
-            # /c/username format
+            # /c/name format
             m = re.search(r'/c/([^/?#]+)', u)
             if m:
                 return m.group(1)
-            # /user/username format
+            # /user/name format
             m = re.search(r'/user/([^/?#]+)', u)
             if m:
                 return m.group(1)
-
-        # Instagram
+            # Fallback
+            parts = u.split('/')
+            if parts:
+                return parts[-1] or 'youtube'
+            return 'youtube'
+            
         elif platform_key == 'instagram':
+            # instagram.com/username
             m = re.search(r'instagram\.com/([^/?#]+)', u)
             if m:
                 username = m.group(1)
-                # Remove common paths
-                if username not in ['p', 'reel', 'tv', 'stories', 'explore']:
+                # Filter out non-username paths
+                if username not in ['p', 'reel', 'tv', 'stories', 'explore', 'accounts', 'direct']:
                     return username
-
-        # TikTok
+            return 'instagram'
+            
         elif platform_key == 'tiktok':
+            # tiktok.com/@username
             m = re.search(r'tiktok\.com/@([^/?#]+)', u)
             if m:
                 return m.group(1)
-
-        # Twitter/X
+            return 'tiktok'
+            
         elif platform_key == 'twitter':
+            # twitter.com/username or x.com/username
             m = re.search(r'(?:twitter|x)\.com/([^/?#]+)', u)
             if m:
                 username = m.group(1)
-                # Remove common paths
-                if username not in ['home', 'explore', 'notifications', 'messages', 'i']:
+                # Filter out non-username paths
+                if username not in ['i', 'home', 'explore', 'notifications', 'messages', 'search']:
                     return username
-
-        # Facebook
+            return 'twitter'
+            
         elif platform_key == 'facebook':
-            m = re.search(r'facebook\.com/([^/?#]+)', u)
+            # facebook.com/username or facebook.com/pages/...
+            m = re.search(r'facebook\.com/(?:pages/)?([^/?#]+)', u)
             if m:
                 username = m.group(1)
-                # Remove common paths
-                if username not in ['home', 'watch', 'groups', 'pages', 'gaming']:
+                # Filter out non-username paths
+                if username not in ['watch', 'groups', 'events', 'pages', 'people', 'marketplace']:
                     return username
-
-        # Fallback: use last part of URL
-        parts = [p for p in u.split('/') if p]
-        if parts:
-            return parts[-1]
-
+            return 'facebook'
+            
+        else:
+            parts = u.split('/')
+            if parts:
+                return parts[-1] or platform_key
+            return platform_key
+            
+    except Exception as e:
+        logging.debug(f"Error extracting creator: {e}")
         return platform_key
 
-    except Exception:
-        return 'unknown'
 
-# Detect platform from URL
 def _detect_platform_key(url: str) -> str:
+    """Detect platform from URL"""
     u = url.lower()
+    
     if 'youtube.com' in u or 'youtu.be' in u:
         return 'youtube'
-    if 'instagram.com' in u:
+    if 'instagram.com' in u or 'instagr.am' in u:
         return 'instagram'
     if 'tiktok.com' in u:
         return 'tiktok'
@@ -109,49 +121,83 @@ def _detect_platform_key(url: str) -> str:
         return 'facebook'
     if 'twitter.com' in u or 'x.com' in u:
         return 'twitter'
+    
     return 'unknown'
 
-# Get manual cookie file
-def _manual_cookie_path(cookies_dir: Path, platform_key: str) -> typing.Optional[str]:
+
+def _find_cookie_file(cookies_dir: Path, platform_key: str) -> typing.Optional[str]:
     """
-    Check multiple cookie file locations:
-    1. Project cookies/ folder
-    2. Desktop (desktop/toseeq-cookies.txt or platform-specific)
+    Find cookie file with priority:
+    1. Platform-specific file in cookies/ folder
+    2. General cookies.txt in cookies/ folder
+    3. toseeq-cookies.txt on Desktop
+    4. Any file with platform name in cookies/ folder
+    5. Browser extraction (if browser_cookie3 available)
     """
-    # Priority 1: Project cookies folder
-    mapping = {
-        'youtube': 'youtube_cookies.txt',
-        'instagram': 'instagram_cookies.txt',
-        'tiktok': 'tiktok_cookies.txt',
-        'facebook': 'facebook_cookies.txt',
-        'twitter': 'twitter_cookies.txt'
+    
+    # Priority 1: Platform-specific file
+    platform_mapping = {
+        'youtube': ['youtube_cookies.txt', 'youtube.txt', 'yt_cookies.txt'],
+        'instagram': ['instagram_cookies.txt', 'instagram.txt', 'ig_cookies.txt', 'insta_cookies.txt'],
+        'tiktok': ['tiktok_cookies.txt', 'tiktok.txt', 'tt_cookies.txt'],
+        'facebook': ['facebook_cookies.txt', 'facebook.txt', 'fb_cookies.txt'],
+        'twitter': ['twitter_cookies.txt', 'twitter.txt', 'x_cookies.txt'],
     }
-
-    name = mapping.get(platform_key, f'{platform_key}_cookies.txt')
-    p = cookies_dir / name
-    if p.exists() and p.stat().st_size > 10:
-        return str(p)
-
-    # Priority 2: Universal cookies.txt
-    universal = cookies_dir / 'cookies.txt'
-    if universal.exists() and universal.stat().st_size > 10:
-        return str(universal)
-
-    # Priority 3: Desktop cookies
-    desktop = Path.home() / "Desktop"
-    desktop_cookie = desktop / "toseeq-cookies.txt"
+    
+    filenames = platform_mapping.get(platform_key, [f'{platform_key}_cookies.txt'])
+    
+    for filename in filenames:
+        cookie_path = cookies_dir / filename
+        if cookie_path.exists() and cookie_path.stat().st_size > 10:
+            logging.info(f"✅ Found cookie file: {cookie_path.name}")
+            return str(cookie_path)
+    
+    # Priority 2: General cookies.txt
+    general_cookie = cookies_dir / 'cookies.txt'
+    if general_cookie.exists() and general_cookie.stat().st_size > 10:
+        logging.info(f"✅ Found general cookie file: cookies.txt")
+        return str(general_cookie)
+    
+    # Priority 3: Desktop toseeq-cookies.txt
+    desktop_cookie = Path.home() / "Desktop" / "toseeq-cookies.txt"
     if desktop_cookie.exists() and desktop_cookie.stat().st_size > 10:
+        logging.info(f"✅ Found Desktop cookie file: toseeq-cookies.txt")
         return str(desktop_cookie)
-
+    
+    # Priority 4: Search for any file with platform name
+    try:
+        for cookie_file in cookies_dir.iterdir():
+            if not cookie_file.is_file():
+                continue
+            
+            filename_lower = cookie_file.name.lower()
+            
+            # Check if platform name is in filename
+            if platform_key and platform_key.lower() in filename_lower:
+                if cookie_file.stat().st_size > 10:
+                    logging.info(f"✅ Found cookie file by pattern: {cookie_file.name}")
+                    return str(cookie_file)
+            
+            # Check for generic cookie files
+            if any(keyword in filename_lower for keyword in ['cookie', 'cookies']):
+                if cookie_file.stat().st_size > 10:
+                    logging.info(f"✅ Found generic cookie file: {cookie_file.name}")
+                    return str(cookie_file)
+    except Exception as e:
+        logging.debug(f"Error searching cookie files: {e}")
+    
+    logging.warning(f"⚠️ No cookie file found for {platform_key}")
     return None
 
-# Try browser cookies
-def _try_browser_cookies_tempfile(platform_key: str) -> typing.Optional[str]:
+
+def _extract_browser_cookies(platform_key: str) -> typing.Optional[str]:
+    """Extract cookies from browser using browser_cookie3"""
     try:
         import browser_cookie3 as bc3
-    except Exception:
+    except ImportError:
+        logging.debug("browser_cookie3 not installed")
         return None
-
+    
     domain_map = {
         'youtube': '.youtube.com',
         'instagram': '.instagram.com',
@@ -159,410 +205,505 @@ def _try_browser_cookies_tempfile(platform_key: str) -> typing.Optional[str]:
         'facebook': '.facebook.com',
         'twitter': '.twitter.com'
     }
-    domain = domain_map.get(platform_key, None)
-
+    
+    domain = domain_map.get(platform_key)
+    if not domain:
+        return None
+    
+    # Try different browsers in order
     browsers = [
-        getattr(bc3, 'chrome', None),
-        getattr(bc3, 'edge', None),
-        getattr(bc3, 'firefox', None)
+        ('Chrome', getattr(bc3, 'chrome', None)),
+        ('Edge', getattr(bc3, 'edge', None)),
+        ('Firefox', getattr(bc3, 'firefox', None)),
     ]
-
-    for bfunc in browsers:
-        if not bfunc:
+    
+    for browser_name, browser_func in browsers:
+        if not browser_func:
             continue
+        
         try:
-            cj = bfunc(domain_name=domain) if domain else bfunc()
-            if cj and len(cj) > 0:
-                tf = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8')
-                tf.write("# Netscape HTTP Cookie File\n")
-                for ck in cj:
-                    d = getattr(ck, 'domain', '')
-                    flag = 'TRUE' if d.startswith('.') else 'FALSE'
-                    path = getattr(ck, 'path', '/')
-                    secure = 'TRUE' if getattr(ck, 'secure', False) else 'FALSE'
-                    expires = getattr(ck, 'expires', None)
-                    exp = str(int(expires)) if expires else '0'
-                    name = getattr(ck, 'name', '')
-                    val = getattr(ck, 'value', '')
-                    tf.write(f"{d}\t{flag}\t{path}\t{secure}\t{exp}\t{name}\t{val}\n")
-                tf.close()
-                return tf.name
-        except Exception:
+            logging.info(f"🔍 Trying to extract cookies from {browser_name}...")
+            cookie_jar = browser_func(domain_name=domain)
+            
+            if cookie_jar and len(cookie_jar) > 0:
+                # Save to temp file in Netscape format
+                temp_file = tempfile.NamedTemporaryFile(
+                    mode='w',
+                    suffix='.txt',
+                    delete=False,
+                    encoding='utf-8'
+                )
+                
+                temp_file.write("# Netscape HTTP Cookie File\n")
+                temp_file.write("# This is a generated file! Do not edit.\n\n")
+                
+                for cookie in cookie_jar:
+                    domain = getattr(cookie, 'domain', '')
+                    flag = 'TRUE' if domain.startswith('.') else 'FALSE'
+                    path = getattr(cookie, 'path', '/')
+                    secure = 'TRUE' if getattr(cookie, 'secure', False) else 'FALSE'
+                    expires = getattr(cookie, 'expires', None)
+                    expiry = str(int(expires)) if expires else '0'
+                    name = getattr(cookie, 'name', '')
+                    value = getattr(cookie, 'value', '')
+                    
+                    temp_file.write(f"{domain}\t{flag}\t{path}\t{secure}\t{expiry}\t{name}\t{value}\n")
+                
+                temp_file.close()
+                logging.info(f"✅ Extracted cookies from {browser_name}")
+                return temp_file.name
+                
+        except Exception as e:
+            logging.debug(f"Failed to extract from {browser_name}: {e}")
             continue
+    
+    logging.warning("⚠️ Could not extract cookies from any browser")
     return None
 
 
-class EnhancedLinkExtractor:
+# ============================================
+# EXTRACTION METHODS
+# ============================================
+
+def _extract_with_ytdlp(url: str, platform_key: str, cookie_file: str = None, timeout: int = 300) -> typing.Tuple[typing.List[dict], str]:
     """
-    Multi-method link extraction with fallbacks
+    Method 1: Extract using yt-dlp (most reliable, works for all platforms)
     """
-
-    def __init__(self, progress_callback=None):
-        self.progress = progress_callback or (lambda x: None)
-        self._temp_files = []
-
-    def cleanup(self):
-        """Clean up temporary files"""
-        for tf in self._temp_files:
-            try:
-                if os.path.exists(tf):
-                    os.unlink(tf)
-            except:
-                pass
-        self._temp_files = []
-
-    def extract_links(self, url: str, platform: str, cookie_file: str = None, max_videos: int = 0) -> typing.List[dict]:
-        """
-        Extract links using multiple methods based on platform
-        """
-        self.progress(f"🔍 Extracting links from {platform}...")
-
-        # Try methods in order of reliability
-        methods = self._get_extraction_methods(platform)
-
-        for method_name, method_func in methods:
-            try:
-                self.progress(f"⚙️ Trying method: {method_name}...")
-                links = method_func(url, cookie_file, max_videos)
-
-                if links:
-                    self.progress(f"✅ Success with {method_name}: {len(links)} links found")
-                    return links
-                else:
-                    self.progress(f"⚠️ {method_name} returned no links, trying next method...")
-
-            except Exception as e:
-                self.progress(f"⚠️ {method_name} failed: {str(e)[:100]}, trying next method...")
+    try:
+        logging.info("🔧 Method 1: Using yt-dlp...")
+        
+        # Build command
+        cmd_parts = [
+            'yt-dlp',
+            '--flat-playlist',
+            '--dump-json',
+            '--quiet',
+            '--no-warnings',
+            '--ignore-errors',
+            '--no-check-certificate'
+        ]
+        
+        # Add cookies
+        if cookie_file:
+            cmd_parts.extend(['--cookies', cookie_file])
+        
+        # Platform-specific optimizations
+        if platform_key == 'youtube':
+            # For YouTube channels, ensure we get all tabs
+            if '/@' in url or '/channel/' in url or '/c/' in url or '/user/' in url:
+                # Remove any tab specifiers and add /videos
+                base_url = url.split('/videos')[0].split('/shorts')[0].split('/streams')[0]
+                url = base_url + '/videos'
+            cmd_parts.extend(['--extractor-args', 'youtube:player_client=android'])
+            
+        elif platform_key == 'instagram':
+            cmd_parts.extend([
+                '--extractor-args', 'instagram:api_version=2',
+                '--user-agent', 'Instagram 76.0.0.15.395 Android'
+            ])
+            
+        elif platform_key == 'tiktok':
+            cmd_parts.extend(['--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) TikTok'])
+        
+        cmd_parts.append(url)
+        
+        # Execute
+        result = subprocess.run(
+            cmd_parts,
+            capture_output=True,
+            text=True,
+            timeout=timeout
+        )
+        
+        if result.returncode != 0:
+            error_msg = result.stderr.strip()
+            logging.warning(f"yt-dlp failed: {error_msg}")
+            return [], "unknown"
+        
+        # Parse JSON output
+        entries = []
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line:
                 continue
-
-        # If all methods fail
-        self.progress(f"❌ All extraction methods failed for {url}")
-        return []
-
-    def _get_extraction_methods(self, platform: str) -> typing.List[typing.Tuple[str, typing.Callable]]:
-        """
-        Get extraction methods for each platform
-        """
-        methods_map = {
-            'youtube': [
-                ("YT-DLP Standard", self._ytdlp_standard),
-                ("YT-DLP Flat Playlist", self._ytdlp_flat),
-                ("YT-DLP JSON", self._ytdlp_json),
-            ],
-            'instagram': [
-                ("YT-DLP with Cookies", self._ytdlp_instagram),
-                ("Instaloader", self._instaloader_method),
-                ("YT-DLP Alternative", self._ytdlp_instagram_alt),
-            ],
-            'tiktok': [
-                ("YT-DLP with Cookies", self._ytdlp_tiktok),
-                ("YT-DLP Alternative", self._ytdlp_tiktok_alt),
-            ],
-            'facebook': [
-                ("YT-DLP Standard", self._ytdlp_facebook),
-                ("YT-DLP Alternative", self._ytdlp_facebook_alt),
-            ],
-            'twitter': [
-                ("YT-DLP Standard", self._ytdlp_twitter),
-                ("YT-DLP with Auth", self._ytdlp_twitter_alt),
-            ],
-        }
-
-        return methods_map.get(platform, [("YT-DLP Generic", self._ytdlp_standard)])
-
-    # ========== YOUTUBE METHODS ==========
-
-    def _ytdlp_standard(self, url: str, cookie_file: str = None, max_videos: int = 0) -> typing.List[dict]:
-        """Standard yt-dlp extraction"""
-        cmd = ['yt-dlp', '--flat-playlist', '--get-id', '--get-title', '--no-warnings', '--ignore-errors']
-
-        if cookie_file:
-            cmd.extend(['--cookies', cookie_file])
-
-        if max_videos > 0:
-            cmd.extend(['--playlist-end', str(max_videos)])
-
-        cmd.append(url)
-
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-
-        if result.returncode == 0 and result.stdout:
-            lines = result.stdout.strip().split('\n')
-            links = []
-            base_url = "https://www.youtube.com/watch?v="
-
-            # Parse output (alternating title and ID)
-            for i in range(0, len(lines), 2):
-                if i + 1 < len(lines):
-                    title = lines[i]
-                    video_id = lines[i + 1]
-                    links.append({'url': f"{base_url}{video_id}", 'title': title})
-
-            return links
-
-        return []
-
-    def _ytdlp_flat(self, url: str, cookie_file: str = None, max_videos: int = 0) -> typing.List[dict]:
-        """Flat playlist method"""
-        cmd = ['yt-dlp', '--flat-playlist', '--print', 'url', '--no-warnings', '--ignore-errors']
-
-        if cookie_file:
-            cmd.extend(['--cookies', cookie_file])
-
-        if max_videos > 0:
-            cmd.extend(['--playlist-end', str(max_videos)])
-
-        # YouTube specific: skip HLS/DASH
-        cmd.extend(['--extractor-args', 'youtube:skip=dash,hls;player_skip=configs'])
-
-        cmd.append(url)
-
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-
-        if result.returncode == 0 and result.stdout:
-            urls = [line.strip() for line in result.stdout.split('\n') if line.strip().startswith('http')]
-            return [{'url': u, 'title': u} for u in urls]
-
-        return []
-
-    def _ytdlp_json(self, url: str, cookie_file: str = None, max_videos: int = 0) -> typing.List[dict]:
-        """JSON dump method"""
-        cmd = ['yt-dlp', '--flat-playlist', '--dump-single-json', '--no-warnings', '--ignore-errors']
-
-        if cookie_file:
-            cmd.extend(['--cookies', cookie_file])
-
-        if max_videos > 0:
-            cmd.extend(['--playlist-end', str(max_videos)])
-
-        cmd.append(url)
-
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-
-        if result.returncode == 0 and result.stdout:
+            
             try:
-                data = json.loads(result.stdout)
-                entries = data.get('entries', [])
-                links = []
-
-                for entry in entries:
-                    if entry:
-                        video_id = entry.get('id', '')
-                        title = entry.get('title', 'Unknown')
-                        if video_id:
-                            links.append({
-                                'url': f"https://www.youtube.com/watch?v={video_id}",
-                                'title': title
-                            })
-
-                return links
+                data = json.loads(line)
+                
+                # Extract URL
+                video_url = data.get('webpage_url') or data.get('url')
+                if not video_url and data.get('id'):
+                    # Construct URL from ID
+                    if platform_key == 'youtube':
+                        video_url = f"https://www.youtube.com/watch?v={data['id']}"
+                    elif platform_key == 'instagram':
+                        video_url = f"https://www.instagram.com/p/{data['id']}/"
+                    elif platform_key == 'tiktok':
+                        video_url = f"https://www.tiktok.com/@{data.get('uploader_id', 'unknown')}/video/{data['id']}"
+                
+                if video_url:
+                    entries.append({
+                        'url': video_url,
+                        'title': data.get('title', 'Untitled'),
+                        'duration': data.get('duration'),
+                        'view_count': data.get('view_count'),
+                    })
+                    
             except json.JSONDecodeError:
-                pass
+                # Not JSON, might be a direct URL
+                if line.startswith('http'):
+                    entries.append({'url': line, 'title': line})
+        
+        if entries:
+            creator = _extract_creator_from_url(url, platform_key)
+            logging.info(f"✅ yt-dlp found {len(entries)} videos")
+            return entries, creator
+        
+        logging.warning("⚠️ yt-dlp returned no results")
+        return [], "unknown"
+        
+    except subprocess.TimeoutExpired:
+        logging.error(f"❌ yt-dlp timeout after {timeout}s")
+        return [], "unknown"
+    except FileNotFoundError:
+        logging.error("❌ yt-dlp not found in PATH")
+        return [], "unknown"
+    except Exception as e:
+        logging.error(f"❌ yt-dlp error: {e}")
+        return [], "unknown"
 
-        return []
 
-    # ========== INSTAGRAM METHODS ==========
-
-    def _ytdlp_instagram(self, url: str, cookie_file: str = None, max_videos: int = 0) -> typing.List[dict]:
-        """Instagram with yt-dlp and cookies"""
-        cmd = ['yt-dlp', '--flat-playlist', '--print', 'url', '--no-warnings', '--ignore-errors', '--no-check-certificate']
-
+def _extract_instagram_gallerydl(url: str, cookie_file: str = None) -> typing.List[dict]:
+    """
+    Method 2: Instagram using gallery-dl (better for Instagram than yt-dlp)
+    """
+    try:
+        logging.info("🔧 Method 2: Using gallery-dl for Instagram...")
+        
+        cmd_parts = ['gallery-dl', '--dump-json', '--quiet']
+        
         if cookie_file:
-            cmd.extend(['--cookies', cookie_file])
-
-        if max_videos > 0:
-            cmd.extend(['--playlist-end', str(max_videos)])
-
-        cmd.append(url)
-
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-
+            cmd_parts.extend(['--cookies', cookie_file])
+        
+        cmd_parts.append(url)
+        
+        result = subprocess.run(
+            cmd_parts,
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        
         if result.returncode == 0 and result.stdout:
-            urls = [line.strip() for line in result.stdout.split('\n') if line.strip().startswith('http')]
-            return [{'url': u, 'title': u} for u in urls]
-
-        return []
-
-    def _instaloader_method(self, url: str, cookie_file: str = None, max_videos: int = 0) -> typing.List[dict]:
-        """Use instaloader library"""
-        try:
-            import instaloader
-
-            L = instaloader.Instaloader()
-
-            # Extract username
-            match = re.search(r'instagram\.com/([^/?#]+)', url)
-            if not match:
-                return []
-
-            username = match.group(1)
-
-            # Load session if cookies available
-            if cookie_file:
+            entries = []
+            for line in result.stdout.splitlines():
+                if not line.strip():
+                    continue
                 try:
-                    L.load_session_from_file(username, cookie_file)
+                    data = json.loads(line)
+                    post_url = data.get('post_url') or data.get('url')
+                    if post_url:
+                        entries.append({
+                            'url': post_url,
+                            'title': data.get('description', 'Instagram Post')[:100]
+                        })
                 except:
                     pass
+            
+            if entries:
+                logging.info(f"✅ gallery-dl found {len(entries)} posts")
+                return entries
+        
+        logging.warning("⚠️ gallery-dl returned no results")
+        return []
+        
+    except FileNotFoundError:
+        logging.debug("gallery-dl not installed")
+        return []
+    except Exception as e:
+        logging.debug(f"gallery-dl error: {e}")
+        return []
 
-            profile = instaloader.Profile.from_username(L.context, username)
 
-            links = []
-            count = 0
-
-            for post in profile.get_posts():
-                if max_videos > 0 and count >= max_videos:
-                    break
-
-                links.append({
-                    'url': f"https://www.instagram.com/p/{post.shortcode}/",
-                    'title': post.caption[:100] if post.caption else "Instagram Post"
-                })
-                count += 1
-
-            return links
-
-        except Exception as e:
-            self.progress(f"⚠️ Instaloader error: {str(e)[:100]}")
+def _extract_instagram_instaloader(url: str, cookie_file: str = None) -> typing.List[dict]:
+    """
+    Method 3: Instagram using instaloader (Python library)
+    """
+    try:
+        logging.info("🔧 Method 3: Using instaloader for Instagram...")
+        
+        import instaloader
+        
+        # Extract username from URL
+        username_match = re.search(r'instagram\.com/([^/?#]+)', url)
+        if not username_match:
             return []
-
-    def _ytdlp_instagram_alt(self, url: str, cookie_file: str = None, max_videos: int = 0) -> typing.List[dict]:
-        """Alternative Instagram extraction"""
-        # Try with different options
-        cmd = ['yt-dlp', '--flat-playlist', '--get-id', '--no-warnings', '--ignore-errors', '--no-check-certificate']
-
+        
+        username = username_match.group(1)
+        
+        # Filter out non-username paths
+        if username in ['p', 'reel', 'tv', 'stories']:
+            return []
+        
+        # Initialize instaloader
+        loader = instaloader.Instaloader(
+            download_videos=False,
+            download_video_thumbnails=False,
+            download_geotags=False,
+            download_comments=False,
+            save_metadata=False,
+            compress_json=False,
+            quiet=True
+        )
+        
+        # Login with cookies if available
         if cookie_file:
-            cmd.extend(['--cookies', cookie_file])
-
-        cmd.append(url)
-
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-
-        if result.returncode == 0 and result.stdout:
-            ids = [line.strip() for line in result.stdout.split('\n') if line.strip()]
-            return [{'url': f"https://www.instagram.com/p/{id}/", 'title': id} for id in ids]
-
+            try:
+                # Instaloader can import session from cookies
+                # This is a simplified version, actual implementation may vary
+                pass
+            except:
+                pass
+        
+        # Get profile
+        profile = instaloader.Profile.from_username(loader.context, username)
+        
+        # Get posts
+        entries = []
+        for post in profile.get_posts():
+            post_url = f"https://www.instagram.com/p/{post.shortcode}/"
+            entries.append({
+                'url': post_url,
+                'title': (post.caption or '')[:100],
+                'view_count': post.video_view_count if post.is_video else None
+            })
+            
+            # Limit to prevent hanging
+            if len(entries) >= 1000:
+                break
+        
+        if entries:
+            logging.info(f"✅ instaloader found {len(entries)} posts")
+            return entries
+        
+        return []
+        
+    except ImportError:
+        logging.debug("instaloader not installed")
+        return []
+    except Exception as e:
+        logging.debug(f"instaloader error: {e}")
         return []
 
-    # ========== TIKTOK METHODS ==========
 
-    def _ytdlp_tiktok(self, url: str, cookie_file: str = None, max_videos: int = 0) -> typing.List[dict]:
-        """TikTok with yt-dlp"""
-        cmd = ['yt-dlp', '--flat-playlist', '--print', 'url', '--no-warnings', '--ignore-errors', '--no-check-certificate']
-
-        if cookie_file:
-            cmd.extend(['--cookies', cookie_file])
-
-        if max_videos > 0:
-            cmd.extend(['--playlist-end', str(max_videos)])
-
-        cmd.append(url)
-
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-
-        if result.returncode == 0 and result.stdout:
-            urls = [line.strip() for line in result.stdout.split('\n') if line.strip().startswith('http')]
-            return [{'url': u, 'title': u} for u in urls]
-
+def _extract_tiktok_playwright(url: str) -> typing.List[dict]:
+    """
+    Method 4: TikTok using Playwright (browser automation)
+    """
+    try:
+        logging.info("🔧 Method 4: Using Playwright for TikTok...")
+        
+        from playwright.sync_api import sync_playwright
+        
+        # Extract username
+        username_match = re.search(r'tiktok\.com/@([^/?#]+)', url)
+        if not username_match:
+            return []
+        
+        username = username_match.group(1)
+        profile_url = f"https://www.tiktok.com/@{username}"
+        
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            
+            # Navigate to profile
+            page.goto(profile_url, wait_until='domcontentloaded', timeout=30000)
+            
+            # Scroll to load videos
+            for _ in range(5):
+                page.evaluate("window.scrollBy(0, 1000)")
+                time.sleep(0.5)
+            
+            # Extract video links
+            video_links = page.query_selector_all('a[href*="/video/"]')
+            
+            entries = []
+            for link in video_links:
+                href = link.get_attribute('href')
+                if href and '/video/' in href:
+                    if not href.startswith('http'):
+                        href = f"https://www.tiktok.com{href}"
+                    entries.append({'url': href, 'title': 'TikTok Video'})
+            
+            browser.close()
+            
+            if entries:
+                logging.info(f"✅ Playwright found {len(entries)} videos")
+                return list({v['url']: v for v in entries}.values())  # Remove duplicates
+        
+        return []
+        
+    except ImportError:
+        logging.debug("playwright not installed")
+        return []
+    except Exception as e:
+        logging.debug(f"playwright error: {e}")
         return []
 
-    def _ytdlp_tiktok_alt(self, url: str, cookie_file: str = None, max_videos: int = 0) -> typing.List[dict]:
-        """Alternative TikTok method"""
-        cmd = ['yt-dlp', '--flat-playlist', '--get-id', '--no-warnings', '--ignore-errors']
 
+def _extract_with_requests(url: str, platform_key: str, cookie_file: str = None) -> typing.List[dict]:
+    """
+    Method 5: Lightweight HTML scraping using requests (fallback)
+    """
+    try:
+        logging.info("🔧 Method 5: Using requests-based scraping...")
+        
+        import requests
+        from bs4 import BeautifulSoup
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        # Load cookies if available
+        cookies = {}
         if cookie_file:
-            cmd.extend(['--cookies', cookie_file])
-
-        cmd.append(url)
-
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-
-        if result.returncode == 0 and result.stdout:
-            ids = [line.strip() for line in result.stdout.split('\n') if line.strip()]
-            return [{'url': f"https://www.tiktok.com/@user/video/{id}", 'title': id} for id in ids]
-
+            try:
+                with open(cookie_file, 'r') as f:
+                    for line in f:
+                        if line.strip() and not line.startswith('#'):
+                            parts = line.split('\t')
+                            if len(parts) >= 7:
+                                cookies[parts[5]] = parts[6].strip()
+            except:
+                pass
+        
+        # Make request
+        response = requests.get(url, headers=headers, cookies=cookies, timeout=15)
+        
+        if response.status_code != 200:
+            return []
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        entries = []
+        
+        if platform_key == 'instagram':
+            # Look for post links in HTML
+            links = soup.find_all('a', href=re.compile(r'/p/[\w-]+/'))
+            for link in links:
+                href = link.get('href')
+                if href:
+                    full_url = f"https://www.instagram.com{href}" if not href.startswith('http') else href
+                    entries.append({'url': full_url, 'title': 'Instagram Post'})
+        
+        elif platform_key == 'youtube':
+            # Look for video IDs in scripts
+            scripts = soup.find_all('script')
+            for script in scripts:
+                if script.string and 'videoId' in script.string:
+                    video_ids = re.findall(r'"videoId":"([\w-]{11})"', script.string)
+                    for vid in set(video_ids):
+                        entries.append({
+                            'url': f"https://www.youtube.com/watch?v={vid}",
+                            'title': 'YouTube Video'
+                        })
+        
+        if entries:
+            # Remove duplicates
+            unique_entries = list({v['url']: v for v in entries}.values())
+            logging.info(f"✅ Requests scraping found {len(unique_entries)} items")
+            return unique_entries
+        
+        return []
+        
+    except ImportError:
+        logging.debug("requests or beautifulsoup4 not installed")
+        return []
+    except Exception as e:
+        logging.debug(f"requests scraping error: {e}")
         return []
 
-    # ========== FACEBOOK METHODS ==========
 
-    def _ytdlp_facebook(self, url: str, cookie_file: str = None, max_videos: int = 0) -> typing.List[dict]:
-        """Facebook with yt-dlp"""
-        cmd = ['yt-dlp', '--flat-playlist', '--print', 'url', '--no-warnings', '--ignore-errors', '--no-check-certificate']
+# ============================================
+# MAIN EXTRACTION LOGIC
+# ============================================
 
-        if cookie_file:
-            cmd.extend(['--cookies', cookie_file])
+def extract_all_links(url: str, platform_key: str, cookies_dir: Path, options: dict = None) -> typing.Tuple[typing.List[dict], str]:
+    """
+    Try multiple extraction methods until one succeeds
+    
+    Returns: (list of video entries, creator name)
+    """
+    
+    options = options or {}
+    entries = []
+    creator = _extract_creator_from_url(url, platform_key)
+    
+    # Find cookie file
+    cookie_file = _find_cookie_file(cookies_dir, platform_key)
+    
+    # If no manual cookie found, try browser extraction
+    temp_cookie_file = None
+    if not cookie_file:
+        temp_cookie_file = _extract_browser_cookies(platform_key)
+        if temp_cookie_file:
+            cookie_file = temp_cookie_file
+            logging.info("✅ Using browser-extracted cookies")
+    
+    # Try methods in order of reliability
+    
+    # Method 1: yt-dlp (works for all platforms)
+    entries, creator = _extract_with_ytdlp(url, platform_key, cookie_file)
+    if entries:
+        if temp_cookie_file:
+            try:
+                os.unlink(temp_cookie_file)
+            except:
+                pass
+        return entries, creator
+    
+    # Platform-specific fallback methods
+    if platform_key == 'instagram':
+        # Method 2: gallery-dl
+        entries_gl = _extract_instagram_gallerydl(url, cookie_file)
+        if entries_gl:
+            entries = entries_gl
+        
+        # Method 3: instaloader
+        if not entries:
+            entries_il = _extract_instagram_instaloader(url, cookie_file)
+            if entries_il:
+                entries = entries_il
+    
+    elif platform_key == 'tiktok':
+        # Method 4: Playwright
+        entries_pw = _extract_tiktok_playwright(url)
+        if entries_pw:
+            entries = entries_pw
+    
+    # Method 5: requests-based scraping (last resort)
+    if not entries:
+        entries = _extract_with_requests(url, platform_key, cookie_file)
+    
+    # Cleanup temp cookie file
+    if temp_cookie_file:
+        try:
+            os.unlink(temp_cookie_file)
+        except:
+            pass
+    
+    return entries, creator
 
-        if max_videos > 0:
-            cmd.extend(['--playlist-end', str(max_videos)])
 
-        cmd.append(url)
-
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-
-        if result.returncode == 0 and result.stdout:
-            urls = [line.strip() for line in result.stdout.split('\n') if line.strip().startswith('http')]
-            return [{'url': u, 'title': u} for u in urls]
-
-        return []
-
-    def _ytdlp_facebook_alt(self, url: str, cookie_file: str = None, max_videos: int = 0) -> typing.List[dict]:
-        """Alternative Facebook method"""
-        cmd = ['yt-dlp', '--flat-playlist', '--get-id', '--no-warnings', '--ignore-errors']
-
-        if cookie_file:
-            cmd.extend(['--cookies', cookie_file])}
-
-        cmd.append(url)
-
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-
-        if result.returncode == 0 and result.stdout:
-            ids = [line.strip() for line in result.stdout.split('\n') if line.strip()]
-            return [{'url': f"https://www.facebook.com/watch/?v={id}", 'title': id} for id in ids]
-
-        return []
-
-    # ========== TWITTER METHODS ==========
-
-    def _ytdlp_twitter(self, url: str, cookie_file: str = None, max_videos: int = 0) -> typing.List[dict]:
-        """Twitter with yt-dlp"""
-        cmd = ['yt-dlp', '--flat-playlist', '--print', 'url', '--no-warnings', '--ignore-errors']
-
-        if cookie_file:
-            cmd.extend(['--cookies', cookie_file])
-
-        if max_videos > 0:
-            cmd.extend(['--playlist-end', str(max_videos)])
-
-        cmd.append(url)
-
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-
-        if result.returncode == 0 and result.stdout:
-            urls = [line.strip() for line in result.stdout.split('\n') if line.strip().startswith('http')]
-            return [{'url': u, 'title': u} for u in urls]
-
-        return []
-
-    def _ytdlp_twitter_alt(self, url: str, cookie_file: str = None, max_videos: int = 0) -> typing.List[dict]:
-        """Alternative Twitter method"""
-        cmd = ['yt-dlp', '--flat-playlist', '--get-id', '--no-warnings', '--ignore-errors', '--no-check-certificate']
-
-        if cookie_file:
-            cmd.extend(['--cookies', cookie_file])
-
-        cmd.append(url)
-
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-
-        if result.returncode == 0 and result.stdout:
-            ids = [line.strip() for line in result.stdout.split('\n') if line.strip()]
-            return [{'url': f"https://twitter.com/i/status/{id}", 'title': id} for id in ids]
-
-        return []
-
+# ============================================
+# PYQT THREAD CLASSES
+# ============================================
 
 class LinkGrabberThread(QThread):
-    """Single-URL link grabber"""
+    """Single-URL link grabber with multi-method fallback"""
+    
     progress = pyqtSignal(str)
     progress_percent = pyqtSignal(int)
     link_found = pyqtSignal(str, str)
@@ -575,10 +716,11 @@ class LinkGrabberThread(QThread):
         self.options = options or {}
         self.is_cancelled = False
         self.found_links = []
+        
+        # Setup paths
         this_file = Path(__file__).resolve()
         self.cookies_dir = this_file.parent.parent.parent / "cookies"
         self.cookies_dir.mkdir(parents=True, exist_ok=True)
-        self.extractor = EnhancedLinkExtractor(progress_callback=self.progress.emit)
 
     def run(self):
         try:
@@ -588,112 +730,121 @@ class LinkGrabberThread(QThread):
 
             self.progress.emit("🔍 Detecting platform...")
             self.progress_percent.emit(5)
+            
             platform_key = _detect_platform_key(self.url)
-            self.progress.emit(f"✅ Platform: {platform_key}")
+            
+            if platform_key == 'unknown':
+                self.finished.emit(False, "❌ Unsupported platform or invalid URL", [])
+                return
+            
+            self.progress.emit(f"✅ Platform: {platform_key.upper()}")
             self.progress_percent.emit(15)
-
-            # Get cookies
-            cookie_file = _manual_cookie_path(self.cookies_dir, platform_key)
-            if cookie_file:
-                self.progress.emit(f"✅ Using manual cookies: {Path(cookie_file).name}")
-            else:
-                browser_cookies = _try_browser_cookies_tempfile(platform_key)
-                if browser_cookies:
-                    cookie_file = browser_cookies
-                    self.progress.emit("✅ Using browser cookies")
-                else:
-                    self.progress.emit("🍪 No cookies - trying without authentication")
-
-            self.progress_percent.emit(25)
-
-            # Extract links
-            max_videos = int(self.options.get('max_videos', 0) or 0)
-            links = self.extractor.extract_links(self.url, platform_key, cookie_file, max_videos)
-
-            self.extractor.cleanup()
-
-            if not links:
-                self.finished.emit(False, "❌ No links found. Check URL and cookies.", [])
+            
+            # Extract links using all methods
+            self.progress.emit(f"🚀 Extracting links using multiple methods...")
+            self.progress_percent.emit(20)
+            
+            entries, creator = extract_all_links(
+                self.url,
+                platform_key,
+                self.cookies_dir,
+                self.options
+            )
+            
+            if not entries:
+                msg = (
+                    f"❌ Could not extract links from @{creator}\n\n"
+                    "Possible reasons:\n"
+                    "• Account is private (add cookies)\n"
+                    "• Invalid URL\n"
+                    "• Platform blocking access\n"
+                    "• No videos available"
+                )
+                self.finished.emit(False, msg, [])
                 return
 
-            self.progress.emit(f"🔁 Processing {len(links)} links...")
-            self.progress_percent.emit(50)
+            self.progress.emit(f"✅ Found {len(entries)} videos from @{creator}")
+            self.progress_percent.emit(30)
+            
+            # Apply limits
+            max_videos = int(self.options.get('max_videos', 0) or 0)
+            if max_videos > 0:
+                entries = entries[:max_videos]
+                self.progress.emit(f"📊 Limited to first {max_videos} videos")
 
-            # Emit links
-            for idx, entry in enumerate(links, 1):
+            total = len(entries)
+            self.found_links = []
+            
+            # Process entries
+            for idx, entry in enumerate(entries, 1):
                 if self.is_cancelled:
                     break
-
+                
                 self.found_links.append(entry)
-                display = entry.get('title', entry['url'])[:100]
-                self.progress.emit(f"🔗 {idx}/{len(links)}: {display}")
+                display = entry['url']
+                self.progress.emit(f"🔗 [{idx}/{total}] {display[:80]}...")
                 self.link_found.emit(entry['url'], display)
-
-                pct = 50 + int((idx / len(links)) * 45)
+                
+                # Update progress
+                pct = 30 + int((idx / total) * 65)
                 self.progress_percent.emit(min(pct, 95))
 
             if self.is_cancelled:
-                self.finished.emit(False, f"⚠️ Cancelled. Extracted {len(self.found_links)} links.", self.found_links)
+                self.finished.emit(
+                    False,
+                    f"⚠️ Cancelled. Extracted {len(self.found_links)} links.",
+                    self.found_links
+                )
                 return
 
-            self.progress.emit(f"✅ Extracted {len(self.found_links)} links!")
+            # Success
+            self.progress.emit(
+                f"✅ Successfully extracted {len(self.found_links)} links from @{creator}!\n"
+                "Click 'Save to Folder' to save."
+            )
             self.progress_percent.emit(100)
-            self.finished.emit(True, f"✅ Done! {len(self.found_links)} links extracted.", self.found_links)
+            self.finished.emit(
+                True,
+                f"✅ Done! {len(self.found_links)} links from @{creator}.",
+                self.found_links
+            )
 
         except Exception as exc:
-            self.extractor.cleanup()
-            msg = f"❌ Error: {str(exc)[:200]}"
+            msg = f"❌ Unexpected error: {str(exc)[:200]}"
+            logging.error(msg, exc_info=True)
             self.progress.emit(msg)
             self.finished.emit(False, msg, self.found_links)
 
     def save_to_file(self, creator_name: str):
-        """Save links to creator-specific folder"""
-        if self.found_links:
-            saved_path = self._save_links_to_creator_folder(creator_name, self.found_links)
-            self.save_triggered.emit(saved_path, self.found_links)
-
-    def _save_links_to_creator_folder(self, creator_name: str, links: typing.List[dict]) -> str:
-        """
-        Save links to: Desktop/Toseeq Links Grabber/{CreatorName}/{CreatorName}-links.txt
-        """
+        """Save links to file"""
+        if not self.found_links:
+            return
+        
         desktop = Path.home() / "Desktop"
-        base_folder = desktop / "Toseeq Links Grabber"
-        base_folder.mkdir(parents=True, exist_ok=True)
-
-        # Sanitize creator name
-        safe_creator = _safe_filename(creator_name)
-
-        # Create creator-specific folder
-        creator_folder = base_folder / safe_creator
-        creator_folder.mkdir(parents=True, exist_ok=True)
-
-        # Create file
-        filename = f"{safe_creator}-links.txt"
-        filepath = creator_folder / filename
-
-        # Write links
+        folder = desktop / "Toseeq Links Grabber"
+        folder.mkdir(parents=True, exist_ok=True)
+        
+        filename = _safe_filename(creator_name) + ".txt"
+        filepath = folder / filename
+        
         with open(filepath, "w", encoding="utf-8") as f:
-            f.write(f"# Links for: {creator_name}\n")
-            f.write(f"# Total links: {len(links)}\n")
-            f.write(f"# Saved: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write("\n")
-            for link in links:
+            f.write(f"# Links from: {creator_name}\n")
+            f.write(f"# Total: {len(self.found_links)}\n")
+            f.write(f"# Date: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write("#" + "="*60 + "\n\n")
+            
+            for link in self.found_links:
                 f.write(f"{link['url']}\n")
-
-        return str(filepath)
+        
+        self.save_triggered.emit(str(filepath), self.found_links)
 
     def cancel(self):
         self.is_cancelled = True
-        self.extractor.cleanup()
 
 
 class BulkLinkGrabberThread(QThread):
-    """
-    Bulk URL grabber with:
-    - Duplicate removal
-    - One creator at a time
-    - Creator-specific folders
-    """
+    """Multiple URLs link grabber"""
+    
     progress = pyqtSignal(str)
     progress_percent = pyqtSignal(int)
     link_found = pyqtSignal(str, str)
@@ -706,6 +857,8 @@ class BulkLinkGrabberThread(QThread):
         self.options = options or {}
         self.is_cancelled = False
         self.found_links = []
+        self.creator_links_map = {}
+        
         this_file = Path(__file__).resolve()
         self.cookies_dir = this_file.parent.parent.parent / "cookies"
         self.cookies_dir.mkdir(parents=True, exist_ok=True)
@@ -717,143 +870,133 @@ class BulkLinkGrabberThread(QThread):
                 self.finished.emit(False, "❌ No URLs provided", [])
                 return
 
-            self.progress.emit(f"🚀 Starting bulk extraction for {total_urls} URL(s)...")
-            self.progress_percent.emit(5)
-
-            # Step 1: Remove duplicates
-            unique_urls = self._remove_duplicates(self.urls)
-            removed = total_urls - len(unique_urls)
-
-            if removed > 0:
-                self.progress.emit(f"🔍 Removed {removed} duplicate URL(s)")
-                self.progress.emit(f"✅ Processing {len(unique_urls)} unique URL(s)")
-
-            self.progress_percent.emit(10)
-
-            # Step 2: Process each URL
-            all_results = []
-
-            for idx, url in enumerate(unique_urls, 1):
+            self.found_links = []
+            self.creator_links_map = {}
+            
+            for i, url in enumerate(self.urls, 1):
                 if self.is_cancelled:
                     break
-
-                self.progress.emit(f"\n{'='*60}")
-                self.progress.emit(f"📌 Creator {idx}/{len(unique_urls)}: {url[:50]}...")
-                self.progress.emit(f"{'='*60}")
-
+                
+                self.progress.emit(f"🚀 Processing {i}/{total_urls}: {url[:60]}...")
+                
                 # Detect platform
                 platform_key = _detect_platform_key(url)
-                creator_name = _extract_creator_from_url(url, platform_key)
-
-                self.progress.emit(f"🔍 Platform: {platform_key} | Creator: {creator_name}")
-
-                # Get cookies
-                cookie_file = _manual_cookie_path(self.cookies_dir, platform_key)
-                if cookie_file:
-                    self.progress.emit(f"✅ Cookies: {Path(cookie_file).name}")
-                else:
-                    browser_cookies = _try_browser_cookies_tempfile(platform_key)
-                    if browser_cookies:
-                        cookie_file = browser_cookies
-                        self.progress.emit("✅ Using browser cookies")
-
+                
                 # Extract links
-                extractor = EnhancedLinkExtractor(progress_callback=self.progress.emit)
+                entries, creator = extract_all_links(
+                    url,
+                    platform_key,
+                    self.cookies_dir,
+                    self.options
+                )
+                
+                # Initialize creator list
+                if creator not in self.creator_links_map:
+                    self.creator_links_map[creator] = []
+                
+                # Apply limits
                 max_videos = int(self.options.get('max_videos', 0) or 0)
+                if max_videos > 0:
+                    entries = entries[:max_videos]
 
-                links = extractor.extract_links(url, platform_key, cookie_file, max_videos)
-                extractor.cleanup()
-
-                if links:
-                    # Save to creator-specific folder
-                    saved_path = self._save_links_to_creator_folder(creator_name, links)
-                    self.progress.emit(f"💾 Saved {len(links)} links to: {saved_path}")
-
-                    # Emit links
-                    for link in links:
-                        self.link_found.emit(link['url'], link.get('title', link['url']))
-                        self.found_links.append(link)
-
-                    all_results.append({
-                        'creator': creator_name,
-                        'url': url,
-                        'links': len(links),
-                        'path': saved_path
-                    })
-                else:
-                    self.progress.emit(f"⚠️ No links found for {creator_name}")
-
+                # Add to results
+                for entry in entries:
+                    if self.is_cancelled:
+                        break
+                    
+                    self.found_links.append(entry)
+                    self.creator_links_map[creator].append(entry)
+                    display = entry['url']
+                    self.progress.emit(f"🔗 [@{creator}] {display[:60]}...")
+                    self.link_found.emit(entry['url'], display)
+                
                 # Update progress
-                pct = 10 + int((idx / len(unique_urls)) * 85)
+                pct = int((i / total_urls) * 95)
                 self.progress_percent.emit(pct)
 
             if self.is_cancelled:
-                self.finished.emit(False, f"⚠️ Cancelled. Processed {len(all_results)} creator(s).", self.found_links)
+                self.finished.emit(
+                    False,
+                    f"⚠️ Cancelled. {len(self.found_links)} links from {len(self.creator_links_map)} creators.",
+                    self.found_links
+                )
                 return
 
-            # Final summary
-            self.progress.emit(f"\n{'='*60}")
-            self.progress.emit("🎉 BULK EXTRACTION COMPLETE!")
-            self.progress.emit(f"{'='*60}")
-            self.progress.emit(f"✅ Total creators processed: {len(all_results)}")
-            self.progress.emit(f"✅ Total links extracted: {len(self.found_links)}")
-
-            for result in all_results:
-                self.progress.emit(f"  📁 {result['creator']}: {result['links']} links")
-
-            self.progress.emit(f"\n💾 All links saved in creator-specific folders!")
-            self.progress.emit(f"📂 Location: Desktop/Toseeq Links Grabber/")
+            # Show summary
+            self.progress.emit(
+                f"\n✅ BULK EXTRACTION COMPLETE!\n"
+                f"📊 Total: {len(self.found_links)} links from {len(self.creator_links_map)} creators\n"
+            )
+            
+            for creator, links in self.creator_links_map.items():
+                self.progress.emit(f"  📁 @{creator}: {len(links)} links")
+            
+            self.progress.emit("\n💾 Click 'Save to Folder' to organize and save")
             self.progress_percent.emit(100)
-
-            self.finished.emit(True, f"✅ All done! {len(all_results)} creator(s) processed.", self.found_links)
+            
+            self.finished.emit(
+                True,
+                f"✅ Bulk complete! {len(self.found_links)} links from {len(self.creator_links_map)} creators.",
+                self.found_links
+            )
 
         except Exception as e:
-            msg = f"❌ Bulk error: {str(e)[:200]}"
-            self.progress.emit(msg)
-            self.finished.emit(False, msg, self.found_links)
+            logging.error(f"Bulk error: {e}", exc_info=True)
+            self.finished.emit(False, f"❌ Bulk error: {str(e)[:200]}", self.found_links)
 
-    def _remove_duplicates(self, urls: typing.List[str]) -> typing.List[str]:
-        """Remove duplicate URLs"""
-        seen = set()
-        unique = []
-
-        for url in urls:
-            # Normalize URL
-            normalized = url.lower().rstrip('/').split('?')[0]
-
-            if normalized not in seen:
-                seen.add(normalized)
-                unique.append(url)
-
-        return unique
-
-    def _save_links_to_creator_folder(self, creator_name: str, links: typing.List[dict]) -> str:
-        """Save links to creator-specific folder"""
+    def save_to_file(self):
+        """Save links organized by creator"""
+        if not self.found_links:
+            return
+        
         desktop = Path.home() / "Desktop"
-        base_folder = desktop / "Toseeq Links Grabber"
-        base_folder.mkdir(parents=True, exist_ok=True)
-
-        # Sanitize creator name
-        safe_creator = _safe_filename(creator_name)
-
-        # Create creator-specific folder
-        creator_folder = base_folder / safe_creator
-        creator_folder.mkdir(parents=True, exist_ok=True)
-
-        # Create file
-        filename = f"{safe_creator}-links.txt"
-        filepath = creator_folder / filename
-
-        # Write links
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(f"# Links for: {creator_name}\n")
-            f.write(f"# Total links: {len(links)}\n")
-            f.write(f"# Saved: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write("\n")
-            for link in links:
-                f.write(f"{link['url']}\n")
-
-        return str(filepath)
+        main_folder = desktop / "Toseeq Links Grabber"
+        main_folder.mkdir(parents=True, exist_ok=True)
+        
+        saved_files = []
+        
+        # Save per creator
+        for creator, links in self.creator_links_map.items():
+            if not links:
+                continue
+            
+            safe_creator = _safe_filename(creator)
+            creator_folder = main_folder / safe_creator
+            creator_folder.mkdir(parents=True, exist_ok=True)
+            
+            filename = f"{safe_creator}_links.txt"
+            filepath = creator_folder / filename
+            
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(f"# Creator: {creator}\n")
+                f.write(f"# Total Links: {len(links)}\n")
+                f.write(f"# Date: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write("#" + "="*60 + "\n\n")
+                
+                for link in links:
+                    f.write(f"{link['url']}\n")
+            
+            saved_files.append(str(filepath))
+            self.progress.emit(f"💾 Saved: {safe_creator}/{filename}")
+        
+        # Create summary
+        summary_file = main_folder / "bulk_summary.txt"
+        with open(summary_file, "w", encoding="utf-8") as f:
+            f.write("# BULK LINK EXTRACTION SUMMARY\n")
+            f.write(f"# Date: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"# Total Creators: {len(self.creator_links_map)}\n")
+            f.write(f"# Total Links: {len(self.found_links)}\n")
+            f.write("#" + "="*60 + "\n\n")
+            
+            for creator, links in self.creator_links_map.items():
+                f.write(f"📁 Creator: {creator}\n")
+                f.write(f"   Links: {len(links)}\n")
+                f.write(f"   Folder: {_safe_filename(creator)}/\n\n")
+        
+        saved_files.append(str(summary_file))
+        
+        main_path = str(main_folder)
+        self.save_triggered.emit(main_path, self.found_links)
 
     def cancel(self):
         self.is_cancelled = True

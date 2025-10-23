@@ -49,8 +49,13 @@ class VideoDownloaderPage(QWidget):
         self.url_input.setMinimumHeight(80)
         layout.addWidget(self.url_input)
 
+        # Enhanced link list with copy/cut/paste support
+        link_label = QLabel("📋 Links from Link Grabber (right-click to copy/cut):")
+        link_label.setStyleSheet("color: #1ABC9C; font-size: 14px; font-weight: bold; margin-top: 10px;")
+        layout.addWidget(link_label)
+
         self.link_list = QListWidget()
-        self.link_list.setSelectionMode(QListWidget.SingleSelection)
+        self.link_list.setSelectionMode(QListWidget.ExtendedSelection)  # Allow multiple selection
         self.link_list.setEditTriggers(QListWidget.DoubleClicked | QListWidget.EditKeyPressed)
         self.link_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.link_list.itemClicked.connect(self.select_link)
@@ -101,7 +106,15 @@ class VideoDownloaderPage(QWidget):
         quality_label = QLabel("🎥 Quality:")
         quality_label.setStyleSheet("color: #F5F6F5; font-size: 16px;")
         self.quality_combo = QComboBox()
-        self.quality_combo.addItems(["Best", "Medium (720p)", "Low (480p)"])
+        self.quality_combo.addItems([
+            "Mobile (480p, small size)",
+            "HD (1080p, balanced)",
+            "4K (maximum quality)",
+            "Best",
+            "Medium (720p)",
+            "Low (480p)"
+        ])
+        self.quality_combo.setCurrentIndex(1)  # Default to HD
         self.quality_combo.setStyleSheet("""
             QComboBox { background-color: #2C2F33; color: #F5F6F5; border: 2px solid #4B5057;
                         padding: 8px; border-radius: 8px; font-size: 16px; }
@@ -113,6 +126,38 @@ class VideoDownloaderPage(QWidget):
         quality_layout.addWidget(quality_label)
         quality_layout.addWidget(self.quality_combo)
         settings_layout.addLayout(quality_layout)
+
+        # Custom bitrate control
+        bitrate_layout = QHBoxLayout()
+        bitrate_label = QLabel("📊 Bitrate (kbps):")
+        bitrate_label.setStyleSheet("color: #F5F6F5; font-size: 16px;")
+        self.bitrate_input = QLineEdit()
+        self.bitrate_input.setPlaceholderText("Leave empty for auto (optional)")
+        self.bitrate_input.setStyleSheet("""
+            QLineEdit { background-color: #2C2F33; color: #F5F6F5; border: 2px solid #4B5057;
+                        padding: 8px; border-radius: 8px; font-size: 16px; }
+            QLineEdit:focus { border: 2px solid #1ABC9C; }
+        """)
+        bitrate_layout.addWidget(bitrate_label)
+        bitrate_layout.addWidget(self.bitrate_input)
+        settings_layout.addLayout(bitrate_layout)
+
+        # Max retries control
+        retry_layout = QHBoxLayout()
+        retry_label = QLabel("🔄 Max Retries:")
+        retry_label.setStyleSheet("color: #F5F6F5; font-size: 16px;")
+        self.retry_spinbox = QComboBox()
+        self.retry_spinbox.addItems(["1", "3", "5", "10"])
+        self.retry_spinbox.setCurrentIndex(1)  # Default to 3
+        self.retry_spinbox.setStyleSheet("""
+            QComboBox { background-color: #2C2F33; color: #F5F6F5; border: 2px solid #4B5057;
+                        padding: 8px; border-radius: 8px; font-size: 16px; }
+            QComboBox:focus { border: 2px solid #1ABC9C; }
+        """)
+        retry_layout.addWidget(retry_label)
+        retry_layout.addWidget(self.retry_spinbox)
+        retry_layout.addStretch()
+        settings_layout.addLayout(retry_layout)
 
         options_layout = QHBoxLayout()
         self.playlist_check = QCheckBox("📑 Playlist")
@@ -200,26 +245,95 @@ class VideoDownloaderPage(QWidget):
         item = self.link_list.itemAt(pos)
         if not item:
             return
+
         menu = QMenu(self)
-        edit_act = menu.addAction("Edit")
-        copy_act = menu.addAction("Copy")
-        delete_act = menu.addAction("Delete")
-        select_all_act = menu.addAction("Select All")
+        menu.setStyleSheet("""
+            QMenu { background-color: #2C2F33; color: #F5F6F5; border: 2px solid #4B5057; }
+            QMenu::item:selected { background-color: #1ABC9C; }
+        """)
+
+        # Enhanced context menu
+        edit_act = menu.addAction("✏️ Edit")
+        copy_act = menu.addAction("📋 Copy")
+        copy_all_act = menu.addAction("📋 Copy All Selected")
+        cut_act = menu.addAction("✂️ Cut")
+        paste_act = menu.addAction("📌 Paste to URL Input")
+        menu.addSeparator()
+        delete_act = menu.addAction("🗑️ Delete")
+        delete_all_act = menu.addAction("🗑️ Delete All Selected")
+        menu.addSeparator()
+        select_all_act = menu.addAction("☑️ Select All")
+
         action = menu.exec_(self.link_list.mapToGlobal(pos))
+
         if action == edit_act:
             self.link_list.editItem(item)
+
         elif action == copy_act:
+            # Copy single item
             clipboard = QtWidgets.QApplication.clipboard()
             clipboard.setText(item.text())
-            self.log_message("📋 Copied to clipboard")
-        elif action == delete_act:
+            self.log_message(f"📋 Copied: {item.text()[:50]}...")
+
+        elif action == copy_all_act:
+            # Copy all selected items
+            selected_items = self.link_list.selectedItems()
+            if selected_items:
+                urls = '\n'.join([item.text() for item in selected_items])
+                clipboard = QtWidgets.QApplication.clipboard()
+                clipboard.setText(urls)
+                self.log_message(f"📋 Copied {len(selected_items)} links to clipboard")
+            else:
+                self.log_message("⚠️ No links selected")
+
+        elif action == cut_act:
+            # Cut single item
+            clipboard = QtWidgets.QApplication.clipboard()
+            clipboard.setText(item.text())
             row = self.link_list.row(item)
             self.link_list.takeItem(row)
             if row < len(self.links):
                 del self.links[row]
-            self.log_message("🗑️ Link deleted")
+            self.log_message(f"✂️ Cut: {item.text()[:50]}...")
+
+        elif action == paste_act:
+            # Paste to URL input field
+            clipboard = QtWidgets.QApplication.clipboard()
+            clipboard_text = clipboard.text()
+            if clipboard_text:
+                current_text = self.url_input.toPlainText()
+                if current_text:
+                    self.url_input.setPlainText(current_text + '\n' + clipboard_text)
+                else:
+                    self.url_input.setPlainText(clipboard_text)
+                self.log_message("📌 Pasted to URL input field")
+            else:
+                self.log_message("⚠️ Clipboard is empty")
+
+        elif action == delete_act:
+            # Delete single item
+            row = self.link_list.row(item)
+            self.link_list.takeItem(row)
+            if row < len(self.links):
+                del self.links[row]
+            self.log_message(f"🗑️ Deleted: {item.text()[:50]}...")
+
+        elif action == delete_all_act:
+            # Delete all selected items
+            selected_items = self.link_list.selectedItems()
+            if selected_items:
+                for item in selected_items:
+                    row = self.link_list.row(item)
+                    self.link_list.takeItem(row)
+                    if row < len(self.links):
+                        del self.links[row]
+                self.log_message(f"🗑️ Deleted {len(selected_items)} links")
+            else:
+                self.log_message("⚠️ No links selected")
+
         elif action == select_all_act:
             self.link_list.selectAll()
+            self.log_message(f"☑️ Selected all {self.link_list.count()} links")
 
     def clear_all(self):
         reply = QMessageBox.question(self, "Clear All?", "Clear URLs, logs, and links list?",
@@ -311,10 +425,30 @@ class VideoDownloaderPage(QWidget):
             else:
                 return
 
-        quality_map = {0: 'Best', 1: 'Medium', 2: 'Low'}
-        quality = quality_map.get(self.quality_combo.currentIndex(), 'Best')
+        # Enhanced quality mapping
+        quality_map = {
+            0: 'Mobile',
+            1: 'HD',
+            2: '4K',
+            3: 'Best',
+            4: 'Medium',
+            5: 'Low'
+        }
+        quality = quality_map.get(self.quality_combo.currentIndex(), 'HD')
+
+        # Get custom bitrate if specified
+        custom_bitrate = None
+        bitrate_text = self.bitrate_input.text().strip()
+        if bitrate_text.isdigit():
+            custom_bitrate = int(bitrate_text)
+
+        # Get max retries
+        max_retries = int(self.retry_spinbox.currentText())
+
         options = {
             'quality': quality,
+            'bitrate': custom_bitrate,
+            'max_retries': max_retries,
             'playlist': self.playlist_check.isChecked(),
             'subtitles': self.subtitle_check.isChecked(),
             'thumbnail': self.thumbnail_check.isChecked()
@@ -330,6 +464,11 @@ class VideoDownloaderPage(QWidget):
         self.log_message(f"🔗 URLs: {len(urls)}")
         self.log_message(f"📁 Save: {save_path}")
         self.log_message(f"🎥 Quality: {quality}")
+        if custom_bitrate:
+            self.log_message(f"📊 Bitrate: {custom_bitrate} kbps")
+        self.log_message(f"🔄 Max Retries: {max_retries}")
+        self.log_message(f"✅ Auto-resume: ON")
+        self.log_message(f"🔍 Duplicate detection: ON")
         if options['playlist']:
             self.log_message("📑 Playlist mode: ON")
         if options['subtitles']:

@@ -3,7 +3,7 @@
 
 .tiktok.com	TRUE	/	TRUE	0	cmpl_token	AgQQAPO4F-RO0rj0eR_zt10-8rnbYn_W_4zZYNzOjA
 .tiktok.com	TRUE	/	FALSE	0	d_ticket	e092d9e235375f09ad1811c2c6056fa42d1f1
-.tiktok.com	TRUE	/	TRUE	1761776457	msToken	ftO1bYrLLP4Im62IPYjiEGgiobuAtpA8m7kjJ9tzUK5JowL6u8KutZ7fqPf-AZY36W9RS7Jd9yQjeOsN5g61rEHCttMt0BXkhDdCx6fmJivV7tfS6ajsjF7Qcr-lGSZExm9YUtWqwqdPmtE=
+.tiktok.com	TRUE	/	TRUE	1762129324	msToken	PqEuLSRypkXJ1Dy9bCd5Gn_vsPj8Bv1rZ-uY60_wR2ZSqDwU8VxAYCTHpIwfP44ZvbT0eKAuXPNbpAuDDicrEGxm1mKGet_XNW507zKWyzXmtf0wumGY90sfsl1IfYyAP30mHGA62hb9Lso=
 .tiktok.com	TRUE	/	TRUE	0	multi_sids	7551014543842182151%3Abddacf1cfee37b0a2add3c087707c1a8
 .tiktok.com	TRUE	/	FALSE	0	odin_tt	e75fb6ac7affbb034bdf3a1d0934be5301d33a459c5261ca1a93873c43200b11a046fbcc0722177bd03816e3e45e3763340919e01fe1d6d581c7b388e30112d78d42188895518b61f6f275e23372e787
 .tiktok.com	TRUE	/	TRUE	0	passport_csrf_token	1b48179efcb43cd978b2cfc8a46ba8bf
@@ -21,7 +21,7 @@
 .tiktok.com	TRUE	/	FALSE	0	store-idc	alisg
 .tiktok.com	TRUE	/	FALSE	0	tt-target-idc	alisg
 .tiktok.com	TRUE	/	FALSE	0	tt-target-idc-sign	L33IHhLyNOSfcxByBEFwVJalMXWfFmxYmjcf6_er2EF0Ms42zfp6oVv4MH5gjaOp7mlmZpeq20R0Qv80gfLNDdiCei5zevgTYoD6WqFwfzszl_YHxJoOckzkT-Ny2qumcEqkW2lf0OJw8DXmeugOG8wlcg-RtAkukTg1FozMyCTAHdgAnIglMXrjP1TLMmaGGC8gj0OjboCfWkF--7xe_PiO4h6g-IAvTpBhxpC0gYnWEwVTT3EAIrtWe89FU4EALf532G_DxjD5rRFdTWGQeshS_USFvd9r9DDVzegvlrScWe17PZDdBnyvwAPk4jPWqS0K3y5bBE2vqwP1R7XH2Z_CHPGdhPev0AZ01XbzGe1Bsy3iVHxYMoEUZ3xkHJG80HdBT9-QgaNVpvC6EobmxNdlGu3QZBw3Zg5nAZIYgzgAQgZG1tnxmocUbCljtSvzltwsa-OOJRA7Ml2TDq5gFLpP_qmOaxGDSbk2gmrPUm58A4PwoKz6kpr7Sw7lZvS1
-.tiktok.com	TRUE	/	TRUE	1776464457	tt_chain_token	bWz5TqEdig5fPHsxHmSCAg==
+.tiktok.com	TRUE	/	TRUE	1776817325	tt_chain_token	bWz5TqEdig5fPHsxHmSCAg==
 .tiktok.com	TRUE	/	TRUE	0	tt_csrf_token	F8qA7gyC-_ykwUUQCn4glSMJOgSXoGbYly5Y
 .tiktok.com	TRUE	/	TRUE	0	ttwid	1%7CwXmW_Bh7ICwB-4_Xo9xg1lXB8Jz2CuyE2cz-alI4OMc%7C1759003717%7Cef2007be8623a9398859ae25bcd451984d5fd0197d36f19495d2897ae0e761da
 .tiktok.com	TRUE	/	TRUE	0	uid_tt	32308291565930800b5b35cf081793c19768dcb3e220440bba3485b14080ef99

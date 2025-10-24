@@ -82,7 +82,7 @@
 .google.com.pk	TRUE	/	TRUE	0	__Secure-3PAPISID	kVfvhphXV8mUPN-h/ALTyy0DxCzwm9OcHU
 .google.com.pk	TRUE	/	TRUE	0	__Secure-3PSID	g.a000zAgYtT-cr548Q90Mks758eZcv6ZPY9iRxVeR2_vlWzWRU40NXHuAeIhcST74pNJNOkTOPAACgYKAcoSARESFQHGX2MimJDCtrIAA53dSxzI958tJBoVAUF8yKpjNnz8FGbGVMuTbsboSV7M0076
 .googleadservices.com	TRUE	/	TRUE	0	ar_debug	1
-.instagram.com	TRUE	/	TRUE	0	csrftoken	w0LWSpvz1R4-y8ayWiXAjS
+.instagram.com	TRUE	/	TRUE	1795822217	csrftoken	w0LWSpvz1R4-y8ayWiXAjS
 .instagram.com	TRUE	/	TRUE	0	datr	YkXYaLS5ar7CNkRUIxBqiPHn
 .instagram.com	TRUE	/	TRUE	0	ig_did	5A521124-AF33-4B78-80C2-D8FF2E5FE623
 .instagram.com	TRUE	/	TRUE	0	ig_nrcb	1

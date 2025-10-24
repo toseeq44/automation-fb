@@ -95,6 +95,30 @@ def _manual_cookie_path(cookies_dir: Path, platform_key: str) -> typing.Optional
         return str(p)
     return None
 
+# Normalize URL for duplicate detection
+def _normalize_url(url: str) -> str:
+    """Normalize URL for duplicate detection"""
+    # Remove query parameters and fragments
+    url = url.split('?')[0].split('#')[0]
+    # Convert to lowercase
+    url = url.lower()
+    # Remove trailing slash
+    url = url.rstrip('/')
+    return url
+
+
+def _remove_duplicates(urls: typing.List[str]) -> typing.List[str]:
+    """Remove duplicate URLs"""
+    seen = set()
+    unique = []
+    for url in urls:
+        normalized = _normalize_url(url)
+        if normalized not in seen:
+            seen.add(normalized)
+            unique.append(url)
+    return unique
+
+
 # Try to extract browser cookies using browser_cookie3, saved to temp
 def _try_browser_cookies_tempfile(platform_key: str) -> typing.Optional[str]:
     try:
@@ -230,7 +254,10 @@ class LinkGrabberThread(QThread):
 
             # Parse URLs
             urls = [line.strip() for line in stdout.splitlines() if line.strip() and (line.startswith('http://') or line.startswith('https://'))]
-            self.progress.emit(f"📊 Found {len(urls)} video URLs")
+
+            # Remove duplicates
+            urls = _remove_duplicates(urls)
+            self.progress.emit(f"📊 Found {len(urls)} unique video URLs")
 
             creator = _extract_creator_from_url(url, platform_key)
             video_entries = [{'url': url, 'title': url} for url in urls]
@@ -244,11 +271,16 @@ class LinkGrabberThread(QThread):
             return [], "unknown"
 
     def _save_links_to_desktop_file(self, creator_name: str, links: typing.List[dict]) -> str:
+        """Save links to creator-specific folder"""
         desktop = Path.home() / "Desktop"
-        folder = desktop / "Toseeq Links Grabber"
-        folder.mkdir(parents=True, exist_ok=True)
-        filename = _safe_filename(creator_name) + ".txt"
-        filepath = folder / filename
+        base_folder = desktop / "Toseeq Links Grabber"
+        creator_folder = base_folder / _safe_filename(creator_name)
+        creator_folder.mkdir(parents=True, exist_ok=True)
+
+        # Filename: {CreatorName}-links.txt
+        filename = f"{_safe_filename(creator_name)}-links.txt"
+        filepath = creator_folder / filename
+
         with open(filepath, "w", encoding="utf-8") as f:
             for link in links:
                 f.write(f"{link['url']}\n")
@@ -329,6 +361,7 @@ class BulkLinkGrabberThread(QThread):
         self.options = options or {}
         self.is_cancelled = False
         self.found_links = []
+        self.creator_data = {}  # Track each creator and their links/folder
         this_file = Path(__file__).resolve()
         self.cookies_dir = this_file.parent.parent.parent / "cookies"
         self.cookies_dir.mkdir(parents=True, exist_ok=True)
@@ -343,22 +376,41 @@ class BulkLinkGrabberThread(QThread):
                 pass
         self._temp_cookie_files = []
 
-    def _save_links_to_desktop_file(self, links: typing.List[dict]) -> str:
+    def _save_creator_to_folder(self, creator_name: str, links: typing.List[dict]) -> str:
+        """Save creator's links to their specific folder"""
         desktop = Path.home() / "Desktop"
-        folder = desktop / "Toseeq Links Grabber"
-        folder.mkdir(parents=True, exist_ok=True)
-        filename = "bulk_links.txt"
-        filepath = folder / filename
+        base_folder = desktop / "Toseeq Links Grabber"
+        creator_folder = base_folder / _safe_filename(creator_name)
+        creator_folder.mkdir(parents=True, exist_ok=True)
+
+        # Filename: {CreatorName}_links.txt
+        filename = f"{_safe_filename(creator_name)}_links.txt"
+        filepath = creator_folder / filename
+
         with open(filepath, "w", encoding="utf-8") as f:
             for link in links:
                 f.write(f"{link['url']}\n")
+
         return str(filepath)
 
     def save_to_file(self):
-        """Trigger file save and emit signal with path"""
-        if self.found_links:
-            saved_path = self._save_links_to_desktop_file(self.found_links)
-            self.save_triggered.emit(saved_path, self.found_links)
+        """Save all creators' links to their respective folders"""
+        if self.creator_data:
+            for creator_name, data in self.creator_data.items():
+                if data['links']:
+                    saved_path = self._save_creator_to_folder(creator_name, data['links'])
+                    self.progress.emit(f"💾 Saved {len(data['links'])} links to: {saved_path}")
+            self.progress.emit(f"✅ All {len(self.creator_data)} creators saved!")
+        elif self.found_links:
+            # Fallback if no creator data
+            desktop = Path.home() / "Desktop"
+            folder = desktop / "Toseeq Links Grabber"
+            folder.mkdir(parents=True, exist_ok=True)
+            filepath = folder / "bulk_links.txt"
+            with open(filepath, "w", encoding="utf-8") as f:
+                for link in self.found_links:
+                    f.write(f"{link['url']}\n")
+            self.save_triggered.emit(str(filepath), self.found_links)
 
     def run(self):
         try:
@@ -367,38 +419,87 @@ class BulkLinkGrabberThread(QThread):
                 self.finished.emit(False, "❌ No URLs provided", [])
                 return
 
+            # Step 1: Remove duplicates from input URLs
+            self.progress.emit(f"🔍 Checking {total_urls} URLs for duplicates...")
+            unique_urls = _remove_duplicates(self.urls)
+            duplicates_removed = len(self.urls) - len(unique_urls)
+
+            if duplicates_removed > 0:
+                self.progress.emit(f"🧹 Removed {duplicates_removed} duplicate URLs")
+
+            self.progress.emit(f"✅ Processing {len(unique_urls)} unique URLs...")
+            self.progress.emit("="*50)
+
             self.found_links = []
-            for i, url in enumerate(self.urls, 1):
+            self.creator_data = {}
+
+            # Step 2: Process one creator at a time
+            for i, url in enumerate(unique_urls, 1):
                 if self.is_cancelled:
                     break
-                self.progress.emit(f"🚀 Processing {i}/{total_urls}: {url[:50]}...")
+
+                self.progress.emit(f"\n📌 [{i}/{len(unique_urls)}] Processing: {url[:60]}...")
+
                 runner = LinkGrabberThread(url, self.options)
                 platform_key = _detect_platform_key(url)
                 entries, creator = runner._build_command_and_process(url, platform_key)
+
                 max_videos = int(self.options.get('max_videos', 0) or 0)
                 if max_videos > 0:
                     entries = entries[:max_videos]
 
+                # Track creator data
+                if creator not in self.creator_data:
+                    self.creator_data[creator] = {
+                        'links': [],
+                        'url': url,
+                        'platform': platform_key
+                    }
+
+                # Add links from this creator
                 for idx, entry in enumerate(entries, 1):
                     if self.is_cancelled:
                         break
                     self.found_links.append(entry)
+                    self.creator_data[creator]['links'].append(entry)
                     display = entry['url']
-                    self.progress.emit(f"🔗 Found: {display}")
                     self.link_found.emit(entry['url'], display)
-                pct = int((i / total_urls) * 95)
+
+                # Save this creator's links to folder immediately
+                if entries:
+                    saved_path = self._save_creator_to_folder(creator, entries)
+                    self.progress.emit(f"💾 Saved to: {saved_path}")
+
+                self.progress.emit(f"✅ [{i}/{len(unique_urls)}] Extracted {len(entries)} links from: {creator}")
+
+                pct = int((i / len(unique_urls)) * 95)
                 self.progress_percent.emit(pct)
                 runner._cleanup_temp_cookies()
 
             if self.is_cancelled:
                 self._cleanup_temp_cookies()
-                self.finished.emit(False, f"⚠️ Cancelled. Extracted {len(self.found_links)} links.", self.found_links)
+                self.finished.emit(False, f"⚠️ Cancelled. Extracted {len(self.found_links)} total links.", self.found_links)
                 return
 
-            self.progress.emit(f"✅ Extracted {len(self.found_links)} links. Click 'Save to Folder' to save.")
+            # Step 3: Final Summary
+            self.progress.emit("\n" + "="*50)
+            self.progress.emit("🎉 BULK EXTRACTION COMPLETE!")
+            self.progress.emit("="*50)
+            self.progress.emit(f"📊 Processed: {len(unique_urls)} unique URLs")
+            self.progress.emit(f"👥 Creators: {len(self.creator_data)}")
+            self.progress.emit(f"🔗 Total Links: {len(self.found_links)}")
+            if duplicates_removed > 0:
+                self.progress.emit(f"🧹 Duplicates Removed: {duplicates_removed}")
+            self.progress.emit("\n📁 Saved Folders:")
+            for creator_name, data in self.creator_data.items():
+                desktop = Path.home() / "Desktop"
+                folder_path = desktop / "Toseeq Links Grabber" / _safe_filename(creator_name)
+                self.progress.emit(f"  ├── {creator_name}/ ({len(data['links'])} links)")
+            self.progress.emit("="*50)
+
             self.progress_percent.emit(100)
             self._cleanup_temp_cookies()
-            self.finished.emit(True, f"✅ Bulk done. Extracted {len(self.found_links)} links.", self.found_links)
+            self.finished.emit(True, f"✅ Bulk complete! Extracted {len(self.found_links)} total links.", self.found_links)
 
         except Exception as e:
             self._cleanup_temp_cookies()

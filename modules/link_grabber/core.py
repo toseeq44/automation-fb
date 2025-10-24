@@ -1,10 +1,16 @@
 """
 modules/link_grabber/core.py
-Fast link grabber (single-file) using yt-dlp subprocess for speed.
-- Manual cookies in cookies/ preferred (names: youtube_cookies.txt, instagram_cookies.txt, tiktok_cookies.txt, facebook_cookies.txt, twitter_cookies.txt)
-- Fallback to browser_cookie3 if available (temporary cookies)
-- Produces page URLs (not media stream URLs)
-- Emits signals expected by GUI:
+Fast and simple link grabber using yt-dlp for multiple platforms.
+
+Features:
+- Multi-platform support: YouTube, TikTok, Instagram, Facebook, Twitter
+- Creator-specific folders: Desktop/Toseeq Links Grabber/{CreatorName}/{CreatorName}_links.txt
+- Duplicate URL removal (automatic)
+- Cookie support: Manual cookies + Browser auto-extract
+- Bulk processing with real-time saving
+- Beautiful summary with folder structure
+
+Signals emitted to GUI:
     progress(str), progress_percent(int), link_found(str, str), finished(bool, str, list), save_triggered(str, list)
 """
 

@@ -10,16 +10,13 @@ from typing import Optional, Tuple, List, Dict, Any
 from datetime import datetime
 
 try:
-    from moviepy.editor import (
+    # MoviePy 2.x imports
+    from moviepy import (
         VideoFileClip, AudioFileClip, ImageClip, TextClip,
         CompositeVideoClip, CompositeAudioClip, concatenate_videoclips,
-        vfx, afx
+        concatenate_audioclips
     )
-    from moviepy.video.fx.all import (
-        crop, resize, rotate, mirror_x, mirror_y,
-        fadein, fadeout, crossfadein, crossfadeout
-    )
-    from moviepy.audio.fx.all import volumex, audio_fadein, audio_fadeout
+    from moviepy import vfx, afx
     MOVIEPY_AVAILABLE = True
 except ImportError:
     MOVIEPY_AVAILABLE = False
@@ -220,7 +217,7 @@ class VideoEditor:
         if x1 < 0 or y1 < 0 or x2 > w or y2 > h or x1 >= x2 or y1 >= y2:
             raise ValueError(f"Invalid crop coordinates: ({x1},{y1}) to ({x2},{y2})")
 
-        self.video = crop(self.video, x1=x1, y1=y1, x2=x2, y2=y2)
+        self.video = self.video.fx(vfx.crop, x1=x1, y1=y1, x2=x2, y2=y2)
         self.project.add_to_history({
             'operation': 'crop',
             'params': {'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2, 'preset': preset}
@@ -238,7 +235,7 @@ class VideoEditor:
         if not self.video:
             raise ValueError("No video loaded")
 
-        self.video = rotate(self.video, angle)
+        self.video = self.video.fx(vfx.rotate, angle)
         self.project.add_to_history({
             'operation': 'rotate',
             'params': {'angle': angle}
@@ -251,7 +248,7 @@ class VideoEditor:
         if not self.video:
             raise ValueError("No video loaded")
 
-        self.video = mirror_x(self.video)
+        self.video = self.video.fx(vfx.mirror_x)
         self.project.add_to_history({
             'operation': 'flip_horizontal',
             'params': {}
@@ -264,7 +261,7 @@ class VideoEditor:
         if not self.video:
             raise ValueError("No video loaded")
 
-        self.video = mirror_y(self.video)
+        self.video = self.video.fx(vfx.mirror_y)
         self.project.add_to_history({
             'operation': 'flip_vertical',
             'params': {}
@@ -285,17 +282,17 @@ class VideoEditor:
             raise ValueError("No video loaded")
 
         if scale:
-            self.video = resize(self.video, scale)
+            self.video = self.video.fx(vfx.resize, scale)
             logger.info(f"Video resized by scale: {scale}")
         elif width or height:
             if width and height:
-                self.video = resize(self.video, newsize=(width, height))
+                self.video = self.video.fx(vfx.resize, newsize=(width, height))
                 logger.info(f"Video resized: {width}x{height}")
             elif width:
-                self.video = resize(self.video, width=width)
+                self.video = self.video.fx(vfx.resize, width=width)
                 logger.info(f"Video resized: width={width}")
             elif height:
-                self.video = resize(self.video, height=height)
+                self.video = self.video.fx(vfx.resize, height=height)
                 logger.info(f"Video resized: height={height}")
         else:
             raise ValueError("Must specify width, height, or scale")
@@ -459,7 +456,7 @@ class VideoEditor:
             new_audio = AudioFileClip(audio_path)
 
             # Adjust volume
-            new_audio = volumex(new_audio, volume)
+            new_audio = new_audio.fx(afx.volumex, volume)
 
             # Match duration
             if new_audio.duration > self.video.duration:
@@ -502,7 +499,7 @@ class VideoEditor:
             logger.warning("Video has no audio to adjust")
             return self
 
-        adjusted_audio = volumex(self.video.audio, volume)
+        adjusted_audio = self.video.audio.fx(afx.volumex, volume)
         self.video = self.video.set_audio(adjusted_audio)
 
         self.project.add_to_history({
@@ -610,11 +607,11 @@ class VideoEditor:
         if not self.video:
             raise ValueError("No video loaded")
 
-        self.video = fadein(self.video, duration)
+        self.video = self.video.fx(vfx.fadein, duration)
 
         # Fade in audio too if present
         if self.video.audio:
-            self.video = self.video.set_audio(audio_fadein(self.video.audio, duration))
+            self.video = self.video.set_audio(self.video.audio.fx(afx.audio_fadein, duration))
 
         self.project.add_to_history({
             'operation': 'fade_in',
@@ -628,11 +625,11 @@ class VideoEditor:
         if not self.video:
             raise ValueError("No video loaded")
 
-        self.video = fadeout(self.video, duration)
+        self.video = self.video.fx(vfx.fadeout, duration)
 
         # Fade out audio too if present
         if self.video.audio:
-            self.video = self.video.set_audio(audio_fadeout(self.video.audio, duration))
+            self.video = self.video.set_audio(self.video.audio.fx(afx.audio_fadeout, duration))
 
         self.project.add_to_history({
             'operation': 'fade_out',

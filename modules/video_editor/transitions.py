@@ -11,8 +11,7 @@ from modules.logging.logger import get_logger
 logger = get_logger(__name__)
 
 try:
-    from moviepy.editor import VideoFileClip, CompositeVideoClip, concatenate_videoclips
-    from moviepy.video.fx.all import fadein, fadeout, crossfadein, crossfadeout
+    from moviepy import VideoFileClip, CompositeVideoClip, concatenate_videoclips, vfx, VideoClip
     MOVIEPY_AVAILABLE = True
 except ImportError:
     MOVIEPY_AVAILABLE = False
@@ -30,10 +29,10 @@ def fade_transition(clip1: VideoFileClip, clip2: VideoFileClip, duration: float 
         duration: Transition duration in seconds
     """
     # Fade out first clip
-    clip1 = fadeout(clip1, duration)
+    clip1 = clip1.fx(vfx.fadeout, duration)
 
     # Fade in second clip
-    clip2 = fadein(clip2, duration)
+    clip2 = clip2.fx(vfx.fadein, duration)
 
     # Concatenate
     result = concatenate_videoclips([clip1, clip2], method='compose')
@@ -52,8 +51,8 @@ def crossfade_transition(clip1: VideoFileClip, clip2: VideoFileClip, duration: f
         duration: Transition duration in seconds
     """
     # Add crossfade
-    clip1 = crossfadeout(clip1, duration)
-    clip2 = crossfadein(clip2, duration)
+    clip1 = clip1.fx(vfx.crossfadeout, duration)
+    clip2 = clip2.fx(vfx.crossfadein, duration)
 
     # Concatenate with overlap
     result = concatenate_videoclips([clip1, clip2], method='compose')
@@ -217,8 +216,8 @@ def zoom_in_transition(clip1: VideoFileClip, clip2: VideoFileClip, duration: flo
                 return frame
 
     clip1_zoomed = clip1.fl(zoom_effect)
-    clip1_zoomed = fadeout(clip1_zoomed, duration / 2)
-    clip2_faded = fadein(clip2, duration / 2)
+    clip1_zoomed = clip1_zoomed.fx(vfx.fadeout, duration / 2)
+    clip2_faded = clip2.fx(vfx.fadein, duration / 2)
 
     result = concatenate_videoclips([clip1_zoomed, clip2_faded], method='compose')
 
@@ -263,8 +262,8 @@ def zoom_out_transition(clip1: VideoFileClip, clip2: VideoFileClip, duration: fl
                 return frame
 
     clip1_zoomed = clip1.fl(zoom_effect)
-    clip1_zoomed = fadeout(clip1_zoomed, duration / 2)
-    clip2_faded = fadein(clip2, duration / 2)
+    clip1_zoomed = clip1_zoomed.fx(vfx.fadeout, duration / 2)
+    clip2_faded = clip2.fx(vfx.fadein, duration / 2)
 
     result = concatenate_videoclips([clip1_zoomed, clip2_faded], method='compose')
 
@@ -332,7 +331,6 @@ def dissolve_transition(clip1: VideoFileClip, clip2: VideoFileClip,
 
             return result.astype(np.uint8)
 
-    from moviepy.editor import VideoClip
     result = VideoClip(make_frame, duration=clip1.duration + clip2.duration - duration)
     result = result.set_fps(clip1.fps)
 
@@ -354,8 +352,6 @@ def rotate_transition(clip1: VideoFileClip, clip2: VideoFileClip, duration: floa
         clip2: Second video clip
         duration: Transition duration in seconds
     """
-    from moviepy.video.fx.all import rotate
-
     def rotate_out(get_frame, t):
         """Rotate out effect"""
         if t < clip1.duration - duration:
@@ -369,9 +365,9 @@ def rotate_transition(clip1: VideoFileClip, clip2: VideoFileClip, duration: floa
             return frame
 
     clip1_rotated = clip1.fl(rotate_out)
-    clip1_rotated = fadeout(clip1_rotated, duration / 2)
+    clip1_rotated = clip1_rotated.fx(vfx.fadeout, duration / 2)
 
-    clip2_faded = fadein(clip2, duration / 2)
+    clip2_faded = clip2.fx(vfx.fadein, duration / 2)
 
     result = concatenate_videoclips([clip1_rotated, clip2_faded], method='compose')
 

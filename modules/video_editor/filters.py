@@ -11,8 +11,7 @@ from modules.logging.logger import get_logger
 logger = get_logger(__name__)
 
 try:
-    from moviepy.editor import VideoFileClip
-    from moviepy.video.fx.all import blackwhite, colorx
+    from moviepy import VideoFileClip, vfx
     MOVIEPY_AVAILABLE = True
 except ImportError:
     MOVIEPY_AVAILABLE = False
@@ -28,7 +27,7 @@ def adjust_brightness(clip, intensity: float = 1.0):
         clip: VideoClip
         intensity: Brightness multiplier (0.5 = darker, 2.0 = brighter)
     """
-    return colorx(clip, intensity)
+    return clip.fx(vfx.colorx, intensity)
 
 
 def adjust_contrast(clip, intensity: float = 1.0):
@@ -118,7 +117,7 @@ def adjust_hue(clip, shift: float = 0.0):
 
 def grayscale(clip):
     """Convert video to grayscale"""
-    return blackwhite(clip)
+    return clip.fx(vfx.blackwhite)
 
 
 def sepia(clip):

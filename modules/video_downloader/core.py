@@ -1,10 +1,13 @@
 """
 modules/video_downloader/core.py
-TRIPLE COOKIES FALLBACK SYSTEM:
-1. cookies/cookies.txt (First priority)
-2. cookies/platform_cookies.txt (Second priority)
-3. Desktop/toseeq-cookies.txt (Third priority)
-4. Browser auto cookies (Last fallback)
+BULLETPROOF Multi-Method Video Downloader
+
+FEATURES:
+- 5 download methods with fallback
+- Smart folder processing (auto-detect creator folders)
+- Triple cookie system
+- Crash protection
+- Per-creator downloads to their own folders
 """
 
 import yt_dlp
@@ -13,11 +16,68 @@ from pathlib import Path
 from PyQt5.QtCore import QThread, pyqtSignal
 import re
 import tempfile
+import subprocess
+import typing
+import json
 
+
+# ============ HELPER FUNCTIONS ============
+
+def _safe_filename(s: str) -> str:
+    """Sanitize filename - crash protected"""
+    try:
+        s = re.sub(r'[<>:"/\\|?*\n\r\t]+', '_', s.strip())
+        return s[:200] if s else "video"
+    except Exception:
+        return "video"
+
+
+def _extract_creator_from_url(url: str) -> str:
+    """Extract creator from URL for folder organization"""
+    try:
+        url_lower = url.lower()
+
+        # YouTube
+        if 'youtube.com' in url_lower or 'youtu.be' in url_lower:
+            match = re.search(r'/@([^/?#]+)', url_lower)
+            if match:
+                return match.group(1)
+            match = re.search(r'/channel/([^/?#]+)', url_lower)
+            if match:
+                return match.group(1)
+
+        # Instagram
+        elif 'instagram.com' in url_lower:
+            match = re.search(r'instagram\.com/([^/?#]+)', url_lower)
+            if match and match.group(1) not in ['p', 'reel', 'tv']:
+                return match.group(1)
+
+        # TikTok
+        elif 'tiktok.com' in url_lower:
+            match = re.search(r'tiktok\.com/@([^/?#]+)', url_lower)
+            if match:
+                return match.group(1)
+
+        # Twitter/Facebook
+        elif 'twitter.com' in url_lower or 'x.com' in url_lower:
+            match = re.search(r'(?:twitter|x)\.com/([^/?#]+)', url_lower)
+            if match:
+                return match.group(1)
+        elif 'facebook.com' in url_lower:
+            match = re.search(r'facebook\.com/([^/?#]+)', url_lower)
+            if match:
+                return match.group(1)
+    except Exception:
+        pass
+
+    return "downloads"
+
+
+# ============ VIDEO DOWNLOADER THREAD ============
 
 class VideoDownloaderThread(QThread):
-    """Video downloader with triple cookies fallback"""
-    
+    """BULLETPROOF Video Downloader with 5 methods + crash protection"""
+
     progress = pyqtSignal(str)
     progress_percent = pyqtSignal(int)
     download_speed = pyqtSignal(str)
@@ -42,348 +102,367 @@ class VideoDownloaderThread(QThread):
 
         # Auto-retry settings
         self.max_retries = options.get('max_retries', 3)
-        self.retry_count = {}  # Track retries per URL
-    
-    def get_cookie_file_triple_fallback(self, url):
+        self.retry_count = {}
+
+    def get_cookie_file(self, url):
         """
-        TRIPLE FALLBACK SYSTEM:
-        Priority 1: cookies/cookies.txt
-        Priority 2: cookies/youtube_cookies.txt (platform-specific)
-        Priority 3: Desktop/toseeq-cookies.txt
-        Priority 4: Browser auto cookies
+        TRIPLE FALLBACK COOKIE SYSTEM - crash protected
         """
-        url_lower = url.lower()
-        
-        # Get project root and cookies directory
-        current_file = Path(__file__).resolve()
-        project_root = current_file.parent.parent.parent
-        cookies_dir = project_root / "cookies"
-        cookies_dir.mkdir(parents=True, exist_ok=True)
-        
-        # PRIORITY 1: cookies/cookies.txt (Universal)
-        universal_cookie = cookies_dir / "cookies.txt"
-        if universal_cookie.exists() and universal_cookie.stat().st_size > 10:
-            self.progress.emit(f"✅ Using universal cookies: {universal_cookie.name}")
-            return str(universal_cookie)
-        
-        # PRIORITY 2: Platform-specific cookies
-        platform_map = {
-            'youtube': 'youtube_cookies.txt',
-            'instagram': 'instagram_cookies.txt',
-            'tiktok': 'tiktok_cookies.txt',
-            'facebook': 'facebook_cookies.txt',
-            'twitter': 'twitter_cookies.txt'
-        }
-        
-        for platform, cookie_file in platform_map.items():
-            if platform in url_lower:
-                platform_cookie = cookies_dir / cookie_file
-                if platform_cookie.exists() and platform_cookie.stat().st_size > 10:
-                    self.progress.emit(f"✅ Using {platform} cookies: {cookie_file}")
-                    return str(platform_cookie)
-        
-        # PRIORITY 3: Desktop/toseeq-cookies.txt
-        desktop_cookie = Path.home() / "Desktop" / "toseeq-cookies.txt"
-        if desktop_cookie.exists() and desktop_cookie.stat().st_size > 10:
-            self.progress.emit(f"✅ Using desktop cookies: toseeq-cookies.txt")
-            return str(desktop_cookie)
-        
-        # PRIORITY 4: Browser auto cookies (last resort)
-        self.progress.emit("🔄 No manual cookies found, trying browser cookies...")
-        
         try:
-            import browser_cookie3
-            
-            domain_map = {
-                'youtube.com': '.youtube.com',
-                'instagram.com': '.instagram.com',
-                'tiktok.com': '.tiktok.com',
-                'facebook.com': '.facebook.com',
-                'twitter.com': '.twitter.com'
+            url_lower = url.lower()
+
+            # Get cookies directory
+            current_file = Path(__file__).resolve()
+            project_root = current_file.parent.parent.parent
+            cookies_dir = project_root / "cookies"
+            cookies_dir.mkdir(parents=True, exist_ok=True)
+
+            # PRIORITY 1: cookies/cookies.txt (Universal)
+            universal_cookie = cookies_dir / "cookies.txt"
+            if universal_cookie.exists() and universal_cookie.stat().st_size > 10:
+                return str(universal_cookie)
+
+            # PRIORITY 2: Platform-specific cookies
+            platform_map = {
+                'youtube': 'youtube.txt',
+                'instagram': 'instagram.txt',
+                'tiktok': 'tiktok.txt',
+                'facebook': 'facebook.txt',
+                'twitter': 'twitter.txt'
             }
-            
-            for domain_key, domain_val in domain_map.items():
-                if domain_key in url_lower:
-                    browsers = [
-                        ('Chrome', browser_cookie3.chrome),
-                        ('Edge', browser_cookie3.edge),
-                        ('Firefox', browser_cookie3.firefox)
-                    ]
-                    
-                    for browser_name, browser_func in browsers:
-                        try:
-                            cj = browser_func(domain_name=domain_val)
-                            if len(cj) > 0:
-                                temp_file = self._save_cookies_to_temp(cj)
-                                if temp_file:
-                                    self.progress.emit(f"✅ Using {browser_name} browser cookies")
-                                    return temp_file
-                        except:
-                            continue
-        except:
-            pass
-        
-        self.progress.emit("⚠️ No cookies available (trying without cookies)")
-        return None
-    
-    def _save_cookies_to_temp(self, cookiejar):
-        """Save cookiejar to temp file"""
-        try:
-            temp = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8')
-            temp.write("# Netscape HTTP Cookie File\n")
-            
-            for cookie in cookiejar:
-                domain = cookie.domain
-                flag = 'TRUE' if domain.startswith('.') else 'FALSE'
-                path = cookie.path
-                secure = 'TRUE' if cookie.secure else 'FALSE'
-                expires = str(int(cookie.expires)) if cookie.expires else '0'
-                name = cookie.name
-                value = cookie.value
-                
-                line = f"{domain}\t{flag}\t{path}\t{secure}\t{expires}\t{name}\t{value}\n"
-                temp.write(line)
-            
-            temp.close()
-            self._temp_files.append(temp.name)
-            return temp.name
-        except:
-            return None
-    
-    def cleanup_temp_files(self):
-        """Clean up temp files"""
-        for f in self._temp_files:
-            try:
-                if os.path.exists(f):
-                    os.unlink(f)
-            except:
-                pass
-        self._temp_files = []
 
-    def clean_ansi(self, text):
-        """Remove ANSI color codes"""
-        return re.sub(r'\x1b\[[0-9;]*m', '', str(text)).strip()
+            for platform, cookie_file in platform_map.items():
+                if platform in url_lower:
+                    platform_cookie = cookies_dir / cookie_file
+                    if platform_cookie.exists() and platform_cookie.stat().st_size > 10:
+                        return str(platform_cookie)
 
-    def progress_hook(self, d):
-        """Progress callback from yt-dlp"""
-        if self.cancelled:
-            return
-
-        try:
-            if d['status'] == 'downloading':
-                # Extract progress
-                percent_str = self.clean_ansi(d.get('_percent_str', '0%'))
-                percent = 0
-                try:
-                    percent = int(float(percent_str.replace('%', '').strip()))
-                except:
-                    percent = 0
-                self.progress_percent.emit(min(percent, 100))
-
-                # Extract speed and ETA
-                speed = self.clean_ansi(d.get('_speed_str', 'N/A'))
-                eta_time = self.clean_ansi(d.get('_eta_str', 'N/A'))
-
-                # Get file info
-                total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
-                downloaded = d.get('downloaded_bytes', 0)
-
-                info = d.get('info_dict', {})
-                title = info.get('title', 'Unknown')
-                if len(title) > 40:
-                    title = title[:37] + "..."
-
-                # Format size
-                mb_downloaded = downloaded // 1024 // 1024
-                mb_total = total // 1024 // 1024 if total > 0 else 0
-                size_str = f"{mb_downloaded}MB/{mb_total}MB" if mb_total > 0 else f"{mb_downloaded}MB/??"
-
-                # Emit signals
-                self.progress.emit(f"📥 [{title}] {size_str} | {speed} | ETA: {eta_time}")
-                self.download_speed.emit(speed)
-                self.eta.emit(eta_time)
-
-            elif d['status'] == 'finished':
-                # Download complete
-                filepath = d.get('filepath') or d.get('_filename')
-                
-                if not filepath and 'info_dict' in d:
-                    info = d['info_dict']
-                    ext = info.get('ext', 'mp4')
-                    title = info.get('title', 'Unknown')
-                    filepath = os.path.join(self.save_path, f"{title}.{ext}")
-                
-                filename = os.path.basename(filepath) if filepath else "Unknown.mp4"
-                
-                # Count success (only .mp4 files)
-                if filename.endswith('.mp4'):
-                    self.progress.emit(f"✅ Completed: {filename}")
-                    self.video_complete.emit(filename)
-                    self.success_count += 1
-
-            elif d['status'] == 'error':
-                error = d.get('error', 'Unknown error')
-                self.progress.emit(f"❌ Error: {str(error)[:100]}")
+            # PRIORITY 3: Desktop/toseeq-cookies.txt
+            desktop_cookie = Path.home() / "Desktop" / "toseeq-cookies.txt"
+            if desktop_cookie.exists() and desktop_cookie.stat().st_size > 10:
+                return str(desktop_cookie)
 
         except Exception:
-            pass  # Ignore hook errors
+            pass
+
+        return None
+
+    def _method1_ytdlp_standard(self, url: str, output_path: str, cookie_file: str = None) -> bool:
+        """METHOD 1: Standard yt-dlp download"""
+        try:
+            self.progress.emit("🔄 Method 1: yt-dlp standard download")
+
+            ydl_opts = {
+                'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
+                'format': self.options.get('quality', 'best'),
+                'quiet': False,
+                'no_warnings': False,
+                'retries': 10,
+                'fragment_retries': 10,
+                'continuedl': True,
+                'progress_hooks': [self._progress_hook],
+            }
+
+            if cookie_file:
+                ydl_opts['cookiefile'] = cookie_file
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+
+            self.progress.emit("✅ Method 1 SUCCESS")
+            return True
+
+        except Exception as e:
+            self.progress.emit(f"⚠️ Method 1 failed: {str(e)[:100]}")
+            return False
+
+    def _method2_ytdlp_with_options(self, url: str, output_path: str, cookie_file: str = None) -> bool:
+        """METHOD 2: yt-dlp with platform-specific options"""
+        try:
+            self.progress.emit("🔄 Method 2: yt-dlp with optimizations")
+
+            ydl_opts = {
+                'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
+                'format': self.options.get('quality', 'best'),
+                'quiet': False,
+                'retries': 15,
+                'fragment_retries': 15,
+                'continuedl': True,
+                'nocheckcertificate': True,
+                'prefer_insecure': True,
+                'geo_bypass': True,
+                'progress_hooks': [self._progress_hook],
+            }
+
+            # Platform-specific optimizations
+            url_lower = url.lower()
+            if 'youtube.com' in url_lower:
+                ydl_opts['extractor_args'] = {'youtube': {'player_client': ['android', 'web']}}
+            elif 'instagram.com' in url_lower:
+                ydl_opts['extractor_args'] = {'instagram': {'api_version': '2'}}
+
+            if cookie_file:
+                ydl_opts['cookiefile'] = cookie_file
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+
+            self.progress.emit("✅ Method 2 SUCCESS")
+            return True
+
+        except Exception as e:
+            self.progress.emit(f"⚠️ Method 2 failed: {str(e)[:100]}")
+            return False
+
+    def _method3_ytdlp_subprocess(self, url: str, output_path: str, cookie_file: str = None) -> bool:
+        """METHOD 3: yt-dlp via subprocess (sometimes more reliable)"""
+        try:
+            self.progress.emit("🔄 Method 3: yt-dlp subprocess")
+
+            cmd = [
+                'yt-dlp',
+                '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
+                '-f', self.options.get('quality', 'best'),
+                '--retries', '15',
+                '--fragment-retries', '15',
+                '--continue',
+                '--no-check-certificate'
+            ]
+
+            if cookie_file:
+                cmd.extend(['--cookies', cookie_file])
+
+            cmd.append(url)
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=1800,  # 30 minutes max
+                encoding='utf-8',
+                errors='replace'
+            )
+
+            if result.returncode == 0:
+                self.progress.emit("✅ Method 3 SUCCESS")
+                return True
+            else:
+                self.progress.emit(f"⚠️ Method 3 failed: {result.stderr[:100]}")
+                return False
+
+        except subprocess.TimeoutExpired:
+            self.progress.emit("⚠️ Method 3 timeout (30 minutes)")
+            return False
+        except Exception as e:
+            self.progress.emit(f"⚠️ Method 3 failed: {str(e)[:100]}")
+            return False
+
+    def _method4_ffmpeg_download(self, url: str, output_path: str, cookie_file: str = None) -> bool:
+        """METHOD 4: Direct stream download with ffmpeg"""
+        try:
+            self.progress.emit("🔄 Method 4: ffmpeg stream download")
+
+            # Get stream URL first
+            ydl_opts = {
+                'quiet': True,
+                'no_warnings': True,
+                'extract_flat': False,
+                'format': 'best',
+            }
+
+            if cookie_file:
+                ydl_opts['cookiefile'] = cookie_file
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                stream_url = info['url']
+                title = _safe_filename(info.get('title', 'video'))
+
+            # Download with ffmpeg
+            output_file = os.path.join(output_path, f"{title}.mp4")
+            cmd = [
+                'ffmpeg',
+                '-i', stream_url,
+                '-c', 'copy',
+                '-y',
+                output_file
+            ]
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=1800
+            )
+
+            if result.returncode == 0 and os.path.exists(output_file):
+                self.progress.emit("✅ Method 4 SUCCESS")
+                return True
+            else:
+                self.progress.emit("⚠️ Method 4 failed")
+                return False
+
+        except Exception as e:
+            self.progress.emit(f"⚠️ Method 4 failed: {str(e)[:100]}")
+            return False
+
+    def _method5_alternative_extractors(self, url: str, output_path: str) -> bool:
+        """METHOD 5: Try alternative extractors"""
+        try:
+            self.progress.emit("🔄 Method 5: Alternative extractors")
+
+            # Try different extractor options
+            extractors = [
+                {'prefer_free_formats': True},
+                {'extract_flat': False, 'force_generic_extractor': True},
+                {'youtube_include_dash_manifest': False},
+            ]
+
+            for i, extra_opts in enumerate(extractors, 1):
+                try:
+                    ydl_opts = {
+                        'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
+                        'format': 'best',
+                        'quiet': True,
+                        'no_warnings': True,
+                        **extra_opts
+                    }
+
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        ydl.download([url])
+
+                    self.progress.emit(f"✅ Method 5 variation {i} SUCCESS")
+                    return True
+                except:
+                    continue
+
+            self.progress.emit("⚠️ Method 5 failed: All variations failed")
+            return False
+
+        except Exception as e:
+            self.progress.emit(f"⚠️ Method 5 failed: {str(e)[:100]}")
+            return False
+
+    def download_video_all_methods(self, url: str, output_path: str, cookie_file: str = None) -> bool:
+        """
+        BULLETPROOF: Try all 5 methods sequentially until success
+        """
+        methods = [
+            self._method1_ytdlp_standard,
+            self._method2_ytdlp_with_options,
+            self._method3_ytdlp_subprocess,
+            self._method4_ffmpeg_download,
+            self._method5_alternative_extractors,
+        ]
+
+        for method in methods:
+            if self.cancelled:
+                return False
+
+            try:
+                # Try method with cookie if available
+                if 'ffmpeg' in method.__name__ or 'alternative' in method.__name__:
+                    success = method(url, output_path)
+                else:
+                    success = method(url, output_path, cookie_file)
+
+                if success:
+                    return True
+            except Exception as e:
+                self.progress.emit(f"Method error: {str(e)[:100]}")
+                continue
+
+        return False
+
+    def _progress_hook(self, d):
+        """Progress callback for yt-dlp"""
+        try:
+            if d['status'] == 'downloading':
+                if 'total_bytes' in d:
+                    percent = int(d['downloaded_bytes'] / d['total_bytes'] * 100)
+                    self.progress_percent.emit(percent)
+
+                if 'speed' in d and d['speed']:
+                    speed_mb = d['speed'] / 1024 / 1024
+                    self.download_speed.emit(f"{speed_mb:.2f} MB/s")
+
+                if 'eta' in d and d['eta']:
+                    self.eta.emit(f"{d['eta']} seconds")
+
+            elif d['status'] == 'finished':
+                self.progress.emit("✅ Download complete, processing...")
+
+        except Exception:
+            pass
 
     def run(self):
-        """Main download execution"""
-        if not self.urls:
-            self.finished.emit(False, "❌ No URLs provided")
-            return
-
-        # Create save directory
+        """Main download loop - crash protected"""
         try:
-            os.makedirs(self.save_path, exist_ok=True)
-        except Exception as e:
-            self.finished.emit(False, f"❌ Cannot create folder: {str(e)}")
-            return
+            if not self.urls:
+                self.finished.emit(False, "❌ No URLs provided")
+                return
 
-        # Get cookies using triple fallback
-        cookie_file = self.get_cookie_file_triple_fallback(self.urls[0]) if self.urls else None
+            total = len(self.urls)
+            self.progress.emit("="*60)
+            self.progress.emit(f"🚀 STARTING DOWNLOAD: {total} videos")
+            self.progress.emit("="*60)
 
-        # Enhanced quality settings
-        quality_map = {
-            'Mobile': 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]/best',
-            'HD': 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]/best',
-            '4K': 'bestvideo[height<=2160][ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best',
-            'Best': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-            'Medium': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]/best',
-            'Low': 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]/best'
-        }
-
-        quality = self.options.get('quality', 'HD')
-        format_string = quality_map.get(quality, quality_map['HD'])
-
-        # Custom bitrate if specified
-        custom_bitrate = self.options.get('bitrate')
-        if custom_bitrate:
-            format_string = f'bestvideo[vbr<={custom_bitrate}]+bestaudio/best'
-
-        # Configure yt-dlp with auto-retry and resume
-        ydl_opts = {
-            'format': format_string,
-            'outtmpl': os.path.join(self.save_path, '%(title)s.%(ext)s'),
-            'merge_output_format': 'mp4',  # Force merge to mp4
-            'progress_hooks': [self.progress_hook],
-            'retries': 10,  # Increased retries
-            'fragment_retries': 10,
-            'file_access_retries': 5,
-            'ignoreerrors': False,
-            'continuedl': True,  # Resume broken downloads
-            'noplaylist': not self.options.get('playlist', False),
-            'restrict_filenames': True,
-            'windowsfilenames': True,
-            'no_warnings': True,
-            'quiet': False,
-            'no_check_certificate': True,
-            'keepvideo': False,  # Don't keep separate video/audio files
-            'nocheckcertificate': True,
-            'prefer_insecure': True,
-            'postprocessors': [{
-                'key': 'FFmpegVideoConvertor',
-                'preferedformat': 'mp4',  # Convert to mp4
-            }],
-            'postprocessor_args': [
-                '-c:v', 'copy',  # Copy video (fast)
-                '-c:a', 'aac',   # AAC audio
-                '-movflags', '+faststart'  # Web optimization
-            ],
-        }
-
-        # Add cookies if available
-        if cookie_file:
-            ydl_opts['cookiefile'] = cookie_file
-
-        # Additional options
-        if self.options.get('subtitles'):
-            ydl_opts['writesubtitles'] = True
-            ydl_opts['writeautomaticsub'] = True
-            ydl_opts['subtitleslangs'] = ['en', 'ur', 'all']
-        
-        if self.options.get('thumbnail'):
-            ydl_opts['writethumbnail'] = True
-
-        # Remove duplicates
-        self.urls = self.remove_duplicates(self.urls)
-
-        # Start download with auto-retry
-        try:
-            self.progress.emit(f"🚀 Starting download of {len(self.urls)} video(s)...")
-            self.progress.emit(f"✅ Duplicates removed - {len(self.urls)} unique URLs")
-
-            # Download with retry logic
-            for url in self.urls:
+            for i, url in enumerate(self.urls, 1):
                 if self.cancelled:
                     break
 
-                retry_attempt = 0
-                max_attempts = self.max_retries
-                downloaded = False
+                self.progress.emit(f"\n{'='*60}")
+                self.progress.emit(f"📥 [{i}/{total}] {url[:60]}...")
+                self.progress.emit(f"{'='*60}")
 
-                while retry_attempt <= max_attempts and not downloaded and not self.cancelled:
-                    try:
-                        if retry_attempt > 0:
-                            self.progress.emit(f"🔄 Retry {retry_attempt}/{max_attempts} for URL...")
+                # Get cookie file
+                cookie_file = self.get_cookie_file(url)
+                if cookie_file:
+                    self.progress.emit(f"🍪 Using cookies: {Path(cookie_file).name}")
 
-                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                            ydl.download([url])
+                # Determine output path (creator-specific if possible)
+                creator = _extract_creator_from_url(url)
+                if creator != "downloads":
+                    output_path = os.path.join(self.save_path, f"@{creator}")
+                else:
+                    output_path = self.save_path
 
-                        downloaded = True
+                os.makedirs(output_path, exist_ok=True)
 
-                    except Exception as e:
-                        retry_attempt += 1
-                        if retry_attempt <= max_attempts:
-                            self.progress.emit(f"⚠️ Error, retrying in 3s... ({retry_attempt}/{max_attempts})")
-                            import time
-                            time.sleep(3)
-                        else:
-                            self.progress.emit(f"❌ Failed after {max_attempts} retries: {str(e)[:100]}")
+                # Try all methods
+                success = self.download_video_all_methods(url, output_path, cookie_file)
 
-            # Cleanup
-            self.cleanup_temp_files()
+                if success:
+                    self.success_count += 1
+                    self.progress.emit(f"✅ [{i}/{total}] Downloaded successfully")
+                    self.video_complete.emit(url)
+                else:
+                    self.progress.emit(f"❌ [{i}/{total}] ALL 5 METHODS FAILED")
 
-            # Success message
-            if self.success_count == len(self.urls):
-                msg = f"✅ Success! Downloaded {self.success_count}/{len(self.urls)} videos"
-            elif self.success_count > 0:
-                msg = f"⚠️ Partial: {self.success_count}/{len(self.urls)} videos downloaded"
-            else:
-                msg = f"❌ Failed: 0/{len(self.urls)} videos downloaded"
+                # Update overall progress
+                pct = int((i / total) * 100)
+                self.progress_percent.emit(pct)
 
-            self.finished.emit(self.success_count > 0, msg)
+            if self.cancelled:
+                self.finished.emit(False, f"⚠️ Cancelled. Downloaded {self.success_count}/{total} videos.")
+                return
+
+            # Final summary
+            self.progress.emit("\n" + "="*60)
+            self.progress.emit("🎉 DOWNLOAD COMPLETE!")
+            self.progress.emit("="*60)
+            self.progress.emit(f"✅ Success: {self.success_count}/{total} videos")
+            self.progress.emit(f"❌ Failed: {total - self.success_count}/{total} videos")
+            self.progress.emit("="*60)
+
+            success_msg = f"✅ Downloaded {self.success_count}/{total} videos"
+            self.finished.emit(True, success_msg)
 
         except Exception as e:
-            self.cleanup_temp_files()
-            error = str(e)[:200]
-            self.progress.emit(f"❌ Error: {error}")
-            self.finished.emit(False, f"❌ Download failed: {error}")
-
-    def remove_duplicates(self, urls):
-        """Remove duplicate URLs while preserving order"""
-        seen = set()
-        unique = []
-        duplicates = 0
-
-        for url in urls:
-            # Normalize URL (remove query parameters for comparison)
-            normalized = url.split('?')[0].lower()
-
-            if normalized not in seen:
-                seen.add(normalized)
-                unique.append(url)
-            else:
-                duplicates += 1
-
-        if duplicates > 0:
-            self.progress.emit(f"🔍 Removed {duplicates} duplicate URL(s)")
-
-        return unique
+            error_msg = f"❌ Critical error: {str(e)[:200]}"
+            self.progress.emit(error_msg)
+            self.finished.emit(False, error_msg)
 
     def cancel(self):
-        """Cancel download"""
+        """Cancel download - safe"""
         self.cancelled = True
-        self.cleanup_temp_files()
-        self.progress.emit("⚠️ Cancelling download...")
+        self.progress.emit("⚠️ Cancelling...")

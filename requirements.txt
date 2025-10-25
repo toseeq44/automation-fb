@@ -8,3 +8,11 @@ lxml>=4.9.0
 browser_cookie3
 cryptography>=41.0.7
 
+# Video Editor Dependencies
+moviepy>=1.0.3
+pillow>=10.0.0
+numpy>=1.24.0
+scipy>=1.10.0
+imageio>=2.31.0
+imageio-ffmpeg>=0.4.9
+

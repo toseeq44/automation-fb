@@ -1,27 +1,25 @@
 """
 modules/video_editor/gui.py
-Complete Video Editor GUI with PyQt5
-Full-featured interface with preview, timeline, and all editing controls
+Complete Video Editor GUI with Preset Project Management
+CapCut-style workflow: Edit -> Save Preset -> Apply to Multiple Videos
 """
 
 import os
 import sys
-from typing import Optional
+from typing import Optional, List
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QFileDialog, QGroupBox, QSpinBox, QDoubleSpinBox, QComboBox,
-    QSlider, QTextEdit, QLineEdit, QTabWidget, QScrollArea,
+    QSlider, QLineEdit, QTabWidget, QScrollArea,
     QProgressBar, QMessageBox, QInputDialog, QListWidget, QSplitter,
-    QCheckBox, QColorDialog, QFontDialog
+    QCheckBox, QColorDialog, QListWidgetItem, QTextEdit, QFrame
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QUrl
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QFont, QColor
-from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
-from PyQt5.QtMultimediaWidgets import QVideoWidget
 
 from modules.logging.logger import get_logger
-from modules.video_editor.core import VideoEditor, BatchVideoEditor, merge_videos
-from modules.video_editor.presets import PlatformPresets, PresetApplicator
+from modules.video_editor.core import VideoEditor
+from modules.video_editor.preset_manager import PresetManager, EditingPreset, PresetTemplates
 from modules.video_editor.utils import (
     get_video_info, format_duration, format_filesize,
     check_dependencies, get_unique_filename
@@ -30,67 +28,109 @@ from modules.video_editor.utils import (
 logger = get_logger(__name__)
 
 
-# ==================== WORKER THREAD ====================
+# ==================== WORKER THREADS ====================
 
 class VideoProcessWorker(QThread):
-    """Worker thread for video processing"""
+    """Worker thread for single video processing"""
     progress = pyqtSignal(str)
     finished = pyqtSignal(str)
     error = pyqtSignal(str)
 
-    def __init__(self, editor: VideoEditor, operations: list, output_path: str):
+    def __init__(self, operations: list, video_path: str, output_path: str, quality: str):
         super().__init__()
-        self.editor = editor
         self.operations = operations
+        self.video_path = video_path
         self.output_path = output_path
+        self.quality = quality
 
     def run(self):
-        """Execute video processing operations"""
         try:
-            self.progress.emit("Starting video processing...")
+            self.progress.emit("Loading video...")
+            editor = VideoEditor(self.video_path)
 
-            # Apply all operations
+            # Apply operations
             for i, operation in enumerate(self.operations):
                 op_name = operation['name']
                 params = operation.get('params', {})
-
                 self.progress.emit(f"Applying {op_name}... ({i+1}/{len(self.operations)})")
 
-                # Execute operation
-                if hasattr(self.editor, op_name):
-                    method = getattr(self.editor, op_name)
+                if hasattr(editor, op_name):
+                    method = getattr(editor, op_name)
                     method(**params)
-                else:
-                    logger.warning(f"Unknown operation: {op_name}")
 
-            # Export video
+            # Export
             self.progress.emit("Exporting video...")
-            self.editor.export(self.output_path, quality='high')
+            editor.export(self.output_path, quality=self.quality)
+            editor.cleanup()
 
-            self.finished.emit(f"Video exported successfully to:\n{self.output_path}")
+            self.finished.emit(f"Video exported successfully!\n{self.output_path}")
 
         except Exception as e:
             logger.error(f"Video processing error: {e}")
             self.error.emit(f"Error: {str(e)}")
 
 
+class BatchProcessWorker(QThread):
+    """Worker thread for batch processing with preset"""
+    progress = pyqtSignal(int, int, str, str)  # current, total, filename, message
+    finished = pyqtSignal(list)  # results
+    error = pyqtSignal(str)
+
+    def __init__(self, preset: EditingPreset, video_paths: List[str],
+                 output_dir: str, quality: str):
+        super().__init__()
+        self.preset = preset
+        self.video_paths = video_paths
+        self.output_dir = output_dir
+        self.quality = quality
+
+    def run(self):
+        try:
+            from modules.video_editor.preset_manager import PresetManager
+
+            manager = PresetManager()
+
+            def progress_callback(current, total, filename, message):
+                self.progress.emit(current, total, filename, message)
+
+            results = manager.apply_preset_to_multiple_videos(
+                self.preset,
+                self.video_paths,
+                self.output_dir,
+                self.quality,
+                progress_callback=progress_callback
+            )
+
+            self.finished.emit(results)
+
+        except Exception as e:
+            logger.error(f"Batch processing error: {e}")
+            self.error.emit(f"Error: {str(e)}")
+
+
 # ==================== MAIN GUI ====================
 
 class VideoEditorPage(QWidget):
-    """Complete Video Editor GUI"""
+    """
+    Complete Video Editor with Preset Project Management
+    CapCut-style workflow
+    """
 
     def __init__(self, back_callback=None):
         super().__init__()
         self.back_callback = back_callback
-        self.editor = None
-        self.current_video_path = None
-        self.operations_queue = []  # Queue of operations to apply
 
         # Check dependencies
         deps = check_dependencies()
         if not all([deps.get('ffmpeg'), deps.get('moviepy')]):
             self.show_dependency_error()
             return
+
+        # Initialize state
+        self.preset_manager = PresetManager()
+        self.selected_videos = []  # List of selected video paths
+        self.operations_queue = []  # Current operations
+        self.current_preset = None  # Currently loaded preset
 
         self.init_ui()
 
@@ -104,7 +144,7 @@ class VideoEditorPage(QWidget):
         layout.addWidget(error_label)
 
         msg = QLabel("Please install required dependencies:\n\n"
-                    "pip install moviepy pillow numpy scipy\n\n"
+                    "pip install moviepy pillow numpy scipy imageio imageio-ffmpeg\n\n"
                     "And install FFmpeg from: https://ffmpeg.org/download.html")
         msg.setStyleSheet("font-size: 14px; color: #F5F6F5;")
         layout.addWidget(msg)
@@ -118,17 +158,16 @@ class VideoEditorPage(QWidget):
 
     def init_ui(self):
         """Initialize the user interface"""
-        # Main layout
         main_layout = QVBoxLayout()
-        main_layout.setSpacing(10)
-        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setSpacing(5)
+        main_layout.setContentsMargins(5, 5, 5, 5)
 
-        # Set dark theme
+        # Apply dark theme
         self.setStyleSheet("""
             QWidget {
                 background-color: #23272A;
                 color: #F5F6F5;
-                font-size: 13px;
+                font-size: 12px;
             }
             QGroupBox {
                 border: 1px solid #40444B;
@@ -146,8 +185,8 @@ class VideoEditorPage(QWidget):
                 background-color: #1ABC9C;
                 color: #F5F6F5;
                 border: none;
-                padding: 8px 15px;
-                border-radius: 5px;
+                padding: 6px 12px;
+                border-radius: 4px;
                 font-weight: bold;
             }
             QPushButton:hover {
@@ -164,107 +203,60 @@ class VideoEditorPage(QWidget):
                 background-color: #2C2F33;
                 border: 1px solid #40444B;
                 border-radius: 3px;
-                padding: 5px;
+                padding: 4px;
                 color: #F5F6F5;
             }
-            QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover, QLineEdit:hover {
-                border: 1px solid #1ABC9C;
-            }
-            QComboBox::drop-down {
-                border: none;
+            QListWidget {
+                background-color: #2C2F33;
+                border: 1px solid #40444B;
+                border-radius: 3px;
             }
             QSlider::groove:horizontal {
                 background: #40444B;
-                height: 8px;
-                border-radius: 4px;
+                height: 6px;
+                border-radius: 3px;
             }
             QSlider::handle:horizontal {
                 background: #1ABC9C;
-                width: 16px;
+                width: 14px;
                 margin: -4px 0;
-                border-radius: 8px;
-            }
-            QTabWidget::pane {
-                border: 1px solid #40444B;
-                border-radius: 5px;
-            }
-            QTabBar::tab {
-                background-color: #2C2F33;
-                color: #F5F6F5;
-                padding: 8px 15px;
-                border-top-left-radius: 5px;
-                border-top-right-radius: 5px;
-                margin-right: 2px;
-            }
-            QTabBar::tab:selected {
-                background-color: #1ABC9C;
-            }
-            QProgressBar {
-                border: 1px solid #40444B;
-                border-radius: 5px;
-                text-align: center;
-                background-color: #2C2F33;
-            }
-            QProgressBar::chunk {
-                background-color: #1ABC9C;
-                border-radius: 4px;
+                border-radius: 7px;
             }
         """)
 
-        # ==================== HEADER ====================
-        header = self.create_header()
-        main_layout.addWidget(header)
+        # Header
+        main_layout.addWidget(self.create_header())
 
-        # ==================== MAIN CONTENT ====================
-        # Use splitter for resizable sections
-        splitter = QSplitter(Qt.Horizontal)
+        # Preset Management Bar
+        main_layout.addWidget(self.create_preset_bar())
 
-        # Left panel - Controls
-        controls_scroll = QScrollArea()
-        controls_scroll.setWidgetResizable(True)
-        controls_scroll.setMinimumWidth(350)
-        controls_scroll.setMaximumWidth(450)
+        # Main Content Area
+        content_splitter = QSplitter(Qt.Horizontal)
 
-        controls_widget = QWidget()
-        controls_layout = QVBoxLayout()
-        controls_layout.setSpacing(10)
+        # Left: Feature Sidebar (collapsible)
+        self.features_sidebar = self.create_features_sidebar()
+        self.features_sidebar.setMaximumWidth(280)
+        self.features_sidebar.setMinimumWidth(200)
 
-        # File controls
-        controls_layout.addWidget(self.create_file_controls())
+        # Center: Video Selection + Operations
+        center_widget = QWidget()
+        center_layout = QVBoxLayout()
+        center_layout.setSpacing(5)
 
-        # Video info
-        self.video_info_widget = self.create_video_info_widget()
-        controls_layout.addWidget(self.video_info_widget)
+        center_layout.addWidget(self.create_video_selection_area())
+        center_layout.addWidget(self.create_operations_queue())
 
-        # Tabs for different operations
-        self.tabs = QTabWidget()
-        self.tabs.addTab(self.create_basic_edits_tab(), "✂️ Basic")
-        self.tabs.addTab(self.create_text_tab(), "📝 Text")
-        self.tabs.addTab(self.create_audio_tab(), "🎵 Audio")
-        self.tabs.addTab(self.create_filters_tab(), "🎨 Filters")
-        self.tabs.addTab(self.create_advanced_tab(), "⚙️ Advanced")
-        controls_layout.addWidget(self.tabs)
+        center_widget.setLayout(center_layout)
 
-        # Operations queue
-        controls_layout.addWidget(self.create_operations_queue())
+        content_splitter.addWidget(self.features_sidebar)
+        content_splitter.addWidget(center_widget)
+        content_splitter.setStretchFactor(0, 0)
+        content_splitter.setStretchFactor(1, 1)
 
-        controls_layout.addStretch()
-        controls_widget.setLayout(controls_layout)
-        controls_scroll.setWidget(controls_widget)
+        main_layout.addWidget(content_splitter, 1)
 
-        # Right panel - Preview
-        preview_widget = self.create_preview_widget()
-
-        splitter.addWidget(controls_scroll)
-        splitter.addWidget(preview_widget)
-        splitter.setStretchFactor(0, 0)  # Controls don't stretch
-        splitter.setStretchFactor(1, 1)  # Preview stretches
-
-        main_layout.addWidget(splitter, 1)
-
-        # ==================== FOOTER ====================
-        footer = self.create_footer()
-        main_layout.addWidget(footer)
+        # Footer: Export Controls
+        main_layout.addWidget(self.create_export_footer())
 
         self.setLayout(main_layout)
 
@@ -272,14 +264,14 @@ class VideoEditorPage(QWidget):
         """Create header section"""
         header = QWidget()
         layout = QHBoxLayout()
+        layout.setContentsMargins(10, 5, 10, 5)
 
-        title = QLabel("🎬 Video Editor")
-        title.setStyleSheet("font-size: 24px; font-weight: bold; color: #1ABC9C;")
+        title = QLabel("🎬 Video Editor - Preset Project System")
+        title.setStyleSheet("font-size: 20px; font-weight: bold; color: #1ABC9C;")
         layout.addWidget(title)
 
         layout.addStretch()
 
-        # Back button
         back_btn = QPushButton("⬅ Back")
         back_btn.clicked.connect(self.back_callback if self.back_callback else lambda: None)
         layout.addWidget(back_btn)
@@ -287,475 +279,252 @@ class VideoEditorPage(QWidget):
         header.setLayout(layout)
         return header
 
-    def create_file_controls(self):
-        """Create file loading/saving controls"""
-        group = QGroupBox("📁 File")
+    def create_preset_bar(self):
+        """Create preset management bar"""
+        bar = QWidget()
+        layout = QHBoxLayout()
+        layout.setContentsMargins(10, 5, 10, 5)
+
+        # Preset selection
+        layout.addWidget(QLabel("Current Preset:"))
+        self.preset_combo = QComboBox()
+        self.preset_combo.setMinimumWidth(200)
+        self.preset_combo.addItem("-- No Preset --")
+        self.preset_combo.currentTextChanged.connect(self.on_preset_selected)
+        layout.addWidget(self.preset_combo)
+
+        # Preset actions
+        new_preset_btn = QPushButton("📝 New Preset")
+        new_preset_btn.clicked.connect(self.create_new_preset)
+        layout.addWidget(new_preset_btn)
+
+        save_preset_btn = QPushButton("💾 Save Preset")
+        save_preset_btn.clicked.connect(self.save_current_preset)
+        layout.addWidget(save_preset_btn)
+
+        load_preset_btn = QPushButton("📂 Load Preset")
+        load_preset_btn.clicked.connect(self.load_preset)
+        layout.addWidget(load_preset_btn)
+
+        delete_preset_btn = QPushButton("🗑️ Delete")
+        delete_preset_btn.clicked.connect(self.delete_preset)
+        layout.addWidget(delete_preset_btn)
+
+        layout.addStretch()
+
+        # Templates
+        templates_btn = QPushButton("⭐ Templates")
+        templates_btn.clicked.connect(self.show_templates)
+        layout.addWidget(templates_btn)
+
+        bar.setLayout(layout)
+        return bar
+
+    def create_features_sidebar(self):
+        """Create left sidebar with editing features"""
+        sidebar = QWidget()
         layout = QVBoxLayout()
+        layout.setSpacing(5)
+        layout.setContentsMargins(5, 5, 5, 5)
 
-        # Load video button
-        load_btn = QPushButton("Open Video")
-        load_btn.clicked.connect(self.load_video)
-        layout.addWidget(load_btn)
+        # Feature tabs
+        tabs = QTabWidget()
+        tabs.setTabPosition(QTabWidget.West)
 
-        # Current file label
-        self.current_file_label = QLabel("No video loaded")
-        self.current_file_label.setStyleSheet("color: #72767D; font-size: 11px;")
-        self.current_file_label.setWordWrap(True)
-        layout.addWidget(self.current_file_label)
+        tabs.addTab(self.create_basic_tab(), "Basic")
+        tabs.addTab(self.create_text_tab(), "Text")
+        tabs.addTab(self.create_audio_tab(), "Audio")
+        tabs.addTab(self.create_filters_tab(), "Filters")
 
-        group.setLayout(layout)
-        return group
+        layout.addWidget(tabs)
 
-    def create_video_info_widget(self):
-        """Create video info display"""
-        group = QGroupBox("ℹ️ Video Info")
-        layout = QVBoxLayout()
+        sidebar.setLayout(layout)
+        return sidebar
 
-        self.info_label = QLabel("No video loaded")
-        self.info_label.setStyleSheet("font-size: 11px; color: #B9BBBE;")
-        self.info_label.setWordWrap(True)
-        layout.addWidget(self.info_label)
-
-        group.setLayout(layout)
-        group.setVisible(False)
-        return group
-
-    def create_basic_edits_tab(self):
-        """Create basic editing controls tab"""
+    def create_basic_tab(self):
+        """Basic editing features"""
         widget = QWidget()
         layout = QVBoxLayout()
+        layout.setSpacing(5)
 
-        # Trim/Cut
-        trim_group = QGroupBox("✂️ Trim/Cut")
-        trim_layout = QVBoxLayout()
-
-        trim_layout.addWidget(QLabel("Start Time (seconds):"))
+        # Trim
+        layout.addWidget(QLabel("⏱️ Trim (seconds):"))
+        trim_layout = QHBoxLayout()
         self.trim_start = QDoubleSpinBox()
         self.trim_start.setMaximum(9999)
-        self.trim_start.setValue(0)
-        trim_layout.addWidget(self.trim_start)
-
-        trim_layout.addWidget(QLabel("End Time (seconds):"))
         self.trim_end = QDoubleSpinBox()
         self.trim_end.setMaximum(9999)
-        self.trim_end.setValue(10)
+        self.trim_end.setValue(30)
+        trim_layout.addWidget(self.trim_start)
+        trim_layout.addWidget(QLabel("-"))
         trim_layout.addWidget(self.trim_end)
+        layout.addLayout(trim_layout)
 
-        trim_btn = QPushButton("Add Trim Operation")
+        trim_btn = QPushButton("Add Trim")
         trim_btn.clicked.connect(self.add_trim_operation)
-        trim_layout.addWidget(trim_btn)
-
-        trim_group.setLayout(trim_layout)
-        layout.addWidget(trim_group)
+        layout.addWidget(trim_btn)
 
         # Crop
-        crop_group = QGroupBox("📐 Crop / Aspect Ratio")
-        crop_layout = QVBoxLayout()
-
-        crop_layout.addWidget(QLabel("Preset:"))
+        layout.addWidget(QLabel("📐 Crop:"))
         self.crop_preset = QComboBox()
-        self.crop_preset.addItems([
-            "Custom",
-            "9:16 (TikTok, Reels, Shorts)",
-            "16:9 (YouTube, Facebook)",
-            "1:1 (Square)",
-            "4:5 (Instagram Portrait)",
-            "4:3 (Traditional)",
-            "21:9 (Cinematic)"
-        ])
-        crop_layout.addWidget(self.crop_preset)
+        self.crop_preset.addItems(["9:16 (TikTok)", "16:9 (YouTube)", "1:1 (Square)", "4:5 (Portrait)"])
+        layout.addWidget(self.crop_preset)
 
-        crop_btn = QPushButton("Add Crop Operation")
+        crop_btn = QPushButton("Add Crop")
         crop_btn.clicked.connect(self.add_crop_operation)
-        crop_layout.addWidget(crop_btn)
-
-        crop_group.setLayout(crop_layout)
-        layout.addWidget(crop_group)
+        layout.addWidget(crop_btn)
 
         # Rotate/Flip
-        transform_group = QGroupBox("🔄 Rotate / Flip")
-        transform_layout = QVBoxLayout()
-
+        layout.addWidget(QLabel("🔄 Transform:"))
         rotate_layout = QHBoxLayout()
-        rotate_90_btn = QPushButton("↻ 90°")
-        rotate_90_btn.clicked.connect(lambda: self.add_operation('rotate', {'angle': 90}))
-        rotate_180_btn = QPushButton("↻ 180°")
-        rotate_180_btn.clicked.connect(lambda: self.add_operation('rotate', {'angle': 180}))
-        rotate_270_btn = QPushButton("↻ 270°")
-        rotate_270_btn.clicked.connect(lambda: self.add_operation('rotate', {'angle': 270}))
-        rotate_layout.addWidget(rotate_90_btn)
-        rotate_layout.addWidget(rotate_180_btn)
-        rotate_layout.addWidget(rotate_270_btn)
-        transform_layout.addLayout(rotate_layout)
+        r90 = QPushButton("90°")
+        r90.clicked.connect(lambda: self.add_operation('rotate', {'angle': 90}))
+        r180 = QPushButton("180°")
+        r180.clicked.connect(lambda: self.add_operation('rotate', {'angle': 180}))
+        rotate_layout.addWidget(r90)
+        rotate_layout.addWidget(r180)
+        layout.addLayout(rotate_layout)
 
         flip_layout = QHBoxLayout()
-        flip_h_btn = QPushButton("↔️ Flip Horizontal")
-        flip_h_btn.clicked.connect(lambda: self.add_operation('flip_horizontal', {}))
-        flip_v_btn = QPushButton("↕️ Flip Vertical")
-        flip_v_btn.clicked.connect(lambda: self.add_operation('flip_vertical', {}))
-        flip_layout.addWidget(flip_h_btn)
-        flip_layout.addWidget(flip_v_btn)
-        transform_layout.addLayout(flip_layout)
-
-        transform_group.setLayout(transform_layout)
-        layout.addWidget(transform_group)
-
-        # Resize
-        resize_group = QGroupBox("📏 Resize")
-        resize_layout = QVBoxLayout()
-
-        resize_layout.addWidget(QLabel("Width:"))
-        self.resize_width = QSpinBox()
-        self.resize_width.setMaximum(7680)
-        self.resize_width.setValue(1920)
-        resize_layout.addWidget(self.resize_width)
-
-        resize_layout.addWidget(QLabel("Height:"))
-        self.resize_height = QSpinBox()
-        self.resize_height.setMaximum(4320)
-        self.resize_height.setValue(1080)
-        resize_layout.addWidget(self.resize_height)
-
-        resize_btn = QPushButton("Add Resize Operation")
-        resize_btn.clicked.connect(self.add_resize_operation)
-        resize_layout.addWidget(resize_btn)
-
-        resize_group.setLayout(resize_layout)
-        layout.addWidget(resize_group)
-
-        # Speed
-        speed_group = QGroupBox("⏩ Speed")
-        speed_layout = QVBoxLayout()
-
-        speed_layout.addWidget(QLabel("Speed Factor:"))
-        self.speed_factor = QDoubleSpinBox()
-        self.speed_factor.setMinimum(0.1)
-        self.speed_factor.setMaximum(10.0)
-        self.speed_factor.setValue(1.0)
-        self.speed_factor.setSingleStep(0.1)
-        speed_layout.addWidget(self.speed_factor)
-
-        speed_info = QLabel("1.0 = normal, 0.5 = half speed, 2.0 = double speed")
-        speed_info.setStyleSheet("font-size: 10px; color: #72767D;")
-        speed_layout.addWidget(speed_info)
-
-        speed_btn = QPushButton("Add Speed Change")
-        speed_btn.clicked.connect(self.add_speed_operation)
-        speed_layout.addWidget(speed_btn)
-
-        speed_group.setLayout(speed_layout)
-        layout.addWidget(speed_group)
+        fh = QPushButton("Flip H")
+        fh.clicked.connect(lambda: self.add_operation('flip_horizontal', {}))
+        fv = QPushButton("Flip V")
+        fv.clicked.connect(lambda: self.add_operation('flip_vertical', {}))
+        flip_layout.addWidget(fh)
+        flip_layout.addWidget(fv)
+        layout.addLayout(flip_layout)
 
         layout.addStretch()
         widget.setLayout(layout)
         return widget
 
     def create_text_tab(self):
-        """Create text overlay controls tab"""
+        """Text overlay features"""
         widget = QWidget()
         layout = QVBoxLayout()
+        layout.setSpacing(5)
 
-        text_group = QGroupBox("📝 Text Overlay")
-        text_layout = QVBoxLayout()
-
-        text_layout.addWidget(QLabel("Text:"))
+        layout.addWidget(QLabel("📝 Text:"))
         self.text_input = QLineEdit()
-        self.text_input.setPlaceholderText("Enter your text here...")
-        text_layout.addWidget(self.text_input)
+        self.text_input.setPlaceholderText("Enter text...")
+        layout.addWidget(self.text_input)
 
-        text_layout.addWidget(QLabel("Font Size:"))
+        layout.addWidget(QLabel("Size:"))
         self.text_size = QSpinBox()
-        self.text_size.setMinimum(10)
-        self.text_size.setMaximum(200)
+        self.text_size.setRange(10, 200)
         self.text_size.setValue(50)
-        text_layout.addWidget(self.text_size)
+        layout.addWidget(self.text_size)
 
-        text_layout.addWidget(QLabel("Position:"))
+        layout.addWidget(QLabel("Position:"))
         self.text_position = QComboBox()
-        self.text_position.addItems([
-            "Center - Top",
-            "Center - Center",
-            "Center - Bottom",
-            "Left - Top",
-            "Left - Bottom",
-            "Right - Top",
-            "Right - Bottom"
-        ])
-        self.text_position.setCurrentIndex(2)  # Center - Bottom
-        text_layout.addWidget(self.text_position)
+        self.text_position.addItems(["Center-Bottom", "Center-Top", "Left-Bottom", "Right-Bottom"])
+        layout.addWidget(self.text_position)
 
-        text_layout.addWidget(QLabel("Color:"))
-        color_layout = QHBoxLayout()
-        self.text_color_btn = QPushButton("Choose Color")
-        self.text_color_btn.clicked.connect(self.choose_text_color)
         self.text_color = 'white'
-        color_layout.addWidget(self.text_color_btn)
-        self.text_color_display = QLabel("⬤")
-        self.text_color_display.setStyleSheet("color: white; font-size: 20px;")
-        color_layout.addWidget(self.text_color_display)
-        text_layout.addLayout(color_layout)
+        color_btn = QPushButton("Choose Color")
+        color_btn.clicked.connect(self.choose_text_color)
+        layout.addWidget(color_btn)
 
-        text_layout.addWidget(QLabel("Duration (seconds, 0 = full video):"))
-        self.text_duration = QDoubleSpinBox()
-        self.text_duration.setMaximum(9999)
-        self.text_duration.setValue(0)
-        text_layout.addWidget(self.text_duration)
-
-        add_text_btn = QPushButton("Add Text Overlay")
+        add_text_btn = QPushButton("Add Text")
         add_text_btn.clicked.connect(self.add_text_operation)
-        text_layout.addWidget(add_text_btn)
-
-        text_group.setLayout(text_layout)
-        layout.addWidget(text_group)
-
-        # Watermark
-        watermark_group = QGroupBox("🖼️ Watermark / Logo")
-        watermark_layout = QVBoxLayout()
-
-        self.watermark_path = None
-        watermark_btn = QPushButton("Select Watermark Image")
-        watermark_btn.clicked.connect(self.select_watermark)
-        watermark_layout.addWidget(watermark_btn)
-
-        self.watermark_label = QLabel("No watermark selected")
-        self.watermark_label.setStyleSheet("font-size: 10px; color: #72767D;")
-        watermark_layout.addWidget(self.watermark_label)
-
-        watermark_layout.addWidget(QLabel("Position:"))
-        self.watermark_position = QComboBox()
-        self.watermark_position.addItems([
-            "Right - Bottom",
-            "Right - Top",
-            "Left - Bottom",
-            "Left - Top",
-            "Center - Center"
-        ])
-        watermark_layout.addWidget(self.watermark_position)
-
-        watermark_layout.addWidget(QLabel("Opacity:"))
-        self.watermark_opacity = QSlider(Qt.Horizontal)
-        self.watermark_opacity.setMinimum(10)
-        self.watermark_opacity.setMaximum(100)
-        self.watermark_opacity.setValue(100)
-        watermark_layout.addWidget(self.watermark_opacity)
-
-        add_watermark_btn = QPushButton("Add Watermark")
-        add_watermark_btn.clicked.connect(self.add_watermark_operation)
-        watermark_layout.addWidget(add_watermark_btn)
-
-        watermark_group.setLayout(watermark_layout)
-        layout.addWidget(watermark_group)
+        layout.addWidget(add_text_btn)
 
         layout.addStretch()
         widget.setLayout(layout)
         return widget
 
     def create_audio_tab(self):
-        """Create audio controls tab"""
+        """Audio features"""
         widget = QWidget()
         layout = QVBoxLayout()
+        layout.setSpacing(5)
 
-        # Volume
-        volume_group = QGroupBox("🔊 Volume")
-        volume_layout = QVBoxLayout()
-
-        volume_layout.addWidget(QLabel("Volume Level:"))
+        layout.addWidget(QLabel("🔊 Volume:"))
         self.volume_slider = QSlider(Qt.Horizontal)
-        self.volume_slider.setMinimum(0)
-        self.volume_slider.setMaximum(200)
+        self.volume_slider.setRange(0, 200)
         self.volume_slider.setValue(100)
-        volume_layout.addWidget(self.volume_slider)
+        layout.addWidget(self.volume_slider)
 
-        self.volume_label = QLabel("100%")
-        self.volume_label.setStyleSheet("font-size: 11px; color: #B9BBBE;")
-        self.volume_slider.valueChanged.connect(lambda v: self.volume_label.setText(f"{v}%"))
-        volume_layout.addWidget(self.volume_label)
-
-        volume_btn = QPushButton("Adjust Volume")
-        volume_btn.clicked.connect(self.add_volume_operation)
-        volume_layout.addWidget(volume_btn)
+        vol_btn = QPushButton("Adjust Volume")
+        vol_btn.clicked.connect(self.add_volume_operation)
+        layout.addWidget(vol_btn)
 
         remove_audio_btn = QPushButton("Remove Audio")
         remove_audio_btn.clicked.connect(lambda: self.add_operation('remove_audio', {}))
-        volume_layout.addWidget(remove_audio_btn)
-
-        volume_group.setLayout(volume_layout)
-        layout.addWidget(volume_group)
-
-        # Replace audio
-        replace_group = QGroupBox("🎵 Replace Audio")
-        replace_layout = QVBoxLayout()
-
-        self.audio_path = None
-        audio_btn = QPushButton("Select Audio File")
-        audio_btn.clicked.connect(self.select_audio)
-        replace_layout.addWidget(audio_btn)
-
-        self.audio_label = QLabel("No audio selected")
-        self.audio_label.setStyleSheet("font-size: 10px; color: #72767D;")
-        replace_layout.addWidget(self.audio_label)
-
-        replace_audio_btn = QPushButton("Replace Audio")
-        replace_audio_btn.clicked.connect(self.add_replace_audio_operation)
-        replace_layout.addWidget(replace_audio_btn)
-
-        replace_group.setLayout(replace_layout)
-        layout.addWidget(replace_group)
+        layout.addWidget(remove_audio_btn)
 
         layout.addStretch()
         widget.setLayout(layout)
         return widget
 
     def create_filters_tab(self):
-        """Create filters controls tab"""
+        """Filter features"""
         widget = QWidget()
         layout = QVBoxLayout()
+        layout.setSpacing(5)
 
-        # Basic filters
-        basic_group = QGroupBox("🎨 Basic Filters")
-        basic_layout = QVBoxLayout()
+        layout.addWidget(QLabel("🎨 Quick Filters:"))
 
-        # Brightness
-        basic_layout.addWidget(QLabel("Brightness:"))
-        self.brightness = QSlider(Qt.Horizontal)
-        self.brightness.setMinimum(50)
-        self.brightness.setMaximum(200)
-        self.brightness.setValue(100)
-        basic_layout.addWidget(self.brightness)
+        filters = [
+            ("Cinematic", 'cinematic'),
+            ("Vintage", 'vintage'),
+            ("Grayscale", 'grayscale'),
+            ("Sepia", 'sepia'),
+            ("Warm", 'warm'),
+            ("Cool", 'cool')
+        ]
 
-        brightness_btn = QPushButton("Apply Brightness")
-        brightness_btn.clicked.connect(lambda: self.add_filter_operation('brightness', self.brightness.value() / 100.0))
-        basic_layout.addWidget(brightness_btn)
+        for name, filter_id in filters:
+            btn = QPushButton(name)
+            btn.clicked.connect(lambda checked, f=filter_id: self.add_filter(f))
+            layout.addWidget(btn)
 
-        # Contrast
-        basic_layout.addWidget(QLabel("Contrast:"))
-        self.contrast = QSlider(Qt.Horizontal)
-        self.contrast.setMinimum(50)
-        self.contrast.setMaximum(200)
-        self.contrast.setValue(100)
-        basic_layout.addWidget(self.contrast)
-
-        contrast_btn = QPushButton("Apply Contrast")
-        contrast_btn.clicked.connect(lambda: self.add_filter_operation('contrast', self.contrast.value() / 100.0))
-        basic_layout.addWidget(contrast_btn)
-
-        # Saturation
-        basic_layout.addWidget(QLabel("Saturation:"))
-        self.saturation = QSlider(Qt.Horizontal)
-        self.saturation.setMinimum(0)
-        self.saturation.setMaximum(200)
-        self.saturation.setValue(100)
-        basic_layout.addWidget(self.saturation)
-
-        saturation_btn = QPushButton("Apply Saturation")
-        saturation_btn.clicked.connect(lambda: self.add_filter_operation('saturation', self.saturation.value() / 100.0))
-        basic_layout.addWidget(saturation_btn)
-
-        basic_group.setLayout(basic_layout)
-        layout.addWidget(basic_group)
-
-        # Quick filters
-        quick_group = QGroupBox("⚡ Quick Filters")
-        quick_layout = QVBoxLayout()
-
-        filters_row1 = QHBoxLayout()
-        grayscale_btn = QPushButton("Grayscale")
-        grayscale_btn.clicked.connect(lambda: self.add_filter_operation('grayscale', None))
-        sepia_btn = QPushButton("Sepia")
-        sepia_btn.clicked.connect(lambda: self.add_filter_operation('sepia', None))
-        filters_row1.addWidget(grayscale_btn)
-        filters_row1.addWidget(sepia_btn)
-        quick_layout.addLayout(filters_row1)
-
-        filters_row2 = QHBoxLayout()
-        invert_btn = QPushButton("Invert")
-        invert_btn.clicked.connect(lambda: self.add_filter_operation('invert', None))
-        vintage_btn = QPushButton("Vintage")
-        vintage_btn.clicked.connect(lambda: self.add_filter_operation('vintage', None))
-        filters_row2.addWidget(invert_btn)
-        filters_row2.addWidget(vintage_btn)
-        quick_layout.addLayout(filters_row2)
-
-        filters_row3 = QHBoxLayout()
-        cinematic_btn = QPushButton("Cinematic")
-        cinematic_btn.clicked.connect(lambda: self.add_filter_operation('cinematic', None))
-        warm_btn = QPushButton("Warm")
-        warm_btn.clicked.connect(lambda: self.add_filter_operation('warm', 0.3))
-        filters_row3.addWidget(cinematic_btn)
-        filters_row3.addWidget(warm_btn)
-        quick_layout.addLayout(filters_row3)
-
-        quick_group.setLayout(quick_layout)
-        layout.addWidget(quick_group)
-
-        # Fade effects
-        fade_group = QGroupBox("✨ Fade Effects")
-        fade_layout = QVBoxLayout()
-
-        fade_layout.addWidget(QLabel("Fade Duration (seconds):"))
-        self.fade_duration = QDoubleSpinBox()
-        self.fade_duration.setMinimum(0.1)
-        self.fade_duration.setMaximum(10.0)
-        self.fade_duration.setValue(1.0)
-        fade_layout.addWidget(self.fade_duration)
-
-        fade_btns = QHBoxLayout()
+        layout.addWidget(QLabel("✨ Fade:"))
+        fade_layout = QHBoxLayout()
         fade_in_btn = QPushButton("Fade In")
-        fade_in_btn.clicked.connect(lambda: self.add_operation('fade_in', {'duration': self.fade_duration.value()}))
+        fade_in_btn.clicked.connect(lambda: self.add_operation('fade_in', {'duration': 1.0}))
         fade_out_btn = QPushButton("Fade Out")
-        fade_out_btn.clicked.connect(lambda: self.add_operation('fade_out', {'duration': self.fade_duration.value()}))
-        fade_btns.addWidget(fade_in_btn)
-        fade_btns.addWidget(fade_out_btn)
-        fade_layout.addLayout(fade_btns)
-
-        fade_group.setLayout(fade_layout)
-        layout.addWidget(fade_group)
+        fade_out_btn.clicked.connect(lambda: self.add_operation('fade_out', {'duration': 1.0}))
+        fade_layout.addWidget(fade_in_btn)
+        fade_layout.addWidget(fade_out_btn)
+        layout.addLayout(fade_layout)
 
         layout.addStretch()
         widget.setLayout(layout)
         return widget
 
-    def create_advanced_tab(self):
-        """Create advanced controls tab"""
-        widget = QWidget()
+    def create_video_selection_area(self):
+        """Video selection and management"""
+        group = QGroupBox("📹 Selected Videos")
         layout = QVBoxLayout()
 
-        # Platform presets
-        preset_group = QGroupBox("📱 Platform Presets")
-        preset_layout = QVBoxLayout()
+        # Buttons
+        btn_layout = QHBoxLayout()
 
-        preset_layout.addWidget(QLabel("Platform:"))
-        self.platform_combo = QComboBox()
-        self.platform_combo.addItems([
-            "TikTok Vertical",
-            "Instagram Reels",
-            "Instagram Story",
-            "Instagram Post (Square)",
-            "YouTube Shorts",
-            "YouTube 1080p",
-            "YouTube 4K",
-            "Facebook Feed",
-            "Twitter Landscape"
-        ])
-        preset_layout.addWidget(self.platform_combo)
+        add_video_btn = QPushButton("➕ Add Video(s)")
+        add_video_btn.clicked.connect(self.add_videos)
+        btn_layout.addWidget(add_video_btn)
 
-        preset_btn = QPushButton("Apply Platform Preset")
-        preset_btn.clicked.connect(self.apply_platform_preset)
-        preset_layout.addWidget(preset_btn)
+        remove_video_btn = QPushButton("➖ Remove Selected")
+        remove_video_btn.clicked.connect(self.remove_selected_video)
+        btn_layout.addWidget(remove_video_btn)
 
-        preset_info = QLabel("Auto-crop and resize for selected platform")
-        preset_info.setStyleSheet("font-size: 10px; color: #72767D;")
-        preset_layout.addWidget(preset_info)
+        clear_videos_btn = QPushButton("🗑️ Clear All")
+        clear_videos_btn.clicked.connect(self.clear_videos)
+        btn_layout.addWidget(clear_videos_btn)
 
-        preset_group.setLayout(preset_layout)
-        layout.addWidget(preset_group)
+        layout.addLayout(btn_layout)
 
-        layout.addStretch()
-        widget.setLayout(layout)
-        return widget
+        # Video list
+        self.videos_list = QListWidget()
+        self.videos_list.setMaximumHeight(150)
+        layout.addWidget(self.videos_list)
+
+        group.setLayout(layout)
+        return group
 
     def create_operations_queue(self):
-        """Create operations queue widget"""
+        """Operations queue"""
         group = QGroupBox("📋 Operations Queue")
         layout = QVBoxLayout()
 
@@ -765,7 +534,7 @@ class VideoEditorPage(QWidget):
 
         btn_layout = QHBoxLayout()
 
-        clear_btn = QPushButton("Clear Queue")
+        clear_btn = QPushButton("Clear All")
         clear_btn.clicked.connect(self.clear_operations)
         btn_layout.addWidget(clear_btn)
 
@@ -778,92 +547,47 @@ class VideoEditorPage(QWidget):
         group.setLayout(layout)
         return group
 
-    def create_preview_widget(self):
-        """Create video preview widget"""
-        widget = QWidget()
-        layout = QVBoxLayout()
-
-        # Preview label
-        preview_label = QLabel("📺 Preview (Coming Soon)")
-        preview_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #1ABC9C;")
-        preview_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(preview_label)
-
-        # Video player (simplified placeholder)
-        self.video_widget = QVideoWidget()
-        self.video_widget.setMinimumSize(640, 360)
-        self.video_widget.setStyleSheet("background-color: #2C2F33; border: 2px solid #40444B; border-radius: 5px;")
-        layout.addWidget(self.video_widget, 1)
-
-        # Player controls
-        player_controls = QHBoxLayout()
-
-        self.play_btn = QPushButton("▶️ Play")
-        self.play_btn.setEnabled(False)
-        player_controls.addWidget(self.play_btn)
-
-        self.pause_btn = QPushButton("⏸️ Pause")
-        self.pause_btn.setEnabled(False)
-        player_controls.addWidget(self.pause_btn)
-
-        player_controls.addStretch()
-
-        layout.addLayout(player_controls)
-
-        # Note about preview
-        note = QLabel("Note: Live preview requires additional setup.\nUse 'Export' to see final result.")
-        note.setStyleSheet("font-size: 11px; color: #72767D; font-style: italic;")
-        note.setAlignment(Qt.AlignCenter)
-        layout.addWidget(note)
-
-        widget.setLayout(layout)
-        return widget
-
-    def create_footer(self):
-        """Create footer with export controls"""
+    def create_export_footer(self):
+        """Export controls footer"""
         footer = QWidget()
         layout = QVBoxLayout()
+        layout.setSpacing(5)
+        layout.setContentsMargins(10, 5, 10, 5)
 
-        # Progress bar
+        # Progress
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         layout.addWidget(self.progress_bar)
 
-        # Status label
         self.status_label = QLabel("")
-        self.status_label.setStyleSheet("color: #1ABC9C; font-size: 12px;")
+        self.status_label.setStyleSheet("color: #1ABC9C; font-size: 11px;")
         self.status_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.status_label)
 
         # Export controls
         export_layout = QHBoxLayout()
 
-        # Quality selector
         export_layout.addWidget(QLabel("Quality:"))
         self.quality_combo = QComboBox()
         self.quality_combo.addItems(["Low", "Medium", "High", "Ultra"])
-        self.quality_combo.setCurrentIndex(2)  # High
+        self.quality_combo.setCurrentIndex(2)
         export_layout.addWidget(self.quality_combo)
 
         export_layout.addStretch()
 
         # Export button
-        self.export_btn = QPushButton("💾 Export Video")
-        self.export_btn.setEnabled(False)
-        self.export_btn.clicked.connect(self.export_video)
+        self.export_btn = QPushButton("💾 Export Video(s)")
         self.export_btn.setStyleSheet("""
             QPushButton {
                 background-color: #E74C3C;
-                font-size: 14px;
-                padding: 10px 30px;
+                font-size: 13px;
+                padding: 8px 20px;
             }
             QPushButton:hover {
                 background-color: #C0392B;
             }
-            QPushButton:disabled {
-                background-color: #40444B;
-            }
         """)
+        self.export_btn.clicked.connect(self.export_videos)
         export_layout.addWidget(self.export_btn)
 
         layout.addLayout(export_layout)
@@ -871,50 +595,7 @@ class VideoEditorPage(QWidget):
         footer.setLayout(layout)
         return footer
 
-    # ==================== SLOTS / ACTIONS ====================
-
-    def load_video(self):
-        """Load video file"""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select Video File",
-            "",
-            "Video Files (*.mp4 *.avi *.mov *.mkv *.webm *.flv *.wmv);;All Files (*.*)"
-        )
-
-        if file_path:
-            try:
-                # Get video info
-                info = get_video_info(file_path)
-
-                # Create editor
-                self.editor = VideoEditor(file_path)
-                self.current_video_path = file_path
-
-                # Update UI
-                self.current_file_label.setText(f"📄 {os.path.basename(file_path)}")
-
-                info_text = f"Duration: {format_duration(info.get('duration', 0))}\n"
-                info_text += f"Resolution: {info.get('width', 0)}x{info.get('height', 0)}\n"
-                info_text += f"FPS: {info.get('fps', 0)}\n"
-                info_text += f"Size: {format_filesize(info.get('filesize', 0))}"
-
-                self.info_label.setText(info_text)
-                self.video_info_widget.setVisible(True)
-
-                # Update trim end time to video duration
-                self.trim_end.setValue(info.get('duration', 10))
-
-                # Enable export
-                self.export_btn.setEnabled(True)
-
-                self.status_label.setText("✅ Video loaded successfully!")
-
-                logger.info(f"Video loaded: {file_path}")
-
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to load video:\n{str(e)}")
-                logger.error(f"Failed to load video: {e}")
+    # ==================== OPERATIONS ====================
 
     def add_operation(self, operation_name: str, params: dict):
         """Add operation to queue"""
@@ -923,264 +604,352 @@ class VideoEditorPage(QWidget):
             'params': params
         })
 
-        # Update list
         display_text = f"{operation_name}({', '.join(f'{k}={v}' for k, v in params.items())})"
         self.operations_list.addItem(display_text)
-
         self.status_label.setText(f"✅ Added: {operation_name}")
 
     def add_trim_operation(self):
-        """Add trim operation"""
         start = self.trim_start.value()
         end = self.trim_end.value()
-
         if start >= end:
-            QMessageBox.warning(self, "Invalid Range", "Start time must be less than end time!")
+            QMessageBox.warning(self, "Invalid", "Start must be < End")
             return
-
         self.add_operation('trim', {'start_time': start, 'end_time': end})
 
     def add_crop_operation(self):
-        """Add crop operation"""
-        preset_text = self.crop_preset.currentText()
-
         preset_map = {
-            "9:16 (TikTok, Reels, Shorts)": "9:16",
-            "16:9 (YouTube, Facebook)": "16:9",
+            "9:16 (TikTok)": "9:16",
+            "16:9 (YouTube)": "16:9",
             "1:1 (Square)": "1:1",
-            "4:5 (Instagram Portrait)": "4:5",
-            "4:3 (Traditional)": "4:3",
-            "21:9 (Cinematic)": "21:9"
+            "4:5 (Portrait)": "4:5"
         }
-
-        if preset_text in preset_map:
-            preset = preset_map[preset_text]
-            self.add_operation('crop', {'preset': preset})
-        else:
-            QMessageBox.information(self, "Custom Crop", "Custom crop coordinates not yet implemented in GUI.\nUse presets for now.")
-
-    def add_resize_operation(self):
-        """Add resize operation"""
-        width = self.resize_width.value()
-        height = self.resize_height.value()
-        self.add_operation('resize_video', {'width': width, 'height': height})
-
-    def add_speed_operation(self):
-        """Add speed change operation"""
-        factor = self.speed_factor.value()
-        self.add_operation('change_speed', {'factor': factor})
+        preset = preset_map[self.crop_preset.currentText()]
+        self.add_operation('crop', {'preset': preset})
 
     def choose_text_color(self):
-        """Choose text color"""
         color = QColorDialog.getColor()
         if color.isValid():
             self.text_color = color.name()
-            self.text_color_display.setStyleSheet(f"color: {color.name()}; font-size: 20px;")
 
     def add_text_operation(self):
-        """Add text overlay operation"""
         text = self.text_input.text()
         if not text:
-            QMessageBox.warning(self, "No Text", "Please enter text to add!")
+            QMessageBox.warning(self, "No Text", "Enter text first!")
             return
 
         position_map = {
-            "Center - Top": ('center', 'top'),
-            "Center - Center": ('center', 'center'),
-            "Center - Bottom": ('center', 'bottom'),
-            "Left - Top": ('left', 'top'),
-            "Left - Bottom": ('left', 'bottom'),
-            "Right - Top": ('right', 'top'),
-            "Right - Bottom": ('right', 'bottom')
+            "Center-Bottom": ('center', 'bottom'),
+            "Center-Top": ('center', 'top'),
+            "Left-Bottom": ('left', 'bottom'),
+            "Right-Bottom": ('right', 'bottom')
         }
-
-        position = position_map[self.text_position.currentText()]
-        duration = self.text_duration.value() if self.text_duration.value() > 0 else None
 
         self.add_operation('add_text', {
             'text': text,
-            'position': position,
+            'position': position_map[self.text_position.currentText()],
             'fontsize': self.text_size.value(),
-            'color': self.text_color,
-            'duration': duration
+            'color': self.text_color
         })
-
-    def select_watermark(self):
-        """Select watermark image"""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select Watermark Image",
-            "",
-            "Image Files (*.png *.jpg *.jpeg *.gif);;All Files (*.*)"
-        )
-
-        if file_path:
-            self.watermark_path = file_path
-            self.watermark_label.setText(f"📄 {os.path.basename(file_path)}")
-
-    def add_watermark_operation(self):
-        """Add watermark operation"""
-        if not self.watermark_path:
-            QMessageBox.warning(self, "No Watermark", "Please select a watermark image first!")
-            return
-
-        position_map = {
-            "Right - Bottom": ('right', 'bottom'),
-            "Right - Top": ('right', 'top'),
-            "Left - Bottom": ('left', 'bottom'),
-            "Left - Top": ('left', 'top'),
-            "Center - Center": ('center', 'center')
-        }
-
-        position = position_map[self.watermark_position.currentText()]
-        opacity = self.watermark_opacity.value() / 100.0
-
-        self.add_operation('add_watermark', {
-            'image_path': self.watermark_path,
-            'position': position,
-            'opacity': opacity
-        })
-
-    def select_audio(self):
-        """Select audio file"""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select Audio File",
-            "",
-            "Audio Files (*.mp3 *.wav *.aac *.ogg *.m4a);;All Files (*.*)"
-        )
-
-        if file_path:
-            self.audio_path = file_path
-            self.audio_label.setText(f"📄 {os.path.basename(file_path)}")
 
     def add_volume_operation(self):
-        """Add volume adjustment operation"""
         volume = self.volume_slider.value() / 100.0
         self.add_operation('adjust_volume', {'volume': volume})
 
-    def add_replace_audio_operation(self):
-        """Add replace audio operation"""
-        if not self.audio_path:
-            QMessageBox.warning(self, "No Audio", "Please select an audio file first!")
-            return
-
-        self.add_operation('replace_audio', {'audio_path': self.audio_path})
-
-    def add_filter_operation(self, filter_name: str, intensity):
-        """Add filter operation"""
-        if intensity is not None:
-            self.add_operation('apply_filter', {'filter_name': filter_name, 'intensity': intensity})
-        else:
-            self.add_operation('apply_filter', {'filter_name': filter_name})
-
-    def apply_platform_preset(self):
-        """Apply platform preset"""
-        preset_text = self.platform_combo.currentText()
-
-        preset_map = {
-            "TikTok Vertical": ('tiktok', 'vertical'),
-            "Instagram Reels": ('instagram', 'reels'),
-            "Instagram Story": ('instagram', 'story'),
-            "Instagram Post (Square)": ('instagram', 'square'),
-            "YouTube Shorts": ('youtube', 'shorts'),
-            "YouTube 1080p": ('youtube', '1080p'),
-            "YouTube 4K": ('youtube', '4k'),
-            "Facebook Feed": ('facebook', 'feed'),
-            "Twitter Landscape": ('twitter', 'landscape')
-        }
-
-        if preset_text in preset_map:
-            platform, format_type = preset_map[preset_text]
-
-            # Get preset details
-            from modules.video_editor.presets import PlatformPresets
-
-            preset_name = f"{platform.upper()}_{format_type.upper()}"
-            try:
-                preset = getattr(PlatformPresets, preset_name)
-
-                # Add crop to aspect ratio
-                self.add_operation('crop', {'preset': preset.aspect_ratio})
-
-                # Add resize
-                self.add_operation('resize_video', {'width': preset.width, 'height': preset.height})
-
-                self.status_label.setText(f"✅ Applied preset: {preset_text}")
-
-            except AttributeError:
-                QMessageBox.warning(self, "Preset Error", f"Preset not found: {preset_name}")
+    def add_filter(self, filter_name: str):
+        self.add_operation('apply_filter', {'filter_name': filter_name})
 
     def clear_operations(self):
-        """Clear all operations"""
         self.operations_queue.clear()
         self.operations_list.clear()
         self.status_label.setText("🗑️ Queue cleared")
 
     def remove_selected_operation(self):
-        """Remove selected operation from queue"""
         current_row = self.operations_list.currentRow()
         if current_row >= 0:
             self.operations_list.takeItem(current_row)
             del self.operations_queue[current_row]
-            self.status_label.setText("🗑️ Operation removed")
 
-    def export_video(self):
-        """Export edited video"""
-        if not self.editor:
-            QMessageBox.warning(self, "No Video", "Please load a video first!")
+    # ==================== VIDEO MANAGEMENT ====================
+
+    def add_videos(self):
+        """Add videos to selection"""
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Select Video(s)",
+            "",
+            "Video Files (*.mp4 *.avi *.mov *.mkv *.webm);;All Files (*.*)"
+        )
+
+        for file_path in files:
+            if file_path not in self.selected_videos:
+                self.selected_videos.append(file_path)
+                self.videos_list.addItem(os.path.basename(file_path))
+
+        self.status_label.setText(f"✅ {len(files)} video(s) added")
+
+    def remove_selected_video(self):
+        current_row = self.videos_list.currentRow()
+        if current_row >= 0:
+            self.videos_list.takeItem(current_row)
+            del self.selected_videos[current_row]
+
+    def clear_videos(self):
+        self.selected_videos.clear()
+        self.videos_list.clear()
+
+    # ==================== PRESET MANAGEMENT ====================
+
+    def create_new_preset(self):
+        """Create new preset"""
+        name, ok = QInputDialog.getText(self, "New Preset", "Preset Name:")
+        if ok and name:
+            self.current_preset = EditingPreset(name)
+            self.preset_combo.addItem(name)
+            self.preset_combo.setCurrentText(name)
+            self.status_label.setText(f"✅ Created preset: {name}")
+
+    def save_current_preset(self):
+        """Save current operations as preset"""
+        if not self.operations_queue:
+            QMessageBox.warning(self, "No Operations", "Add operations first!")
+            return
+
+        if not self.current_preset:
+            name, ok = QInputDialog.getText(self, "Save Preset", "Preset Name:")
+            if not ok or not name:
+                return
+            self.current_preset = EditingPreset(name)
+
+        # Clear and add operations
+        self.current_preset.clear_operations()
+        for op in self.operations_queue:
+            self.current_preset.add_operation(op['name'], op['params'])
+
+        # Save to file
+        filepath = self.preset_manager.save_preset(self.current_preset)
+
+        # Update combo
+        if self.current_preset.name not in [self.preset_combo.itemText(i)
+                                            for i in range(self.preset_combo.count())]:
+            self.preset_combo.addItem(self.current_preset.name)
+
+        self.preset_combo.setCurrentText(self.current_preset.name)
+
+        QMessageBox.information(self, "Success", f"Preset saved!\n{filepath}")
+
+    def load_preset(self):
+        """Load preset file"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load Preset",
+            self.preset_manager.presets_dir,
+            "Preset Files (*.preset.json);;All Files (*.*)"
+        )
+
+        if file_path:
+            preset = self.preset_manager.load_preset_from_file(file_path)
+            if preset:
+                self.current_preset = preset
+
+                # Load operations
+                self.clear_operations()
+                for op in preset.operations:
+                    self.operations_queue.append(op)
+                    self.operations_list.addItem(f"{op['operation']}(...)")
+
+                # Update combo
+                if preset.name not in [self.preset_combo.itemText(i)
+                                      for i in range(self.preset_combo.count())]:
+                    self.preset_combo.addItem(preset.name)
+                self.preset_combo.setCurrentText(preset.name)
+
+                self.status_label.setText(f"✅ Loaded preset: {preset.name}")
+
+    def on_preset_selected(self, preset_name: str):
+        """When preset is selected from combo"""
+        if preset_name == "-- No Preset --":
+            self.current_preset = None
+            return
+
+        preset = self.preset_manager.load_preset(preset_name)
+        if preset:
+            self.current_preset = preset
+
+            # Load operations
+            self.clear_operations()
+            for op in preset.operations:
+                self.operations_queue.append({
+                    'name': op['operation'],
+                    'params': op['params']
+                })
+                self.operations_list.addItem(f"{op['operation']}(...)")
+
+            self.status_label.setText(f"✅ Loaded: {preset_name}")
+
+    def delete_preset(self):
+        """Delete selected preset"""
+        if not self.current_preset:
+            QMessageBox.warning(self, "No Preset", "Select a preset first!")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Delete Preset",
+            f"Delete preset '{self.current_preset.name}'?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+
+        if reply == QMessageBox.Yes:
+            success = self.preset_manager.delete_preset(self.current_preset.name)
+            if success:
+                # Remove from combo
+                index = self.preset_combo.findText(self.current_preset.name)
+                if index >= 0:
+                    self.preset_combo.removeItem(index)
+
+                self.current_preset = None
+                self.preset_combo.setCurrentIndex(0)
+                QMessageBox.information(self, "Success", "Preset deleted!")
+
+    def show_templates(self):
+        """Show template presets"""
+        templates = PresetTemplates.get_all_templates()
+
+        items = [t.name for t in templates]
+        item, ok = QInputDialog.getItem(
+            self,
+            "Templates",
+            "Select a template:",
+            items,
+            0,
+            False
+        )
+
+        if ok and item:
+            # Find template
+            template = next((t for t in templates if t.name == item), None)
+            if template:
+                # Save template
+                self.preset_manager.save_preset(template)
+
+                # Load it
+                self.current_preset = template
+                self.clear_operations()
+                for op in template.operations:
+                    self.operations_queue.append({
+                        'name': op['operation'],
+                        'params': op['params']
+                    })
+                    self.operations_list.addItem(f"{op['operation']}(...)")
+
+                # Update combo
+                if template.name not in [self.preset_combo.itemText(i)
+                                        for i in range(self.preset_combo.count())]:
+                    self.preset_combo.addItem(template.name)
+                self.preset_combo.setCurrentText(template.name)
+
+                self.status_label.setText(f"✅ Loaded template: {item}")
+
+    # ==================== EXPORT ====================
+
+    def export_videos(self):
+        """Export selected videos"""
+        if not self.selected_videos:
+            QMessageBox.warning(self, "No Videos", "Add videos first!")
             return
 
         if not self.operations_queue:
-            QMessageBox.warning(self, "No Operations", "Please add at least one editing operation!")
+            QMessageBox.warning(self, "No Operations", "Add operations or load a preset!")
             return
 
-        # Get output path
-        output_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save Video As",
-            "",
-            "MP4 Video (*.mp4);;AVI Video (*.avi);;MOV Video (*.mov);;All Files (*.*)"
-        )
+        quality = self.quality_combo.currentText().lower()
 
-        if not output_path:
-            return
+        if len(self.selected_videos) == 1:
+            # Single video export
+            output_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save Video As",
+                "",
+                "MP4 Video (*.mp4);;All Files (*.*)"
+            )
 
-        # Ensure unique filename
-        output_path = get_unique_filename(output_path)
+            if output_path:
+                self.export_single_video(self.selected_videos[0], output_path, quality)
 
-        # Show progress
+        else:
+            # Batch export
+            output_dir = QFileDialog.getExistingDirectory(
+                self,
+                "Select Output Directory"
+            )
+
+            if output_dir:
+                self.export_batch_videos(output_dir, quality)
+
+    def export_single_video(self, video_path: str, output_path: str, quality: str):
+        """Export single video"""
         self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 0)  # Indeterminate
+        self.progress_bar.setRange(0, 0)
         self.export_btn.setEnabled(False)
-        self.status_label.setText("⏳ Processing video...")
 
-        # Start worker thread
-        self.worker = VideoProcessWorker(self.editor, self.operations_queue, output_path)
+        self.worker = VideoProcessWorker(self.operations_queue, video_path, output_path, quality)
         self.worker.progress.connect(self.on_progress)
         self.worker.finished.connect(self.on_export_finished)
         self.worker.error.connect(self.on_export_error)
         self.worker.start()
 
+    def export_batch_videos(self, output_dir: str, quality: str):
+        """Export multiple videos with current operations"""
+        # Create preset from current operations
+        if not self.current_preset:
+            self.current_preset = EditingPreset("Temp Batch Preset")
+            for op in self.operations_queue:
+                self.current_preset.add_operation(op['name'], op['params'])
+
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, len(self.selected_videos))
+        self.export_btn.setEnabled(False)
+
+        self.batch_worker = BatchProcessWorker(
+            self.current_preset,
+            self.selected_videos,
+            output_dir,
+            quality
+        )
+        self.batch_worker.progress.connect(self.on_batch_progress)
+        self.batch_worker.finished.connect(self.on_batch_finished)
+        self.batch_worker.error.connect(self.on_export_error)
+        self.batch_worker.start()
+
     def on_progress(self, message: str):
-        """Handle progress update"""
         self.status_label.setText(f"⏳ {message}")
 
+    def on_batch_progress(self, current: int, total: int, filename: str, message: str):
+        self.progress_bar.setValue(current)
+        self.status_label.setText(f"⏳ [{current}/{total}] {os.path.basename(filename)}: {message}")
+
     def on_export_finished(self, message: str):
-        """Handle export completion"""
         self.progress_bar.setVisible(False)
         self.export_btn.setEnabled(True)
         self.status_label.setText("✅ Export complete!")
-
         QMessageBox.information(self, "Success", message)
 
-        # Clear queue after successful export
-        self.clear_operations()
+    def on_batch_finished(self, results: list):
+        self.progress_bar.setVisible(False)
+        self.export_btn.setEnabled(True)
+
+        success_count = sum(1 for r in results if r['status'] == 'success')
+        failed_count = len(results) - success_count
+
+        message = f"Batch processing complete!\n\n"
+        message += f"✅ Success: {success_count}\n"
+        message += f"❌ Failed: {failed_count}"
+
+        self.status_label.setText(f"✅ Batch complete: {success_count}/{len(results)}")
+        QMessageBox.information(self, "Batch Complete", message)
 
     def on_export_error(self, error: str):
-        """Handle export error"""
         self.progress_bar.setVisible(False)
         self.export_btn.setEnabled(True)
         self.status_label.setText("❌ Export failed")
-
-        QMessageBox.critical(self, "Export Error", error)
+        QMessageBox.critical(self, "Error", error)

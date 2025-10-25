@@ -96,13 +96,14 @@ class VideoEditor:
     """
 
     def __init__(self, video_path: Optional[str] = None):
-        if not MOVIEPY_AVAILABLE:
-            raise ImportError("MoviePy is not installed. Install with: pip install moviepy")
-
-        self.original_path = video_path
+        # Initialize attributes first to avoid __del__ errors
         self.video = None
+        self.original_path = video_path
         self.project = VideoProject()
         self.temp_files = []  # Track temporary files for cleanup
+
+        if not MOVIEPY_AVAILABLE:
+            raise ImportError("MoviePy is not installed. Install with: pip install moviepy")
 
         if video_path:
             self.load_video(video_path)

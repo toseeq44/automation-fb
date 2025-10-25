@@ -37,7 +37,8 @@ class EditingPreset:
             'params': params
         })
         self.modified_at = datetime.now()
-        logger.info(f"Added operation to preset '{self.name}': {operation_name}")
+        # Silent operation - no logging for preset building
+        # logger.debug(f"Added operation to preset '{self.name}': {operation_name}")
 
     def remove_operation(self, index: int):
         """Remove operation by index"""
@@ -110,7 +111,8 @@ class PresetManager:
         self.current_preset = None
         self.presets_cache = {}  # Cache loaded presets
 
-        logger.info(f"PresetManager initialized: {self.presets_dir}")
+        # Silent initialization
+        # logger.debug(f"PresetManager initialized: {self.presets_dir}")
 
     def create_preset(self, name: str, description: str = "") -> EditingPreset:
         """

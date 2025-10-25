@@ -1,13 +1,14 @@
 """
 modules/video_downloader/core.py
-BULLETPROOF Multi-Method Video Downloader
+FAST Multi-Method Video Downloader (Based on Batch File Approach)
 
 FEATURES:
-- 5 download methods with fallback
+- Method 1: EXACT batch file approach (FASTEST - runs first!)
+- Method 2: Simple optimized yt-dlp
+- Method 3: Alternative format fallback
 - Smart folder processing (auto-detect creator folders)
 - Triple cookie system
 - Crash protection
-- Per-creator downloads to their own folders
 """
 
 import yt_dlp
@@ -15,10 +16,8 @@ import os
 from pathlib import Path
 from PyQt5.QtCore import QThread, pyqtSignal
 import re
-import tempfile
 import subprocess
 import typing
-import json
 
 
 # ============ HELPER FUNCTIONS ============
@@ -76,7 +75,7 @@ def _extract_creator_from_url(url: str) -> str:
 # ============ VIDEO DOWNLOADER THREAD ============
 
 class VideoDownloaderThread(QThread):
-    """BULLETPROOF Video Downloader with 5 methods + crash protection"""
+    """FAST Video Downloader - Batch File Approach (runs first!)"""
 
     progress = pyqtSignal(str)
     progress_percent = pyqtSignal(int)
@@ -98,11 +97,9 @@ class VideoDownloaderThread(QThread):
         self.options = options
         self.cancelled = False
         self.success_count = 0
-        self._temp_files = []
 
         # Auto-retry settings
         self.max_retries = options.get('max_retries', 3)
-        self.retry_count = {}
 
     def get_cookie_file(self, url):
         """
@@ -147,59 +144,82 @@ class VideoDownloaderThread(QThread):
 
         return None
 
-    def _method1_ytdlp_standard(self, url: str, output_path: str, cookie_file: str = None) -> bool:
-        """METHOD 1: Standard yt-dlp download"""
+    def _method1_batch_file_approach(self, url: str, output_path: str, cookie_file: str = None) -> bool:
+        """
+        METHOD 1: EXACT BATCH FILE APPROACH (FASTEST!)
+        This is your proven fast method - runs FIRST
+
+        Command from batch file:
+        yt-dlp --cookies cookies.txt --rm-cache-dir --throttled-rate 500K
+               -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best"
+               --restrict-filenames --no-warnings --retries 3
+        """
         try:
-            self.progress.emit("🔄 Method 1: yt-dlp standard download")
+            self.progress.emit("🚀 Method 1: BATCH FILE APPROACH (Fast!)")
 
-            ydl_opts = {
-                'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
-                'format': self.options.get('quality', 'best'),
-                'quiet': False,
-                'no_warnings': False,
-                'retries': 10,
-                'fragment_retries': 10,
-                'continuedl': True,
-                'progress_hooks': [self._progress_hook],
-            }
+            cmd = [
+                'yt-dlp',
+                '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
+                '--rm-cache-dir',  # Clear cache (from batch file)
+                '--throttled-rate', '500K',  # Prevent rate limiting (from batch file)
+                '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best',  # EXACT format from batch
+                '--restrict-filenames',  # Safe filenames (from batch file)
+                '--no-warnings',  # Clean output (from batch file)
+                '--retries', str(self.max_retries),  # From batch file
+                '--continue',  # Resume downloads
+                '--no-check-certificate',  # Bypass SSL issues
+            ]
 
+            # Add cookies if available
             if cookie_file:
-                ydl_opts['cookiefile'] = cookie_file
+                cmd.extend(['--cookies', cookie_file])
+                self.progress.emit(f"🍪 Using cookies: {Path(cookie_file).name}")
 
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
+            cmd.append(url)
 
-            self.progress.emit("✅ Method 1 SUCCESS")
-            return True
+            # Run command
+            self.progress.emit("⏳ Downloading with batch file method...")
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=1800,  # 30 minutes max
+                encoding='utf-8',
+                errors='replace'
+            )
 
+            if result.returncode == 0:
+                self.progress.emit("✅ Method 1 SUCCESS - Download complete!")
+                return True
+            else:
+                error_msg = result.stderr[:200] if result.stderr else "Unknown error"
+                self.progress.emit(f"⚠️ Method 1 failed: {error_msg}")
+                return False
+
+        except subprocess.TimeoutExpired:
+            self.progress.emit("⚠️ Method 1 timeout (30 min exceeded)")
+            return False
         except Exception as e:
-            self.progress.emit(f"⚠️ Method 1 failed: {str(e)[:100]}")
+            self.progress.emit(f"⚠️ Method 1 error: {str(e)[:100]}")
             return False
 
-    def _method2_ytdlp_with_options(self, url: str, output_path: str, cookie_file: str = None) -> bool:
-        """METHOD 2: yt-dlp with platform-specific options"""
+    def _method2_optimized_ytdlp(self, url: str, output_path: str, cookie_file: str = None) -> bool:
+        """METHOD 2: Optimized yt-dlp with library"""
         try:
-            self.progress.emit("🔄 Method 2: yt-dlp with optimizations")
+            self.progress.emit("🔄 Method 2: Optimized yt-dlp")
 
             ydl_opts = {
                 'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
-                'format': self.options.get('quality', 'best'),
-                'quiet': False,
-                'retries': 15,
-                'fragment_retries': 15,
+                'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best',
+                'quiet': True,
+                'no_warnings': True,
+                'retries': self.max_retries,
+                'fragment_retries': self.max_retries,
                 'continuedl': True,
                 'nocheckcertificate': True,
-                'prefer_insecure': True,
-                'geo_bypass': True,
+                'restrictfilenames': True,
                 'progress_hooks': [self._progress_hook],
             }
-
-            # Platform-specific optimizations
-            url_lower = url.lower()
-            if 'youtube.com' in url_lower:
-                ydl_opts['extractor_args'] = {'youtube': {'player_client': ['android', 'web']}}
-            elif 'instagram.com' in url_lower:
-                ydl_opts['extractor_args'] = {'instagram': {'api_version': '2'}}
 
             if cookie_file:
                 ydl_opts['cookiefile'] = cookie_file
@@ -214,144 +234,87 @@ class VideoDownloaderThread(QThread):
             self.progress.emit(f"⚠️ Method 2 failed: {str(e)[:100]}")
             return False
 
-    def _method3_ytdlp_subprocess(self, url: str, output_path: str, cookie_file: str = None) -> bool:
-        """METHOD 3: yt-dlp via subprocess (sometimes more reliable)"""
+    def _method3_alternative_formats(self, url: str, output_path: str, cookie_file: str = None) -> bool:
+        """METHOD 3: Alternative format combinations"""
         try:
-            self.progress.emit("🔄 Method 3: yt-dlp subprocess")
+            self.progress.emit("🔄 Method 3: Alternative formats")
 
-            cmd = [
-                'yt-dlp',
-                '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
-                '-f', self.options.get('quality', 'best'),
-                '--retries', '15',
-                '--fragment-retries', '15',
-                '--continue',
-                '--no-check-certificate'
+            # Try different format combinations
+            format_options = [
+                'best[ext=mp4]',
+                'bestvideo+bestaudio',
+                'best',
             ]
 
-            if cookie_file:
-                cmd.extend(['--cookies', cookie_file])
-
-            cmd.append(url)
-
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=1800,  # 30 minutes max
-                encoding='utf-8',
-                errors='replace'
-            )
-
-            if result.returncode == 0:
-                self.progress.emit("✅ Method 3 SUCCESS")
-                return True
-            else:
-                self.progress.emit(f"⚠️ Method 3 failed: {result.stderr[:100]}")
-                return False
-
-        except subprocess.TimeoutExpired:
-            self.progress.emit("⚠️ Method 3 timeout (30 minutes)")
-            return False
-        except Exception as e:
-            self.progress.emit(f"⚠️ Method 3 failed: {str(e)[:100]}")
-            return False
-
-    def _method4_ffmpeg_download(self, url: str, output_path: str, cookie_file: str = None) -> bool:
-        """METHOD 4: Direct stream download with ffmpeg"""
-        try:
-            self.progress.emit("🔄 Method 4: ffmpeg stream download")
-
-            # Get stream URL first
-            ydl_opts = {
-                'quiet': True,
-                'no_warnings': True,
-                'extract_flat': False,
-                'format': 'best',
-            }
-
-            if cookie_file:
-                ydl_opts['cookiefile'] = cookie_file
-
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                stream_url = info['url']
-                title = _safe_filename(info.get('title', 'video'))
-
-            # Download with ffmpeg
-            output_file = os.path.join(output_path, f"{title}.mp4")
-            cmd = [
-                'ffmpeg',
-                '-i', stream_url,
-                '-c', 'copy',
-                '-y',
-                output_file
-            ]
-
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                timeout=1800
-            )
-
-            if result.returncode == 0 and os.path.exists(output_file):
-                self.progress.emit("✅ Method 4 SUCCESS")
-                return True
-            else:
-                self.progress.emit("⚠️ Method 4 failed")
-                return False
-
-        except Exception as e:
-            self.progress.emit(f"⚠️ Method 4 failed: {str(e)[:100]}")
-            return False
-
-    def _method5_alternative_extractors(self, url: str, output_path: str) -> bool:
-        """METHOD 5: Try alternative extractors"""
-        try:
-            self.progress.emit("🔄 Method 5: Alternative extractors")
-
-            # Try different extractor options
-            extractors = [
-                {'prefer_free_formats': True},
-                {'extract_flat': False, 'force_generic_extractor': True},
-                {'youtube_include_dash_manifest': False},
-            ]
-
-            for i, extra_opts in enumerate(extractors, 1):
+            for fmt in format_options:
                 try:
                     ydl_opts = {
                         'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
-                        'format': 'best',
+                        'format': fmt,
                         'quiet': True,
                         'no_warnings': True,
-                        **extra_opts
+                        'retries': self.max_retries,
+                        'continuedl': True,
+                        'nocheckcertificate': True,
+                        'restrictfilenames': True,
                     }
+
+                    if cookie_file:
+                        ydl_opts['cookiefile'] = cookie_file
 
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                         ydl.download([url])
 
-                    self.progress.emit(f"✅ Method 5 variation {i} SUCCESS")
+                    self.progress.emit(f"✅ Method 3 SUCCESS (format: {fmt})")
                     return True
-                except:
+
+                except Exception:
                     continue
 
-            self.progress.emit("⚠️ Method 5 failed: All variations failed")
+            self.progress.emit("⚠️ Method 3 failed - all formats tried")
             return False
 
         except Exception as e:
-            self.progress.emit(f"⚠️ Method 5 failed: {str(e)[:100]}")
+            self.progress.emit(f"⚠️ Method 3 error: {str(e)[:100]}")
             return False
+
+    def _progress_hook(self, d):
+        """Progress hook for yt-dlp"""
+        try:
+            if self.cancelled:
+                raise Exception("Cancelled by user")
+
+            if d['status'] == 'downloading':
+                # Extract speed
+                speed = d.get('speed', 0)
+                if speed:
+                    speed_mb = speed / (1024 * 1024)
+                    self.download_speed.emit(f"{speed_mb:.2f} MB/s")
+
+                # Extract ETA
+                eta = d.get('eta', 0)
+                if eta:
+                    mins, secs = divmod(eta, 60)
+                    self.eta.emit(f"{int(mins)}m {int(secs)}s")
+
+                # Extract progress
+                downloaded = d.get('downloaded_bytes', 0)
+                total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
+                if total > 0:
+                    percent = int((downloaded / total) * 100)
+                    self.progress_percent.emit(percent)
+
+        except Exception:
+            pass
 
     def download_video_all_methods(self, url: str, output_path: str, cookie_file: str = None) -> bool:
         """
-        BULLETPROOF: Try all 5 methods sequentially until success
+        TRY ALL 3 METHODS - BATCH FILE METHOD RUNS FIRST!
         """
         methods = [
-            self._method1_ytdlp_standard,
-            self._method2_ytdlp_with_options,
-            self._method3_ytdlp_subprocess,
-            self._method4_ffmpeg_download,
-            self._method5_alternative_extractors,
+            self._method1_batch_file_approach,  # FASTEST - runs first!
+            self._method2_optimized_ytdlp,
+            self._method3_alternative_formats,
         ]
 
         for method in methods:
@@ -359,12 +322,7 @@ class VideoDownloaderThread(QThread):
                 return False
 
             try:
-                # Try method with cookie if available
-                if 'ffmpeg' in method.__name__ or 'alternative' in method.__name__:
-                    success = method(url, output_path)
-                else:
-                    success = method(url, output_path, cookie_file)
-
+                success = method(url, output_path, cookie_file)
                 if success:
                     return True
             except Exception as e:
@@ -373,26 +331,10 @@ class VideoDownloaderThread(QThread):
 
         return False
 
-    def _progress_hook(self, d):
-        """Progress callback for yt-dlp"""
-        try:
-            if d['status'] == 'downloading':
-                if 'total_bytes' in d:
-                    percent = int(d['downloaded_bytes'] / d['total_bytes'] * 100)
-                    self.progress_percent.emit(percent)
-
-                if 'speed' in d and d['speed']:
-                    speed_mb = d['speed'] / 1024 / 1024
-                    self.download_speed.emit(f"{speed_mb:.2f} MB/s")
-
-                if 'eta' in d and d['eta']:
-                    self.eta.emit(f"{d['eta']} seconds")
-
-            elif d['status'] == 'finished':
-                self.progress.emit("✅ Download complete, processing...")
-
-        except Exception:
-            pass
+    def cancel(self):
+        """Cancel the download"""
+        self.cancelled = True
+        self.progress.emit("⚠️ Cancellation requested...")
 
     def run(self):
         """Main download loop - crash protected"""
@@ -404,6 +346,7 @@ class VideoDownloaderThread(QThread):
             total = len(self.urls)
             self.progress.emit("="*60)
             self.progress.emit(f"🚀 STARTING DOWNLOAD: {total} videos")
+            self.progress.emit(f"📍 Using FAST batch file method first!")
             self.progress.emit("="*60)
 
             for i, url in enumerate(self.urls, 1):
@@ -411,58 +354,47 @@ class VideoDownloaderThread(QThread):
                     break
 
                 self.progress.emit(f"\n{'='*60}")
-                self.progress.emit(f"📥 [{i}/{total}] {url[:60]}...")
+                self.progress.emit(f"📥 [{i}/{total}] {url[:80]}...")
                 self.progress.emit(f"{'='*60}")
 
                 # Get cookie file
                 cookie_file = self.get_cookie_file(url)
-                if cookie_file:
-                    self.progress.emit(f"🍪 Using cookies: {Path(cookie_file).name}")
 
                 # Determine output path (creator-specific if possible)
                 creator = _extract_creator_from_url(url)
                 if creator != "downloads":
                     output_path = os.path.join(self.save_path, f"@{creator}")
+                    self.progress.emit(f"📁 Creator: @{creator}")
                 else:
                     output_path = self.save_path
 
                 os.makedirs(output_path, exist_ok=True)
 
-                # Try all methods
+                # Try all methods (BATCH FILE METHOD FIRST!)
                 success = self.download_video_all_methods(url, output_path, cookie_file)
 
                 if success:
                     self.success_count += 1
-                    self.progress.emit(f"✅ [{i}/{total}] Downloaded successfully")
+                    self.progress.emit(f"✅ [{i}/{total}] Downloaded successfully!")
                     self.video_complete.emit(url)
                 else:
-                    self.progress.emit(f"❌ [{i}/{total}] ALL 5 METHODS FAILED")
+                    self.progress.emit(f"❌ [{i}/{total}] ALL METHODS FAILED")
 
                 # Update overall progress
                 pct = int((i / total) * 100)
                 self.progress_percent.emit(pct)
 
-            if self.cancelled:
-                self.finished.emit(False, f"⚠️ Cancelled. Downloaded {self.success_count}/{total} videos.")
-                return
-
             # Final summary
             self.progress.emit("\n" + "="*60)
-            self.progress.emit("🎉 DOWNLOAD COMPLETE!")
-            self.progress.emit("="*60)
-            self.progress.emit(f"✅ Success: {self.success_count}/{total} videos")
-            self.progress.emit(f"❌ Failed: {total - self.success_count}/{total} videos")
-            self.progress.emit("="*60)
-
-            success_msg = f"✅ Downloaded {self.success_count}/{total} videos"
-            self.finished.emit(True, success_msg)
+            if self.cancelled:
+                self.finished.emit(False, f"⚠️ Cancelled - {self.success_count}/{total} downloaded")
+            elif self.success_count == total:
+                self.finished.emit(True, f"✅ ALL DONE! {self.success_count}/{total} videos downloaded")
+            elif self.success_count > 0:
+                self.finished.emit(True, f"⚠️ Partial success: {self.success_count}/{total} downloaded")
+            else:
+                self.finished.emit(False, f"❌ Failed - 0/{total} downloaded")
 
         except Exception as e:
-            error_msg = f"❌ Critical error: {str(e)[:200]}"
-            self.progress.emit(error_msg)
-            self.finished.emit(False, error_msg)
-
-    def cancel(self):
-        """Cancel download - safe"""
-        self.cancelled = True
-        self.progress.emit("⚠️ Cancelling...")
+            self.progress.emit(f"❌ CRITICAL ERROR: {str(e)[:200]}")
+            self.finished.emit(False, f"❌ Error: {str(e)[:100]}")

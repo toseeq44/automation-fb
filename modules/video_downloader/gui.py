@@ -2,10 +2,11 @@ import os
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTextEdit, QPushButton,
     QProgressBar, QComboBox, QCheckBox, QFileDialog, QMessageBox,
-    QListWidget, QGroupBox, QLineEdit, QMenu, QListWidgetItem 
+    QListWidget, QGroupBox, QLineEdit, QMenu, QListWidgetItem, QDialog,
+    QDialogButtonBox, QSpinBox
 )
-from PyQt5.QtGui import QClipboard
-from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QClipboard, QDragEnterEvent, QDropEvent
+from PyQt5.QtCore import Qt, QUrl
 from PyQt5 import QtWidgets
 from pathlib import Path
 from datetime import datetime
@@ -49,26 +50,25 @@ class VideoDownloaderPage(QWidget):
         self.url_input.setMinimumHeight(80)
         layout.addWidget(self.url_input)
 
-        # Enhanced link list with copy/cut/paste support
-        link_label = QLabel("📋 Links from Link Grabber (right-click to copy/cut):")
+        # Editable link text area with drag-and-drop support
+        link_label = QLabel("📋 Links (editable - cut/paste/drag-drop .txt files here):")
         link_label.setStyleSheet("color: #1ABC9C; font-size: 14px; font-weight: bold; margin-top: 10px;")
         layout.addWidget(link_label)
 
-        self.link_list = QListWidget()
-        self.link_list.setSelectionMode(QListWidget.ExtendedSelection)  # Allow multiple selection
-        self.link_list.setEditTriggers(QListWidget.DoubleClicked | QListWidget.EditKeyPressed)
-        self.link_list.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.link_list.itemClicked.connect(self.select_link)
-        self.link_list.customContextMenuRequested.connect(self.show_context_menu)
-        self.link_list.setStyleSheet("""
-            QListWidget {
+        self.link_text = QTextEdit()
+        self.link_text.setPlaceholderText("Links will appear here (editable - you can cut/paste/drag-drop)")
+        self.link_text.setAcceptDrops(True)
+        self.link_text.dragEnterEvent = self.link_text_drag_enter
+        self.link_text.dropEvent = self.link_text_drop
+        self.link_text.setStyleSheet("""
+            QTextEdit {
                 background-color: #2C2F33; color: #F5F6F5; border: 2px solid #4B5057;
                 border-radius: 8px; padding: 10px; font-size: 14px;
             }
-            QListWidget::item:selected { background-color: #1ABC9C; color: #F5F6F5; }
-            QListWidget::item:hover { background-color: #3A3D41; }
+            QTextEdit:focus { border: 2px solid #1ABC9C; }
         """)
-        layout.addWidget(self.link_list)
+        self.link_text.setMinimumHeight(120)
+        layout.addWidget(self.link_text)
 
         settings_group = QGroupBox("Download Settings")
         settings_group.setStyleSheet("""
@@ -89,17 +89,22 @@ class VideoDownloaderPage(QWidget):
                         padding: 10px; border-radius: 8px; font-size: 16px; }
             QLineEdit:focus { border: 2px solid #1ABC9C; }
         """)
-        browse_btn = QPushButton("Browse")
-        browse_btn.setStyleSheet("""
+        browse_btn = QPushButton("📁 Browse")
+        browse_folder_struct_btn = QPushButton("📂 Load Folder Structure")
+        button_style_browse = """
             QPushButton { background-color: #1ABC9C; color: #F5F6F5; border: none;
-                         padding: 10px 20px; border-radius: 8px; font-size: 16px; font-weight: bold; }
+                         padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: bold; }
             QPushButton:hover { background-color: #16A085; }
             QPushButton:pressed { background-color: #128C7E; }
-        """)
+        """
+        browse_btn.setStyleSheet(button_style_browse)
+        browse_folder_struct_btn.setStyleSheet(button_style_browse)
         browse_btn.clicked.connect(self.browse_folder)
+        browse_folder_struct_btn.clicked.connect(self.browse_and_load_folder_structure)
         path_layout.addWidget(path_label)
         path_layout.addWidget(self.path_input)
         path_layout.addWidget(browse_btn)
+        path_layout.addWidget(browse_folder_struct_btn)
         settings_layout.addLayout(path_layout)
 
         quality_layout = QHBoxLayout()
@@ -241,102 +246,129 @@ class VideoDownloaderPage(QWidget):
         self.log_message("💡 Supports YouTube, TikTok, Instagram, and more")
         self.update_links(self.links)
 
-    def show_context_menu(self, pos):
-        item = self.link_list.itemAt(pos)
-        if not item:
+    def link_text_drag_enter(self, event: QDragEnterEvent):
+        """Handle drag enter for file drops"""
+        if event.mimeData().hasUrls() or event.mimeData().hasText():
+            event.acceptProposedAction()
+
+    def link_text_drop(self, event: QDropEvent):
+        """Handle file drops - read .txt files and add links"""
+        try:
+            if event.mimeData().hasUrls():
+                urls = event.mimeData().urls()
+                links_added = 0
+
+                for url in urls:
+                    file_path = url.toLocalFile()
+                    if file_path.endswith('.txt'):
+                        try:
+                            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                                content = f.read()
+                                # Add to existing text
+                                current_text = self.link_text.toPlainText()
+                                if current_text:
+                                    self.link_text.setPlainText(current_text + '\n' + content)
+                                else:
+                                    self.link_text.setPlainText(content)
+                                links_added += 1
+                                self.log_message(f"📂 Loaded links from: {Path(file_path).name}")
+                        except Exception as e:
+                            self.log_message(f"⚠️ Could not read {Path(file_path).name}: {str(e)[:50]}")
+
+                if links_added > 0:
+                    self.log_message(f"✅ Loaded {links_added} file(s)")
+                    event.acceptProposedAction()
+            elif event.mimeData().hasText():
+                # Handle text drops
+                text = event.mimeData().text()
+                current_text = self.link_text.toPlainText()
+                if current_text:
+                    self.link_text.setPlainText(current_text + '\n' + text)
+                else:
+                    self.link_text.setPlainText(text)
+                event.acceptProposedAction()
+        except Exception as e:
+            self.log_message(f"⚠️ Drop error: {str(e)[:100]}")
+
+    def browse_and_load_folder_structure(self):
+        """Smart folder structure loading with creator detection"""
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            "Select Folder Structure (with @CreatorName subfolders)",
+            str(Path.home() / "Desktop")
+        )
+
+        if not folder:
             return
 
-        menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu { background-color: #2C2F33; color: #F5F6F5; border: 2px solid #4B5057; }
-            QMenu::item:selected { background-color: #1ABC9C; }
-        """)
+        try:
+            folder_path = Path(folder)
 
-        # Enhanced context menu
-        edit_act = menu.addAction("✏️ Edit")
-        copy_act = menu.addAction("📋 Copy")
-        copy_all_act = menu.addAction("📋 Copy All Selected")
-        cut_act = menu.addAction("✂️ Cut")
-        paste_act = menu.addAction("📌 Paste to URL Input")
-        menu.addSeparator()
-        delete_act = menu.addAction("🗑️ Delete")
-        delete_all_act = menu.addAction("🗑️ Delete All Selected")
-        menu.addSeparator()
-        select_all_act = menu.addAction("☑️ Select All")
+            # Find all .txt files in the structure
+            txt_files = []
+            creator_links = {}  # {creator: [links]}
 
-        action = menu.exec_(self.link_list.mapToGlobal(pos))
+            # Check for creator subfolders (@CreatorName/)
+            for item in folder_path.iterdir():
+                if item.is_dir() and item.name.startswith('@'):
+                    creator = item.name
+                    # Find .txt files in creator folder
+                    for txt_file in item.glob('*.txt'):
+                        txt_files.append((creator, txt_file))
+                elif item.is_file() and item.suffix == '.txt':
+                    # Direct .txt file in root
+                    txt_files.append(('root', item))
 
-        if action == edit_act:
-            self.link_list.editItem(item)
+            if not txt_files:
+                QMessageBox.warning(
+                    self,
+                    "No Files Found",
+                    f"No .txt files found in:\n{folder}\n\nExpected structure:\n@CreatorName/\n  creator_links.txt"
+                )
+                return
 
-        elif action == copy_act:
-            # Copy single item
-            clipboard = QtWidgets.QApplication.clipboard()
-            clipboard.setText(item.text())
-            self.log_message(f"📋 Copied: {item.text()[:50]}...")
+            # Read all files and organize by creator
+            total_links = 0
+            for creator, txt_file in txt_files:
+                try:
+                    with open(txt_file, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read()
+                        links = [line.strip() for line in content.splitlines() if line.strip() and line.strip().startswith('http')]
 
-        elif action == copy_all_act:
-            # Copy all selected items
-            selected_items = self.link_list.selectedItems()
-            if selected_items:
-                urls = '\n'.join([item.text() for item in selected_items])
-                clipboard = QtWidgets.QApplication.clipboard()
-                clipboard.setText(urls)
-                self.log_message(f"📋 Copied {len(selected_items)} links to clipboard")
-            else:
-                self.log_message("⚠️ No links selected")
+                        if links:
+                            if creator not in creator_links:
+                                creator_links[creator] = []
+                            creator_links[creator].extend(links)
+                            total_links += len(links)
+                            self.log_message(f"📂 {creator}: {len(links)} links from {txt_file.name}")
+                except Exception as e:
+                    self.log_message(f"⚠️ Error reading {txt_file.name}: {str(e)[:50]}")
 
-        elif action == cut_act:
-            # Cut single item
-            clipboard = QtWidgets.QApplication.clipboard()
-            clipboard.setText(item.text())
-            row = self.link_list.row(item)
-            self.link_list.takeItem(row)
-            if row < len(self.links):
-                del self.links[row]
-            self.log_message(f"✂️ Cut: {item.text()[:50]}...")
+            if total_links == 0:
+                QMessageBox.warning(self, "No Links Found", "No valid HTTP(S) links found in .txt files")
+                return
 
-        elif action == paste_act:
-            # Paste to URL input field
-            clipboard = QtWidgets.QApplication.clipboard()
-            clipboard_text = clipboard.text()
-            if clipboard_text:
-                current_text = self.url_input.toPlainText()
-                if current_text:
-                    self.url_input.setPlainText(current_text + '\n' + clipboard_text)
-                else:
-                    self.url_input.setPlainText(clipboard_text)
-                self.log_message("📌 Pasted to URL input field")
-            else:
-                self.log_message("⚠️ Clipboard is empty")
+            # Ask user: download all or custom amount?
+            dialog = DownloadOptionsDialog(self, creator_links, total_links)
+            if dialog.exec_() == QDialog.Accepted:
+                selected_links = dialog.get_selected_links()
 
-        elif action == delete_act:
-            # Delete single item
-            row = self.link_list.row(item)
-            self.link_list.takeItem(row)
-            if row < len(self.links):
-                del self.links[row]
-            self.log_message(f"🗑️ Deleted: {item.text()[:50]}...")
+                if selected_links:
+                    # Add to link text area
+                    self.link_text.setPlainText('\n'.join(selected_links))
+                    self.log_message(f"✅ Loaded {len(selected_links)} links from folder structure")
 
-        elif action == delete_all_act:
-            # Delete all selected items
-            selected_items = self.link_list.selectedItems()
-            if selected_items:
-                for item in selected_items:
-                    row = self.link_list.row(item)
-                    self.link_list.takeItem(row)
-                    if row < len(self.links):
-                        del self.links[row]
-                self.log_message(f"🗑️ Deleted {len(selected_items)} links")
-            else:
-                self.log_message("⚠️ No links selected")
+                    # Set save path to parent folder
+                    self.path_input.setText(str(folder_path))
+                    self.log_message(f"📁 Save location set to: {folder_path}")
 
-        elif action == select_all_act:
-            self.link_list.selectAll()
-            self.log_message(f"☑️ Selected all {self.link_list.count()} links")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to process folder:\n{str(e)[:200]}")
+            self.log_message(f"❌ Folder processing error: {str(e)[:100]}")
+
 
     def clear_all(self):
-        reply = QMessageBox.question(self, "Clear All?", "Clear URLs, logs, and links list?",
+        reply = QMessageBox.question(self, "Clear All?", "Clear URLs, logs, and links?",
                                     QMessageBox.Yes | QMessageBox.No)
         if reply == QMessageBox.Yes:
             self.url_input.clear()
@@ -344,15 +376,16 @@ class VideoDownloaderPage(QWidget):
             self.progress_bar.setValue(0)
             self.speed_label.setText("Speed: --")
             self.eta_label.setText("ETA: --")
-            self.link_list.clear()
+            self.link_text.clear()
             self.links = []
             self.log_message("🗑️ Cleared everything")
 
     def update_links(self, links):
-        """Update link list - make all items editable"""
+        """Update link text area with links from link grabber"""
         self.links = links if links else []
-        self.link_list.clear()
-        
+
+        # Convert links to text
+        link_texts = []
         for link in self.links:
             # Handle both string and dict
             if isinstance(link, str):
@@ -363,25 +396,11 @@ class VideoDownloaderPage(QWidget):
                 url = str(link)
 
             if url:
-                item = QListWidgetItem(url)
-                # Make item FULLY editable
-                item.setFlags(
-                    Qt.ItemIsSelectable | 
-                    Qt.ItemIsEditable | 
-                    Qt.ItemIsEnabled | 
-                    Qt.ItemIsDragEnabled
-                )
-                self.link_list.addItem(item)
-        
-        # Drag and drop enabled
-        self.link_list.setDragEnabled(True)
-        self.link_list.setDragDropMode(QListWidget.InternalMove)
-                
-        if self.links:
-            self.log_message(f"📋 Loaded {len(self.links)} link(s) from Link Grabber")
+                link_texts.append(url)
 
-    def select_link(self, item):
-        self.url_input.setPlainText(item.text())
+        if link_texts:
+            self.link_text.setPlainText('\n'.join(link_texts))
+            self.log_message(f"📋 Loaded {len(link_texts)} link(s) from Link Grabber")
 
     def browse_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Download Folder", self.path_input.text())
@@ -394,9 +413,17 @@ class VideoDownloaderPage(QWidget):
             QMessageBox.warning(self, "Busy", "Download in progress. Wait or cancel.")
             return
 
+        # Check URL input first
         raw_urls = self.url_input.toPlainText().strip()
+
+        # If URL input is empty, check link text area
         if not raw_urls:
-            if self.links:
+            link_text = self.link_text.toPlainText().strip()
+            if link_text:
+                raw_urls = link_text
+                self.url_input.setPlainText(raw_urls)
+            elif self.links:
+                # Fallback to self.links
                 raw_urls = '\n'.join([link.get('url', str(link)) if isinstance(link, dict) else str(link) for link in self.links])
                 self.url_input.setPlainText(raw_urls)
             else:
@@ -536,3 +563,133 @@ class VideoDownloaderPage(QWidget):
                         subprocess.Popen(['xdg-open', folder])
         else:
             QMessageBox.critical(self, "❌ Download Failed", message)
+
+
+class DownloadOptionsDialog(QDialog):
+    """Dialog to ask user: download all links or custom amount per creator"""
+
+    def __init__(self, parent, creator_links, total_links):
+        super().__init__(parent)
+        self.creator_links = creator_links  # {creator: [links]}
+        self.total_links = total_links
+        self.selected_links = []
+        self.init_ui()
+
+    def init_ui(self):
+        self.setWindowTitle("Download Options")
+        self.setMinimumWidth(500)
+
+        layout = QVBoxLayout()
+        layout.setSpacing(15)
+
+        # Dark theme
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #23272A;
+                color: #F5F6F5;
+            }
+            QLabel {
+                color: #F5F6F5;
+                font-size: 14px;
+            }
+            QPushButton {
+                background-color: #1ABC9C;
+                color: #F5F6F5;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 8px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #16A085;
+            }
+            QSpinBox {
+                background-color: #2C2F33;
+                color: #F5F6F5;
+                border: 2px solid #4B5057;
+                padding: 8px;
+                border-radius: 8px;
+                font-size: 14px;
+            }
+            QRadioButton {
+                color: #F5F6F5;
+                font-size: 14px;
+                font-weight: bold;
+            }
+        """)
+
+        # Title
+        title = QLabel("📂 Folder Structure Detected")
+        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #1ABC9C;")
+        layout.addWidget(title)
+
+        # Summary
+        summary_text = f"Found {len(self.creator_links)} creator(s) with {self.total_links} total links:\n\n"
+        for creator, links in self.creator_links.items():
+            summary_text += f"  • {creator}: {len(links)} links\n"
+
+        summary = QLabel(summary_text)
+        summary.setStyleSheet("color: #F5F6F5; font-size: 14px;")
+        layout.addWidget(summary)
+
+        # Options
+        from PyQt5.QtWidgets import QRadioButton, QButtonGroup
+
+        options_label = QLabel("How many links to download per creator?")
+        options_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #1ABC9C; margin-top: 10px;")
+        layout.addWidget(options_label)
+
+        self.button_group = QButtonGroup(self)
+
+        self.radio_all = QRadioButton("📥 Download ALL links from each creator")
+        self.radio_all.setChecked(True)
+        self.button_group.addButton(self.radio_all)
+        layout.addWidget(self.radio_all)
+
+        custom_layout = QHBoxLayout()
+        self.radio_custom = QRadioButton("🔢 Custom amount per creator:")
+        self.button_group.addButton(self.radio_custom)
+        custom_layout.addWidget(self.radio_custom)
+
+        self.custom_spinbox = QSpinBox()
+        self.custom_spinbox.setMinimum(1)
+        self.custom_spinbox.setMaximum(10000)
+        self.custom_spinbox.setValue(10)
+        self.custom_spinbox.setSuffix(" links")
+        custom_layout.addWidget(self.custom_spinbox)
+        custom_layout.addStretch()
+        layout.addLayout(custom_layout)
+
+        # Buttons
+        button_layout = QHBoxLayout()
+        ok_btn = QPushButton("✅ Load Links")
+        cancel_btn = QPushButton("❌ Cancel")
+        ok_btn.clicked.connect(self.accept_and_process)
+        cancel_btn.clicked.connect(self.reject)
+        button_layout.addWidget(ok_btn)
+        button_layout.addWidget(cancel_btn)
+        button_layout.addStretch()
+        layout.addLayout(button_layout)
+
+        self.setLayout(layout)
+
+    def accept_and_process(self):
+        """Process links based on user selection"""
+        self.selected_links = []
+
+        if self.radio_all.isChecked():
+            # All links
+            for creator, links in self.creator_links.items():
+                self.selected_links.extend(links)
+        else:
+            # Custom amount per creator
+            max_per_creator = self.custom_spinbox.value()
+            for creator, links in self.creator_links.items():
+                self.selected_links.extend(links[:max_per_creator])
+
+        self.accept()
+
+    def get_selected_links(self):
+        """Return selected links"""
+        return self.selected_links

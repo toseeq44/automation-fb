@@ -50,13 +50,32 @@ class VideoDownloaderPage(QWidget):
         self.url_input.setMinimumHeight(80)
         layout.addWidget(self.url_input)
 
-        # Editable link text area with drag-and-drop support
+        # Editable link text area with drag-and-drop support + Load buttons
         link_label = QLabel("📋 Links (editable - cut/paste/drag-drop .txt files here):")
         link_label.setStyleSheet("color: #1ABC9C; font-size: 14px; font-weight: bold; margin-top: 10px;")
         layout.addWidget(link_label)
 
+        # Buttons for loading links
+        load_buttons_layout = QHBoxLayout()
+        load_txt_btn = QPushButton("📄 Load .txt File")
+        load_folder_btn = QPushButton("📂 Load Folder Structure")
+        load_btn_style = """
+            QPushButton { background-color: #1ABC9C; color: #F5F6F5; border: none;
+                         padding: 8px 15px; border-radius: 6px; font-size: 13px; font-weight: bold; }
+            QPushButton:hover { background-color: #16A085; }
+            QPushButton:pressed { background-color: #128C7E; }
+        """
+        load_txt_btn.setStyleSheet(load_btn_style)
+        load_folder_btn.setStyleSheet(load_btn_style)
+        load_txt_btn.clicked.connect(self.load_txt_file)
+        load_folder_btn.clicked.connect(self.browse_and_load_folder_structure)
+        load_buttons_layout.addWidget(load_txt_btn)
+        load_buttons_layout.addWidget(load_folder_btn)
+        load_buttons_layout.addStretch()
+        layout.addLayout(load_buttons_layout)
+
         self.link_text = QTextEdit()
-        self.link_text.setPlaceholderText("Links will appear here (editable - you can cut/paste/drag-drop)")
+        self.link_text.setPlaceholderText("Links will appear here (editable - you can cut/paste/drag-drop)\n\nQuick Actions:\n• Click '📄 Load .txt File' to select a single .txt file\n• Click '📂 Load Folder Structure' to load creator folders")
         self.link_text.setAcceptDrops(True)
         self.link_text.dragEnterEvent = self.link_text_drag_enter
         self.link_text.dropEvent = self.link_text_drop
@@ -90,7 +109,6 @@ class VideoDownloaderPage(QWidget):
             QLineEdit:focus { border: 2px solid #1ABC9C; }
         """)
         browse_btn = QPushButton("📁 Browse")
-        browse_folder_struct_btn = QPushButton("📂 Load Folder Structure")
         button_style_browse = """
             QPushButton { background-color: #1ABC9C; color: #F5F6F5; border: none;
                          padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: bold; }
@@ -98,13 +116,10 @@ class VideoDownloaderPage(QWidget):
             QPushButton:pressed { background-color: #128C7E; }
         """
         browse_btn.setStyleSheet(button_style_browse)
-        browse_folder_struct_btn.setStyleSheet(button_style_browse)
         browse_btn.clicked.connect(self.browse_folder)
-        browse_folder_struct_btn.clicked.connect(self.browse_and_load_folder_structure)
         path_layout.addWidget(path_label)
         path_layout.addWidget(self.path_input)
         path_layout.addWidget(browse_btn)
-        path_layout.addWidget(browse_folder_struct_btn)
         settings_layout.addLayout(path_layout)
 
         quality_layout = QHBoxLayout()
@@ -245,6 +260,56 @@ class VideoDownloaderPage(QWidget):
         self.log_message("✓ Video Downloader ready")
         self.log_message("💡 Supports YouTube, TikTok, Instagram, and more")
         self.update_links(self.links)
+
+    def load_txt_file(self):
+        """Load links from a single .txt file"""
+        try:
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select .txt File with Links",
+                str(Path.home() / "Desktop"),
+                "Text Files (*.txt);;All Files (*.*)"
+            )
+
+            if not file_path:
+                return
+
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                    links = [line.strip() for line in content.splitlines() if line.strip() and line.strip().startswith('http')]
+
+                    if links:
+                        # Replace or append?
+                        current_text = self.link_text.toPlainText().strip()
+                        if current_text:
+                            reply = QMessageBox.question(
+                                self,
+                                "Add or Replace?",
+                                f"Found {len(links)} links.\n\nAdd to existing links or replace all?",
+                                QMessageBox.Yes | QMessageBox.No,
+                                QMessageBox.Yes
+                            )
+                            if reply == QMessageBox.Yes:
+                                # Append
+                                self.link_text.setPlainText(current_text + '\n' + '\n'.join(links))
+                            else:
+                                # Replace
+                                self.link_text.setPlainText('\n'.join(links))
+                        else:
+                            # No existing text, just set
+                            self.link_text.setPlainText('\n'.join(links))
+
+                        self.log_message(f"✅ Loaded {len(links)} links from: {Path(file_path).name}")
+                    else:
+                        QMessageBox.warning(self, "No Links Found", f"No valid HTTP(S) links found in:\n{Path(file_path).name}")
+
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Could not read file:\n{str(e)[:200]}")
+                self.log_message(f"⚠️ Error reading file: {str(e)[:100]}")
+
+        except Exception as e:
+            self.log_message(f"⚠️ Error: {str(e)[:100]}")
 
     def link_text_drag_enter(self, event: QDragEnterEvent):
         """Handle drag enter for file drops"""

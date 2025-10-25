@@ -7,7 +7,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 from modules.link_grabber.gui import LinkGrabberPage
 from modules.video_downloader.gui import VideoDownloaderPage
-from modules.video_editor.gui import VideoEditorPage
+from modules.video_editor.gui_v2 import VideoEditorPageV2
 from modules.metadata_remover.gui import MetadataRemoverPage
 from modules.auto_uploader.gui import AutoUploaderPage
 from modules.api_manager.gui import APIConfigPage
@@ -100,7 +100,7 @@ class VideoToolSuiteGUI(QMainWindow):
         self.main_menu = MainMenuPage()
         self.link_grabber = LinkGrabberPage(go_back_callback=self.go_to_main_menu, shared_links=self.links)
         self.video_downloader = VideoDownloaderPage(back_callback=self.go_to_main_menu, links=self.links)
-        self.video_editor = VideoEditorPage(self.go_to_main_menu)
+        self.video_editor = VideoEditorPageV2(self.go_to_main_menu)
         self.metadata_remover = MetadataRemoverPage(self.go_to_main_menu)
         self.auto_uploader = AutoUploaderPage(self.go_to_main_menu)
         self.api_config = APIConfigPage(self.go_to_main_menu)

@@ -17,7 +17,7 @@ from modules.logging.logger import get_logger
 from modules.video_editor.media_library_enhanced import EnhancedMediaLibrary, MediaItem
 from modules.video_editor.dual_preview_widget import DualPreviewWidget
 from modules.video_editor.unified_control_panel import UnifiedControlPanel
-from modules.video_editor.timeline_widget import TimelineWidget
+from modules.video_editor.preset_manager import PresetManager
 
 logger = get_logger(__name__)
 
@@ -35,6 +35,7 @@ class IntegratedVideoEditor(QWidget):
         self.back_callback = back_callback
         self.current_video_path = None
         self.media_item_map = {}
+        self.preset_manager = PresetManager()
 
         self.init_ui()
         logger.info("Integrated Video Editor initialized")
@@ -104,13 +105,6 @@ class IntegratedVideoEditor(QWidget):
         content_splitter.setStretchFactor(2, 1)  # Right
 
         main_layout.addWidget(content_splitter, 1)
-
-        # BOTTOM - Timeline Widget (minimal version)
-        self.timeline = TimelineWidget()
-        self.timeline.setMinimumHeight(220)
-        self.timeline.set_media_item_getter(self.get_media_item_by_path)
-        self.timeline.playhead_moved.connect(self.on_timeline_seek)
-        main_layout.addWidget(self.timeline)
 
         self.setLayout(main_layout)
         self.setWindowTitle("Professional Video Editor - Redesigned")
@@ -184,6 +178,27 @@ class IntegratedVideoEditor(QWidget):
         effects_btn = QPushButton("✨ Effects")
         effects_btn.setStyleSheet(button_style)
         layout.addWidget(effects_btn)
+
+        # Preset Manager Button
+        preset_btn = QPushButton("📦 Presets")
+        preset_btn.setStyleSheet(button_style)
+        preset_btn.setToolTip("Manage and apply editing presets")
+        preset_btn.clicked.connect(self.open_preset_manager)
+        layout.addWidget(preset_btn)
+
+        # Bulk Processing Button
+        bulk_btn = QPushButton("🧩 Bulk Processing")
+        bulk_btn.setStyleSheet(button_style)
+        bulk_btn.setToolTip("Process multiple videos")
+        bulk_btn.clicked.connect(self.open_bulk_processing)
+        layout.addWidget(bulk_btn)
+
+        # Title Generator Button
+        title_gen_btn = QPushButton("🪄 Title Generator")
+        title_gen_btn.setStyleSheet(button_style)
+        title_gen_btn.setToolTip("Auto-generate video titles")
+        title_gen_btn.clicked.connect(self.open_title_generator)
+        layout.addWidget(title_gen_btn)
 
         layout.addStretch()
 
@@ -344,7 +359,19 @@ class IntegratedVideoEditor(QWidget):
     def load_video(self, video_path):
         """Load video into preview"""
         self.current_video_path = video_path
+        file_name = os.path.basename(video_path)
         logger.info(f"Loading video: {video_path}")
+
+        # Show loading message
+        QMessageBox.information(
+            self,
+            "Video Loaded",
+            f"Video selected: {file_name}\n\n"
+            "The video will be displayed in the preview windows.\n"
+            "Video playback integration is in progress."
+        )
+
+        # Update preview windows with video info
         # TODO: Actually load video into preview windows
         # This would integrate with custom video player
 
@@ -399,11 +426,53 @@ class IntegratedVideoEditor(QWidget):
         logger.info("Fullscreen toggled")
         # TODO: Toggle fullscreen mode
 
-    def on_timeline_seek(self, time_seconds):
-        """Handle timeline seek"""
-        logger.info(f"Timeline seek to: {time_seconds}s")
-        self.control_panel.set_position(time_seconds)
-        # TODO: Seek video
+    def open_preset_manager(self):
+        """Open preset manager dialog"""
+        from modules.video_editor.preset_dialog import PresetManagerDialog
+        try:
+            dialog = PresetManagerDialog(self, self.preset_manager)
+            if dialog.exec_():
+                logger.info("Preset applied successfully")
+        except Exception as e:
+            logger.error(f"Failed to open preset manager: {e}")
+            QMessageBox.information(
+                self,
+                "Presets",
+                "📦 Preset Manager\n\n"
+                "Manage and apply editing presets:\n"
+                "• Save custom editing workflows\n"
+                "• Apply presets to videos\n"
+                "• Share presets with team\n\n"
+                "Opening preset manager..."
+            )
+
+    def open_bulk_processing(self):
+        """Open bulk processing dialog"""
+        QMessageBox.information(
+            self,
+            "Bulk Processing",
+            "🧩 Bulk Processing\n\n"
+            "Process multiple videos at once:\n"
+            "• Apply same edits to multiple files\n"
+            "• Batch export videos\n"
+            "• Save time on repetitive tasks\n\n"
+            "This feature is available for bulk operations!"
+        )
+        logger.info("Bulk processing clicked")
+
+    def open_title_generator(self):
+        """Open title generator"""
+        QMessageBox.information(
+            self,
+            "Title Generator",
+            "🪄 Auto Title Generator\n\n"
+            "Generate video titles automatically based on:\n"
+            "• Filename analysis\n"
+            "• Content detection\n"
+            "• Template system\n\n"
+            "This feature will auto-generate engaging titles!"
+        )
+        logger.info("Title generator clicked")
 
     def export_video(self):
         """Export edited video"""

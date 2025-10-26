@@ -657,7 +657,9 @@ class EnhancedMediaLibrary(QWidget):
 
         # Remove all widgets from grid
         for i in reversed(range(self.cards_layout.count())):
-            self.cards_layout.itemAt(i).widget().setParent(None)
+            item = self.cards_layout.itemAt(i)
+            if item and item.widget():
+                item.widget().setParent(None)
 
         # Create new cards
         row = 0
@@ -685,7 +687,16 @@ class EnhancedMediaLibrary(QWidget):
         else:
             self.filter_count_label.setText("")
 
-        self.media_info_label.setText(f"{total} items imported")
+        if total > 0:
+            self.media_info_label.setText(f"{total} items imported")
+        else:
+            self.media_info_label.setText("No media imported")
+
+        # Force layout update
+        self.cards_container.updateGeometry()
+        self.cards_layout.update()
+
+        logger.info(f"Refreshed media display: {filtered} items shown")
 
     def apply_filters(self):
         """Apply all active filters"""

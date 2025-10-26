@@ -29,6 +29,7 @@ from PyQt5.QtMultimediaWidgets import QVideoWidget
 from modules.logging.logger import get_logger
 from modules.video_editor.preset_manager import PresetManager, EditingPreset
 from modules.video_editor.timeline_widget import TimelineWidget
+from modules.video_editor.custom_video_player import CustomVideoPlayer
 
 logger = get_logger(__name__)
 
@@ -162,6 +163,8 @@ class CapCutEditor(QWidget):
         self.timeline_widget = TimelineWidget()
         self.timeline_widget.setMinimumHeight(250)
         self.timeline_widget.set_media_item_getter(self.get_media_item_by_path)
+        # Connect timeline playhead to video seeking
+        self.timeline_widget.playhead_moved.connect(self.seek_video_to_position)
         main_layout.addWidget(self.timeline_widget)
 
         # 4. FOOTER STATUS BAR
@@ -718,23 +721,17 @@ class CapCutEditor(QWidget):
         preview_layout = QVBoxLayout()
         preview_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Create a container for video widget and placeholder
+        # Create a container for video player and placeholder
         self.preview_stack = QFrame()
         stack_layout = QVBoxLayout()
         stack_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Video Widget for playback
-        self.video_widget = QVideoWidget()
-        self.video_widget.setStyleSheet("background-color: #000000;")
-        self.video_widget.setMinimumSize(800, 450)
-
-        # Media Player
-        self.media_player = QMediaPlayer(None, QMediaPlayer.VideoSurface)
-        self.media_player.setVideoOutput(self.video_widget)
-        self.media_player.positionChanged.connect(self.update_playback_position)
-        self.media_player.durationChanged.connect(self.update_playback_duration)
-        self.media_player.stateChanged.connect(self.update_playback_state)
-        self.media_player.error.connect(self.handle_media_error)
+        # Custom Video Player (uses MoviePy - no DirectShow dependency)
+        self.custom_player = CustomVideoPlayer()
+        self.custom_player.position_changed.connect(self.update_playback_position)
+        self.custom_player.duration_changed.connect(self.update_playback_duration)
+        self.custom_player.state_changed.connect(self.update_playback_state)
+        self.custom_player.error_occurred.connect(self.handle_playback_error)
 
         # Placeholder label (shown when no video)
         self.preview_placeholder = QLabel()
@@ -751,12 +748,12 @@ class CapCutEditor(QWidget):
         self.preview_placeholder.setText("🎬\n\nNo video loaded\n\nImport media and double-click to preview")
 
         # Add both to stack (only one will be visible at a time)
-        stack_layout.addWidget(self.video_widget)
+        stack_layout.addWidget(self.custom_player)
         stack_layout.addWidget(self.preview_placeholder)
         self.preview_stack.setLayout(stack_layout)
 
         # Show placeholder by default
-        self.video_widget.hide()
+        self.custom_player.hide()
         self.preview_placeholder.show()
 
         preview_layout.addWidget(self.preview_stack)
@@ -1394,85 +1391,69 @@ class CapCutEditor(QWidget):
             self.status_label.setText(f"Image preview - Coming soon: {media_item.file_name}")
 
     def load_video_preview(self, video_path: str):
-        """Load a video file into the media player"""
+        """Load a video file into the custom player"""
         try:
             logger.info(f"Loading video for preview: {video_path}")
 
-            # Show video widget, hide placeholder
+            # Show custom player, hide placeholder
             self.preview_placeholder.hide()
-            self.video_widget.show()
+            self.custom_player.show()
 
-            # Load video
-            media_content = QMediaContent(QUrl.fromLocalFile(video_path))
-            self.media_player.setMedia(media_content)
+            # Load video using custom player
+            success = self.custom_player.load_video(video_path)
 
-            logger.info(f"Media content created, starting playback...")
+            if success:
+                logger.info(f"Video loaded successfully, starting playback...")
+                # Auto-play
+                self.custom_player.play()
+            else:
+                logger.error("Failed to load video")
+                self.custom_player.hide()
+                self.preview_placeholder.show()
 
-            # Start playback
-            self.media_player.play()
-
-            logger.info(f"Video loaded successfully: {video_path}")
         except Exception as e:
             logger.error(f"Error loading video: {e}")
             QMessageBox.critical(self, "Error", f"Failed to load video:\n{str(e)}")
             # Show placeholder again on error
-            self.video_widget.hide()
+            self.custom_player.hide()
             self.preview_placeholder.show()
 
-    def handle_media_error(self, error):
-        """Handle media player errors"""
-        error_messages = {
-            QMediaPlayer.NoError: "No error",
-            QMediaPlayer.ResourceError: "Resource error - cannot load media file",
-            QMediaPlayer.FormatError: "Format error - unsupported video format",
-            QMediaPlayer.NetworkError: "Network error",
-            QMediaPlayer.AccessDeniedError: "Access denied - cannot read file",
-            QMediaPlayer.ServiceMissingError: "Media service missing"
-        }
-
-        error_msg = error_messages.get(error, f"Unknown error: {error}")
-        logger.error(f"Media player error: {error_msg}")
-
-        if error != QMediaPlayer.NoError:
-            QMessageBox.warning(
-                self,
-                "Playback Error",
-                f"Cannot play video:\n{error_msg}\n\nError code: {error}"
-            )
-            # Show placeholder on error
-            self.video_widget.hide()
-            self.preview_placeholder.show()
+    def handle_playback_error(self, error_msg):
+        """Handle custom player errors"""
+        logger.error(f"Playback error: {error_msg}")
+        QMessageBox.warning(
+            self,
+            "Playback Error",
+            f"Cannot play video:\n{error_msg}"
+        )
+        # Show placeholder on error
+        self.custom_player.hide()
+        self.preview_placeholder.show()
 
     def load_audio_preview(self, audio_path: str):
-        """Load an audio file into the media player"""
-        try:
-            # Keep placeholder visible (no video to show)
-            self.preview_placeholder.show()
-            self.video_widget.hide()
-
-            # Load audio
-            media_content = QMediaContent(QUrl.fromLocalFile(audio_path))
-            self.media_player.setMedia(media_content)
-
-            # Auto-play
-            self.media_player.play()
-
-            logger.info(f"Loaded audio: {audio_path}")
-        except Exception as e:
-            logger.error(f"Error loading audio: {e}")
-            QMessageBox.critical(self, "Error", f"Failed to load audio:\n{str(e)}")
+        """Load an audio file - placeholder for now"""
+        self.status_label.setText("Audio preview - coming soon")
+        logger.info(f"Audio preview requested: {audio_path}")
 
     def update_playback_position(self, position: int):
-        """Update scrubber position when media position changes"""
-        if self.media_player.duration() > 0:
+        """Update scrubber position when playback position changes"""
+        # position is in milliseconds from custom player
+        # Get duration
+        duration = self.custom_player.duration * 1000 if self.custom_player.duration > 0 else 1
+
+        if duration > 0:
             # Update scrubber
-            self.scrubber_slider.setValue(int(position * 100 / self.media_player.duration()))
+            self.scrubber_slider.setValue(int(position * 100 / duration))
 
             # Update time label
             secs = position // 1000
             mins, secs = divmod(secs, 60)
             hrs, mins = divmod(mins, 60)
             self.current_time_label.setText(f"{hrs:02d}:{mins:02d}:{secs:02d}")
+
+            # Update timeline playhead
+            time_seconds = position / 1000.0
+            self.timeline_widget.update_playhead(time_seconds)
 
     def update_playback_duration(self, duration: int):
         """Update total duration label"""
@@ -1485,22 +1466,34 @@ class CapCutEditor(QWidget):
 
     def update_playback_state(self, state):
         """Update UI when playback state changes"""
-        if state == QMediaPlayer.PlayingState:
+        if state == "playing":
             self.play_btn.setText("⏸")
             self.status_label.setText("Playing...")
-        elif state == QMediaPlayer.PausedState:
+        elif state == "paused":
             self.play_btn.setText("▶")
             self.status_label.setText("Paused")
-        elif state == QMediaPlayer.StoppedState:
+        elif state == "stopped":
             self.play_btn.setText("▶")
             self.status_label.setText("Stopped")
 
     def toggle_playback(self):
         """Toggle play/pause"""
-        if self.media_player.state() == QMediaPlayer.PlayingState:
-            self.media_player.pause()
+        current_state = self.custom_player.get_state()
+
+        if current_state == "playing":
+            self.custom_player.pause()
+        elif current_state in ["paused", "stopped"]:
+            self.custom_player.play()
         else:
-            self.media_player.play()
+            logger.warning(f"Unknown playback state: {current_state}")
+
+    def seek_video_to_position(self, time_seconds: float):
+        """Seek video to timeline position"""
+        if self.custom_player and self.custom_player.video_clip:
+            # Convert seconds to milliseconds
+            position_ms = int(time_seconds * 1000)
+            self.custom_player.seek(position_ms)
+            logger.info(f"Video seeked to {time_seconds:.2f}s via timeline click")
 
     def apply_quick_preset(self, preset_id):
         """Apply quick preset - Placeholder"""

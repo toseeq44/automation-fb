@@ -7,7 +7,7 @@ Multi-track timeline with drag, trim, split functionality
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QGraphicsView, QGraphicsScene, QGraphicsRectItem, QGraphicsLineItem,
-    QGraphicsTextItem, QSlider, QCheckBox, QFrame, QScrollArea
+    QGraphicsTextItem, QSlider, QCheckBox, QFrame, QScrollArea, QMenu
 )
 from PyQt5.QtCore import Qt, QRectF, pyqtSignal, QPointF
 from PyQt5.QtGui import QColor, QPen, QBrush, QFont, QPainter
@@ -20,11 +20,12 @@ logger = get_logger(__name__)
 class TimelineClip(QGraphicsRectItem):
     """Represents a video/audio/image clip on the timeline"""
 
-    def __init__(self, x, y, width, height, clip_data, parent=None):
+    def __init__(self, x, y, width, height, clip_data, track=None, parent=None):
         super().__init__(x, y, width, height, parent)
 
         self.clip_data = clip_data  # MediaItem reference
         self.track_index = 0
+        self.track = track  # Reference to parent track
 
         # Visual properties
         self.setFlag(QGraphicsRectItem.ItemIsMovable, True)
@@ -66,9 +67,27 @@ class TimelineClip(QGraphicsRectItem):
         else:
             self.duration_label = None
 
-        # Trim handles (invisible for now, will activate on hover)
-        self.left_handle = None
-        self.right_handle = None
+        # Trim handles
+        self.trim_handle_width = 8
+        self.is_trimming = False
+        self.trim_side = None  # 'left' or 'right'
+        self.original_rect = None
+
+        # Create trim handles (initially hidden)
+        self.left_handle = QGraphicsRectItem(0, 0, self.trim_handle_width, height, self)
+        self.left_handle.setBrush(QBrush(QColor(0, 188, 212, 150)))
+        self.left_handle.setPen(QPen(Qt.NoPen))
+        self.left_handle.setVisible(False)
+        self.left_handle.setCursor(Qt.SizeHorCursor)
+
+        self.right_handle = QGraphicsRectItem(width - self.trim_handle_width, 0, self.trim_handle_width, height, self)
+        self.right_handle.setBrush(QBrush(QColor(0, 188, 212, 150)))
+        self.right_handle.setPen(QPen(Qt.NoPen))
+        self.right_handle.setVisible(False)
+        self.right_handle.setCursor(Qt.SizeHorCursor)
+
+        # Enable hover events
+        self.setAcceptHoverEvents(True)
 
     def itemChange(self, change, value):
         """Handle item changes (movement, selection, etc.)"""
@@ -82,6 +101,139 @@ class TimelineClip(QGraphicsRectItem):
             else:  # Deselected
                 self.setPen(QPen(QColor(255, 255, 255, 180), 2))
         return super().itemChange(change, value)
+
+    def delete(self):
+        """Delete this clip from the timeline"""
+        if self.track:
+            self.track.remove_clip(self)
+
+    def split_at_position(self, x_position):
+        """Split this clip at the given x position"""
+        if not self.track:
+            return None
+
+        # Get clip bounds
+        clip_rect = self.sceneBoundingRect()
+        clip_start = clip_rect.x()
+        clip_end = clip_rect.x() + clip_rect.width()
+
+        # Check if position is within clip bounds
+        if x_position <= clip_start or x_position >= clip_end:
+            logger.warning("Split position outside clip bounds")
+            return None
+
+        # Calculate split point relative to clip
+        split_offset = x_position - clip_start
+
+        # Create right clip (from split to end)
+        right_width = clip_rect.width() - split_offset
+        right_clip = TimelineClip(
+            x_position,
+            self.pos().y(),
+            right_width,
+            clip_rect.height(),
+            self.clip_data,
+            track=self.track
+        )
+
+        # Resize this clip (left part)
+        new_rect = self.rect()
+        new_rect.setWidth(split_offset)
+        self.setRect(new_rect)
+        self.right_handle.setPos(new_rect.width() - self.trim_handle_width, 0)
+
+        # Add right clip to track
+        self.track.add_split_clip(right_clip)
+
+        logger.info(f"Split clip '{self.clip_data.file_name}' at position {split_offset}px")
+
+        return right_clip
+
+    def hoverEnterEvent(self, event):
+        """Show trim handles on hover"""
+        if not self.is_trimming:
+            self.left_handle.setVisible(True)
+            self.right_handle.setVisible(True)
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event):
+        """Hide trim handles when not hovering"""
+        if not self.is_trimming and not self.isSelected():
+            self.left_handle.setVisible(False)
+            self.right_handle.setVisible(False)
+        super().hoverLeaveEvent(event)
+
+    def mousePressEvent(self, event):
+        """Handle mouse press for trimming or moving"""
+        if event.button() == Qt.LeftButton:
+            # Check if clicking on a trim handle
+            local_pos = event.pos()
+
+            if self.left_handle.contains(local_pos):
+                self.is_trimming = True
+                self.trim_side = 'left'
+                self.original_rect = self.rect()
+                self.setFlag(QGraphicsRectItem.ItemIsMovable, False)
+                event.accept()
+                return
+            elif self.right_handle.contains(local_pos):
+                self.is_trimming = True
+                self.trim_side = 'right'
+                self.original_rect = self.rect()
+                self.setFlag(QGraphicsRectItem.ItemIsMovable, False)
+                event.accept()
+                return
+
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        """Handle mouse move for trimming"""
+        if self.is_trimming:
+            current_rect = self.rect()
+            delta_x = event.pos().x() - event.lastPos().x()
+
+            if self.trim_side == 'left':
+                # Trim from left
+                new_x = current_rect.x() + delta_x
+                new_width = current_rect.width() - delta_x
+
+                # Minimum width constraint
+                if new_width >= 50:
+                    current_rect.setLeft(new_x)
+                    self.setRect(current_rect)
+                    # Update handle position
+                    self.left_handle.setPos(0, 0)
+                    self.right_handle.setPos(current_rect.width() - self.trim_handle_width, 0)
+
+            elif self.trim_side == 'right':
+                # Trim from right
+                new_width = current_rect.width() + delta_x
+
+                # Minimum width constraint
+                if new_width >= 50:
+                    current_rect.setWidth(new_width)
+                    self.setRect(current_rect)
+                    # Update handle position
+                    self.right_handle.setPos(current_rect.width() - self.trim_handle_width, 0)
+
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        """Handle mouse release after trimming"""
+        if self.is_trimming:
+            self.is_trimming = False
+            self.trim_side = None
+            self.setFlag(QGraphicsRectItem.ItemIsMovable, True)
+
+            # Log trim operation
+            if hasattr(self.clip_data, 'file_name'):
+                logger.info(f"Trimmed clip: {self.clip_data.file_name}, new width: {self.rect().width()}px")
+
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
 
 
 class TimelineGraphicsView(QGraphicsView):
@@ -104,6 +256,13 @@ class TimelineGraphicsView(QGraphicsView):
 
         # Enable drag and drop
         self.setAcceptDrops(True)
+
+        # Enable keyboard focus for Delete key
+        self.setFocusPolicy(Qt.StrongFocus)
+
+        # Playhead line
+        self.playhead_line = None
+        self.create_playhead()
 
     def dragEnterEvent(self, event):
         """Accept drag events from media library"""
@@ -131,6 +290,128 @@ class TimelineGraphicsView(QGraphicsView):
             event.acceptProposedAction()
         else:
             event.ignore()
+
+    def create_playhead(self):
+        """Create the playhead line"""
+        # Playhead line (red vertical line)
+        self.playhead_line = QGraphicsLineItem(0, 0, 0, 50)
+        self.playhead_line.setPen(QPen(QColor(255, 82, 82), 3))  # Red line, 3px thick
+        self.playhead_line.setZValue(1000)  # Always on top
+        self.scene.addItem(self.playhead_line)
+
+        # Playhead head (triangle at top)
+        from PyQt5.QtWidgets import QGraphicsPolygonItem
+        from PyQt5.QtGui import QPolygonF
+
+        triangle = QPolygonF([
+            QPointF(0, 0),
+            QPointF(-6, -10),
+            QPointF(6, -10)
+        ])
+        self.playhead_head = QGraphicsPolygonItem(triangle)
+        self.playhead_head.setBrush(QBrush(QColor(255, 82, 82)))
+        self.playhead_head.setPen(QPen(Qt.NoPen))
+        self.playhead_head.setZValue(1001)
+        self.scene.addItem(self.playhead_head)
+
+    def set_playhead_position(self, x_position):
+        """Update playhead position"""
+        if self.playhead_line:
+            self.playhead_line.setLine(x_position, 0, x_position, 50)
+            self.playhead_head.setPos(x_position, 0)
+
+    def mousePressEvent(self, event):
+        """Handle mouse clicks for seeking"""
+        if event.button() == Qt.LeftButton:
+            # Get click position in scene
+            scene_pos = self.mapToScene(event.pos())
+            x_pos = scene_pos.x()
+
+            # Check if we clicked on a clip
+            item = self.scene.itemAt(scene_pos, self.transform())
+
+            # If not clicking on a clip, handle as seek
+            if not isinstance(item, TimelineClip):
+                # Notify track widget of click (for seeking)
+                if hasattr(self.track_widget, 'on_timeline_clicked'):
+                    self.track_widget.on_timeline_clicked(x_pos)
+
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):
+        """Handle keyboard shortcuts"""
+        if event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
+            # Delete selected clips
+            selected_items = self.scene.selectedItems()
+            for item in selected_items:
+                if isinstance(item, TimelineClip):
+                    item.delete()
+            logger.info(f"Deleted {len(selected_items)} clip(s)")
+        elif event.key() == Qt.Key_S:
+            # Split selected clips at playhead
+            # Need to access parent timeline widget
+            parent = self.track_widget.parent()
+            while parent and not isinstance(parent, TimelineWidget):
+                parent = parent.parent()
+
+            if parent and isinstance(parent, TimelineWidget):
+                parent.split_selected_clips_at_playhead()
+        else:
+            super().keyPressEvent(event)
+
+    def contextMenuEvent(self, event):
+        """Show context menu for clips"""
+        # Get item at position
+        scene_pos = self.mapToScene(event.pos())
+        item = self.scene.itemAt(scene_pos, self.transform())
+
+        if isinstance(item, TimelineClip):
+            # Create context menu
+            menu = QMenu(self)
+            menu.setStyleSheet("""
+                QMenu {
+                    background-color: #252525;
+                    border: 1px solid #3a3a3a;
+                    border-radius: 8px;
+                    padding: 4px;
+                }
+                QMenu::item {
+                    padding: 8px 20px;
+                    color: #e0e0e0;
+                    border-radius: 4px;
+                }
+                QMenu::item:selected {
+                    background-color: #2a4a5a;
+                }
+            """)
+
+            # Delete action
+            delete_action = menu.addAction("🗑️ Delete Clip")
+            delete_action.triggered.connect(lambda: item.delete())
+
+            menu.addSeparator()
+
+            # Split action
+            split_action = menu.addAction("✂️ Split at Playhead")
+            split_action.setToolTip("Split clip at playhead position (S)")
+
+            def split_clip():
+                # Get parent timeline widget
+                parent = self.track_widget.parent()
+                while parent and not isinstance(parent, TimelineWidget):
+                    parent = parent.parent()
+
+                if parent and isinstance(parent, TimelineWidget):
+                    # Select the clip first
+                    item.setSelected(True)
+                    parent.split_selected_clips_at_playhead()
+
+            split_action.triggered.connect(split_clip)
+
+            # Show menu
+            menu.exec_(event.globalPos())
+        else:
+            super().contextMenuEvent(event)
 
 
 class TimelineTrack(QFrame):
@@ -275,14 +556,53 @@ class TimelineTrack(QFrame):
         # Minimum width for visibility
         clip_width = max(clip_width, 50)
 
-        # Create clip
-        clip = TimelineClip(x_pos, 2, clip_width, clip_height, media_item)
+        # Create clip with track reference
+        clip = TimelineClip(x_pos, 2, clip_width, clip_height, media_item, track=self)
 
         # Add to scene
         self.graphics_view.scene.addItem(clip)
         self.clips.append(clip)
 
         logger.info(f"Created clip on {self.track_name}: {media_item.file_name} (duration: {media_item.duration}s, width: {clip_width}px)")
+
+    def remove_clip(self, clip):
+        """Remove a clip from this track"""
+        if clip in self.clips:
+            # Remove from scene
+            if self.graphics_view and self.graphics_view.scene:
+                self.graphics_view.scene.removeItem(clip)
+
+            # Remove from clips list
+            self.clips.remove(clip)
+
+            logger.info(f"Removed clip from {self.track_name}: {clip.clip_data.file_name if hasattr(clip, 'clip_data') else 'unknown'}")
+
+    def add_split_clip(self, clip):
+        """Add a clip created from split operation"""
+        if self.graphics_view and self.graphics_view.scene:
+            self.graphics_view.scene.addItem(clip)
+            self.clips.append(clip)
+            logger.info(f"Added split clip to {self.track_name}")
+
+    def set_playhead_position(self, x_position):
+        """Update playhead position on this track"""
+        if self.graphics_view:
+            self.graphics_view.set_playhead_position(x_position)
+
+    def on_timeline_clicked(self, x_position):
+        """Handle timeline click for seeking"""
+        # Calculate time from x position
+        time_seconds = x_position / self.pixels_per_second
+
+        # Notify parent timeline widget
+        parent = self.parent()
+        while parent and not isinstance(parent, TimelineWidget):
+            parent = parent.parent()
+
+        if parent and isinstance(parent, TimelineWidget):
+            parent.on_timeline_seek(time_seconds)
+
+        logger.debug(f"Timeline clicked at x={x_position}, time={time_seconds}s")
 
 
 class TimelineWidget(QWidget):
@@ -611,3 +931,48 @@ class TimelineWidget(QWidget):
         if clip in self.clips:
             self.clips.remove(clip)
             logger.info("Removed clip from timeline")
+
+    def update_playhead(self, time_seconds):
+        """Update playhead position based on video time"""
+        # Convert time to x position (pixels)
+        x_position = time_seconds * self.pixels_per_second
+
+        # Update on all tracks
+        for track in self.tracks:
+            track.set_playhead_position(x_position)
+
+        # Store current position
+        self.playhead_position = time_seconds
+
+    def on_timeline_seek(self, time_seconds):
+        """Handle seek request from timeline click"""
+        logger.info(f"Seeking to {time_seconds}s")
+
+        # Update playhead visually
+        self.update_playhead(time_seconds)
+
+        # Emit signal for video player to seek
+        self.playhead_moved.emit(time_seconds)
+
+    def split_selected_clips_at_playhead(self):
+        """Split all selected clips at current playhead position"""
+        playhead_x = self.playhead_position * self.pixels_per_second
+        split_count = 0
+
+        for track in self.tracks:
+            # Get all selected clips in this track
+            for clip in list(track.clips):  # Use list() to avoid modification during iteration
+                if clip.isSelected():
+                    # Check if playhead is within clip bounds
+                    clip_rect = clip.sceneBoundingRect()
+                    if clip_rect.x() < playhead_x < (clip_rect.x() + clip_rect.width()):
+                        # Split at playhead
+                        clip.split_at_position(playhead_x)
+                        split_count += 1
+
+        if split_count > 0:
+            logger.info(f"Split {split_count} clip(s) at playhead position {self.playhead_position}s")
+        else:
+            logger.info("No clips to split at playhead position")
+
+        return split_count

@@ -108,12 +108,15 @@ class CapCutEditor(QWidget):
         self.media_items: List[MediaItem] = []
         self.timeline_clips = []
         self.current_video_path = None
+        self.media_item_map = {}  # Map file paths to MediaItem objects
 
         # Enable drag and drop
         self.setAcceptDrops(True)
 
         self.init_ui()
         self.setup_keyboard_shortcuts()
+
+        logger.info("CapCutEditor initialized successfully")
 
     def init_ui(self):
         """Initialize complete UI layout"""
@@ -715,6 +718,11 @@ class CapCutEditor(QWidget):
         preview_layout = QVBoxLayout()
         preview_layout.setContentsMargins(0, 0, 0, 0)
 
+        # Create a container for video widget and placeholder
+        self.preview_stack = QFrame()
+        stack_layout = QVBoxLayout()
+        stack_layout.setContentsMargins(0, 0, 0, 0)
+
         # Video Widget for playback
         self.video_widget = QVideoWidget()
         self.video_widget.setStyleSheet("background-color: #000000;")
@@ -726,6 +734,7 @@ class CapCutEditor(QWidget):
         self.media_player.positionChanged.connect(self.update_playback_position)
         self.media_player.durationChanged.connect(self.update_playback_duration)
         self.media_player.stateChanged.connect(self.update_playback_state)
+        self.media_player.error.connect(self.handle_media_error)
 
         # Placeholder label (shown when no video)
         self.preview_placeholder = QLabel()
@@ -734,18 +743,23 @@ class CapCutEditor(QWidget):
             QLabel {
                 background-color: #000000;
                 color: #666666;
-                font-size: 24px;
+                font-size: 20px;
                 border: 2px dashed #2a2a2a;
             }
         """)
         self.preview_placeholder.setMinimumSize(800, 450)
         self.preview_placeholder.setText("🎬\n\nNo video loaded\n\nImport media and double-click to preview")
 
-        # Stack them (show placeholder by default, video when playing)
-        preview_layout.addWidget(self.preview_placeholder)
-        preview_layout.addWidget(self.video_widget)
-        self.video_widget.hide()  # Hidden by default
+        # Add both to stack (only one will be visible at a time)
+        stack_layout.addWidget(self.video_widget)
+        stack_layout.addWidget(self.preview_placeholder)
+        self.preview_stack.setLayout(stack_layout)
 
+        # Show placeholder by default
+        self.video_widget.hide()
+        self.preview_placeholder.show()
+
+        preview_layout.addWidget(self.preview_stack)
         preview_container.setLayout(preview_layout)
         layout.addWidget(preview_container)
 
@@ -1286,14 +1300,15 @@ class CapCutEditor(QWidget):
         list_item.setData(Qt.UserRole, media_item)
 
         # Set tooltip for drag hint
-        list_item.setToolTip(f"Drag to timeline to add\nDouble-click to preview")
+        list_item.setToolTip(f"Double-click to PREVIEW\nDrag to TIMELINE to add")
 
         self.media_list.addItem(list_item)
 
         # Store reference for drag operations
-        if not hasattr(self, 'media_item_map'):
-            self.media_item_map = {}
         self.media_item_map[media_item.file_path] = media_item
+
+        logger.info(f"Added to media library: {media_item.file_name} (type: {media_item.file_type}, duration: {media_item.duration}s)")
+        logger.debug(f"Media item map size: {len(self.media_item_map)}")
 
     def show_media_context_menu(self, position):
         """Show context menu for media items"""
@@ -1381,7 +1396,9 @@ class CapCutEditor(QWidget):
     def load_video_preview(self, video_path: str):
         """Load a video file into the media player"""
         try:
-            # Hide placeholder, show video widget
+            logger.info(f"Loading video for preview: {video_path}")
+
+            # Show video widget, hide placeholder
             self.preview_placeholder.hide()
             self.video_widget.show()
 
@@ -1389,13 +1406,42 @@ class CapCutEditor(QWidget):
             media_content = QMediaContent(QUrl.fromLocalFile(video_path))
             self.media_player.setMedia(media_content)
 
-            # Auto-play
+            logger.info(f"Media content created, starting playback...")
+
+            # Start playback
             self.media_player.play()
 
-            logger.info(f"Loaded video: {video_path}")
+            logger.info(f"Video loaded successfully: {video_path}")
         except Exception as e:
             logger.error(f"Error loading video: {e}")
             QMessageBox.critical(self, "Error", f"Failed to load video:\n{str(e)}")
+            # Show placeholder again on error
+            self.video_widget.hide()
+            self.preview_placeholder.show()
+
+    def handle_media_error(self, error):
+        """Handle media player errors"""
+        error_messages = {
+            QMediaPlayer.NoError: "No error",
+            QMediaPlayer.ResourceError: "Resource error - cannot load media file",
+            QMediaPlayer.FormatError: "Format error - unsupported video format",
+            QMediaPlayer.NetworkError: "Network error",
+            QMediaPlayer.AccessDeniedError: "Access denied - cannot read file",
+            QMediaPlayer.ServiceMissingError: "Media service missing"
+        }
+
+        error_msg = error_messages.get(error, f"Unknown error: {error}")
+        logger.error(f"Media player error: {error_msg}")
+
+        if error != QMediaPlayer.NoError:
+            QMessageBox.warning(
+                self,
+                "Playback Error",
+                f"Cannot play video:\n{error_msg}\n\nError code: {error}"
+            )
+            # Show placeholder on error
+            self.video_widget.hide()
+            self.preview_placeholder.show()
 
     def load_audio_preview(self, audio_path: str):
         """Load an audio file into the media player"""
@@ -1487,9 +1533,17 @@ class CapCutEditor(QWidget):
 
     def get_media_item_by_path(self, file_path: str) -> Optional[MediaItem]:
         """Get media item by file path"""
-        if hasattr(self, 'media_item_map'):
-            return self.media_item_map.get(file_path)
-        return None
+        logger.debug(f"Looking up media item for: {file_path}")
+        logger.debug(f"Available paths in map: {list(self.media_item_map.keys())}")
+
+        media_item = self.media_item_map.get(file_path)
+
+        if media_item:
+            logger.info(f"Found media item: {media_item.file_name}")
+        else:
+            logger.warning(f"Media item not found for path: {file_path}")
+
+        return media_item
 
     def close_editor(self):
         """Close editor"""

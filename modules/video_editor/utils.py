@@ -1,16 +1,60 @@
 """
 modules/video_editor/utils.py
-Utility Functions for Video Editing
+Utility Functions for Video Editing - FIXED IMPORTS
 """
-
+import subprocess
+import sys
+import importlib
 import os
 import json
-import subprocess
 from typing import Dict, Any, Optional, List, Tuple
 from pathlib import Path
 from modules.logging.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+# ==================== DEPENDENCY MANAGEMENT ====================
+
+def check_moviepy_dependencies():
+    """Check if MoviePy and required dependencies are installed"""
+    required_packages = [
+        "moviepy",
+        "numpy", 
+        "Pillow",
+        "decorator",
+        "tqdm"
+    ]
+    
+    missing = []
+    for package in required_packages:
+        try:
+            importlib.import_module(package)
+        except ImportError:
+            missing.append(package)
+    
+    return missing
+
+def install_moviepy_dependencies():
+    """Install MoviePy dependencies"""
+    try:
+        subprocess.check_call([
+            sys.executable, "-m", "pip", "install", 
+            "moviepy", "numpy", "Pillow", "decorator", "tqdm"
+        ])
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to install dependencies: {e}")
+        return False
+
+def ensure_moviepy_available():
+    """Ensure MoviePy is available, install if not"""
+    missing = check_moviepy_dependencies()
+    if missing:
+        print(f"Missing dependencies: {missing}")
+        print("Installing MoviePy dependencies...")
+        return install_moviepy_dependencies()
+    return True
 
 
 # ==================== VIDEO INFO ====================
@@ -95,7 +139,14 @@ def get_video_info(video_path: str) -> Dict[str, Any]:
 
     # Fallback to MoviePy
     try:
-        from moviepy.editor import VideoFileClip
+        # Try multiple import methods for MoviePy
+        try:
+            from moviepy.editor import VideoFileClip
+        except ImportError:
+            try:
+                from moviepy import VideoFileClip
+            except ImportError:
+                from moviepy.video.io.VideoFileClip import VideoFileClip
 
         video = VideoFileClip(video_path)
         info = {
@@ -377,8 +428,17 @@ def check_dependencies() -> Dict[str, bool]:
 
     # Check MoviePy
     try:
-        import moviepy
-        deps['moviepy'] = True
+        # Try multiple import methods for MoviePy
+        try:
+            from moviepy.editor import VideoFileClip
+            deps['moviepy'] = True
+        except ImportError:
+            try:
+                from moviepy import VideoFileClip
+                deps['moviepy'] = True
+            except ImportError:
+                from moviepy.video.io.VideoFileClip import VideoFileClip
+                deps['moviepy'] = True
     except ImportError:
         deps['moviepy'] = False
 

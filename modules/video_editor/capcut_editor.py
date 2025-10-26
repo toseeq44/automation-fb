@@ -1,8 +1,6 @@
 """
 modules/video_editor/capcut_editor.py
-Professional CapCut-Style Video Editor - Complete GUI Design
-Step 1: Complete UI Layout
-Step 2-N: Add functionality incrementally
+Professional CapCut-Style Video Editor - FIXED MOVIEPY IMPORTS
 """
 
 import os
@@ -23,8 +21,6 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QSize, QTimer, QThread, pyqtSignal, QUrl, QMimeData
 from PyQt5.QtGui import QFont, QColor, QIcon, QPixmap, QPalette, QKeySequence, QDragEnterEvent, QDropEvent, QDrag
-from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
-from PyQt5.QtMultimediaWidgets import QVideoWidget
 
 from modules.logging.logger import get_logger
 from modules.video_editor.preset_manager import PresetManager, EditingPreset
@@ -1200,12 +1196,14 @@ class CapCutEditor(QWidget):
     def extract_video_metadata(self, media_item: MediaItem):
         """Extract metadata from video file using moviepy"""
         try:
-            # Try moviepy 2.x import path first
+            # Try multiple import methods for MoviePy
             try:
-                from moviepy import VideoFileClip
-            except ImportError:
-                # Fallback to old import path
                 from moviepy.editor import VideoFileClip
+            except ImportError:
+                try:
+                    from moviepy import VideoFileClip
+                except ImportError:
+                    from moviepy.video.io.VideoFileClip import VideoFileClip
 
             clip = VideoFileClip(media_item.file_path)
             media_item.duration = clip.duration
@@ -1237,12 +1235,14 @@ class CapCutEditor(QWidget):
     def extract_audio_metadata(self, media_item: MediaItem):
         """Extract metadata from audio file"""
         try:
-            # Try moviepy 2.x import path first
+            # Try multiple import methods for MoviePy
             try:
-                from moviepy import AudioFileClip
-            except ImportError:
-                # Fallback to old import path
                 from moviepy.editor import AudioFileClip
+            except ImportError:
+                try:
+                    from moviepy import AudioFileClip
+                except ImportError:
+                    from moviepy.video.io.VideoFileClip import AudioFileClip
 
             clip = AudioFileClip(media_item.file_path)
             media_item.duration = clip.duration

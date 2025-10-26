@@ -298,16 +298,16 @@ class IntegratedVideoEditor(QWidget):
                         self.media_library.add_media_item(media_item)
                         self.media_item_map[file_path] = media_item
                         imported_count += 1
+                        logger.info(f"Imported: {media_item.file_name}")
                 except Exception as e:
                     logger.error(f"Failed to import {file_path}: {e}")
 
             if imported_count > 0:
-                QMessageBox.information(
-                    self,
-                    "Import Complete",
-                    f"Successfully imported {imported_count} file(s)"
-                )
-                logger.info(f"Imported {imported_count} media files")
+                logger.info(f"Total imported: {imported_count} media files")
+                # Auto-load first video in preview if it's a video
+                first_video = next((item for item in self.media_library.media_items if item.file_type == 'video'), None)
+                if first_video:
+                    self.load_video(first_video.file_path)
 
     def create_media_item(self, file_path: str) -> MediaItem:
         """Create MediaItem from file path"""
@@ -362,18 +362,13 @@ class IntegratedVideoEditor(QWidget):
         file_name = os.path.basename(video_path)
         logger.info(f"Loading video: {video_path}")
 
-        # Show loading message
-        QMessageBox.information(
-            self,
-            "Video Loaded",
-            f"Video selected: {file_name}\n\n"
-            "The video will be displayed in the preview windows.\n"
-            "Video playback integration is in progress."
-        )
+        # Load video into dual preview windows
+        self.dual_preview.load_video(video_path)
 
-        # Update preview windows with video info
-        # TODO: Actually load video into preview windows
-        # This would integrate with custom video player
+        # Update control panel with video info (set a dummy duration for now)
+        self.control_panel.set_duration(100)  # Will be replaced with actual duration
+
+        logger.info(f"Video loaded successfully: {file_name}")
 
     def on_playback_state_changed(self, is_playing):
         """Handle playback state change from preview"""

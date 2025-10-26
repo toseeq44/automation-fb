@@ -260,6 +260,24 @@ class PreviewWindow(QFrame):
         """Update resolution display"""
         self.resolution_label.setText(f"{width}x{height}")
 
+    def set_video(self, video_path):
+        """Set video for this preview window"""
+        import os
+        video_name = os.path.basename(video_path)
+        if self.window_type == "before":
+            self.placeholder.setText(f"📹\n\nORIGINAL VIDEO\n\n{video_name}\n\nReady to play")
+        else:
+            self.placeholder.setText(f"✨\n\nPREVIEW WITH EFFECTS\n\n{video_name}\n\nReady to play")
+        self.placeholder.setStyleSheet("""
+            QLabel {
+                color: #00bcd4;
+                font-size: 14px;
+                line-height: 1.8;
+                font-weight: 500;
+            }
+        """)
+        logger.info(f"{self.window_type.upper()} preview: Loaded {video_name}")
+
     @staticmethod
     def format_time(seconds):
         """Format time as MM:SS or HH:MM:SS"""
@@ -574,3 +592,9 @@ class DualPreviewWidget(QWidget):
         """Set resolution display for both windows"""
         self.before_window.update_resolution(width, height)
         self.after_window.update_resolution(width, height)
+
+    def load_video(self, video_path):
+        """Load video into both preview windows"""
+        self.before_window.set_video(video_path)
+        self.after_window.set_video(video_path)
+        logger.info(f"Dual preview: Loaded video {video_path}")

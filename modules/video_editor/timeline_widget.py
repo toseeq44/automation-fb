@@ -107,6 +107,48 @@ class TimelineClip(QGraphicsRectItem):
         if self.track:
             self.track.remove_clip(self)
 
+    def split_at_position(self, x_position):
+        """Split this clip at the given x position"""
+        if not self.track:
+            return None
+
+        # Get clip bounds
+        clip_rect = self.sceneBoundingRect()
+        clip_start = clip_rect.x()
+        clip_end = clip_rect.x() + clip_rect.width()
+
+        # Check if position is within clip bounds
+        if x_position <= clip_start or x_position >= clip_end:
+            logger.warning("Split position outside clip bounds")
+            return None
+
+        # Calculate split point relative to clip
+        split_offset = x_position - clip_start
+
+        # Create right clip (from split to end)
+        right_width = clip_rect.width() - split_offset
+        right_clip = TimelineClip(
+            x_position,
+            self.pos().y(),
+            right_width,
+            clip_rect.height(),
+            self.clip_data,
+            track=self.track
+        )
+
+        # Resize this clip (left part)
+        new_rect = self.rect()
+        new_rect.setWidth(split_offset)
+        self.setRect(new_rect)
+        self.right_handle.setPos(new_rect.width() - self.trim_handle_width, 0)
+
+        # Add right clip to track
+        self.track.add_split_clip(right_clip)
+
+        logger.info(f"Split clip '{self.clip_data.file_name}' at position {split_offset}px")
+
+        return right_clip
+
     def hoverEnterEvent(self, event):
         """Show trim handles on hover"""
         if not self.is_trimming:
@@ -305,6 +347,15 @@ class TimelineGraphicsView(QGraphicsView):
                 if isinstance(item, TimelineClip):
                     item.delete()
             logger.info(f"Deleted {len(selected_items)} clip(s)")
+        elif event.key() == Qt.Key_S:
+            # Split selected clips at playhead
+            # Need to access parent timeline widget
+            parent = self.track_widget.parent()
+            while parent and not isinstance(parent, TimelineWidget):
+                parent = parent.parent()
+
+            if parent and isinstance(parent, TimelineWidget):
+                parent.split_selected_clips_at_playhead()
         else:
             super().keyPressEvent(event)
 
@@ -340,13 +391,22 @@ class TimelineGraphicsView(QGraphicsView):
 
             menu.addSeparator()
 
-            # Trim action (placeholder)
-            trim_action = menu.addAction("✂️ Trim Clip")
-            trim_action.setEnabled(False)  # Not implemented yet
+            # Split action
+            split_action = menu.addAction("✂️ Split at Playhead")
+            split_action.setToolTip("Split clip at playhead position (S)")
 
-            # Split action (placeholder)
-            split_action = menu.addAction("✂️ Split Clip")
-            split_action.setEnabled(False)  # Not implemented yet
+            def split_clip():
+                # Get parent timeline widget
+                parent = self.track_widget.parent()
+                while parent and not isinstance(parent, TimelineWidget):
+                    parent = parent.parent()
+
+                if parent and isinstance(parent, TimelineWidget):
+                    # Select the clip first
+                    item.setSelected(True)
+                    parent.split_selected_clips_at_playhead()
+
+            split_action.triggered.connect(split_clip)
 
             # Show menu
             menu.exec_(event.globalPos())
@@ -516,6 +576,13 @@ class TimelineTrack(QFrame):
             self.clips.remove(clip)
 
             logger.info(f"Removed clip from {self.track_name}: {clip.clip_data.file_name if hasattr(clip, 'clip_data') else 'unknown'}")
+
+    def add_split_clip(self, clip):
+        """Add a clip created from split operation"""
+        if self.graphics_view and self.graphics_view.scene:
+            self.graphics_view.scene.addItem(clip)
+            self.clips.append(clip)
+            logger.info(f"Added split clip to {self.track_name}")
 
     def set_playhead_position(self, x_position):
         """Update playhead position on this track"""
@@ -886,3 +953,26 @@ class TimelineWidget(QWidget):
 
         # Emit signal for video player to seek
         self.playhead_moved.emit(time_seconds)
+
+    def split_selected_clips_at_playhead(self):
+        """Split all selected clips at current playhead position"""
+        playhead_x = self.playhead_position * self.pixels_per_second
+        split_count = 0
+
+        for track in self.tracks:
+            # Get all selected clips in this track
+            for clip in list(track.clips):  # Use list() to avoid modification during iteration
+                if clip.isSelected():
+                    # Check if playhead is within clip bounds
+                    clip_rect = clip.sceneBoundingRect()
+                    if clip_rect.x() < playhead_x < (clip_rect.x() + clip_rect.width()):
+                        # Split at playhead
+                        clip.split_at_position(playhead_x)
+                        split_count += 1
+
+        if split_count > 0:
+            logger.info(f"Split {split_count} clip(s) at playhead position {self.playhead_position}s")
+        else:
+            logger.info("No clips to split at playhead position")
+
+        return split_count

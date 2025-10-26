@@ -28,6 +28,7 @@ from PyQt5.QtMultimediaWidgets import QVideoWidget
 
 from modules.logging.logger import get_logger
 from modules.video_editor.preset_manager import PresetManager, EditingPreset
+from modules.video_editor.timeline_widget import TimelineWidget
 
 logger = get_logger(__name__)
 
@@ -121,7 +122,9 @@ class CapCutEditor(QWidget):
         main_layout.addWidget(content_splitter, 1)
 
         # 3. TIMELINE SECTION (Bottom)
-        main_layout.addWidget(self.create_timeline_section())
+        self.timeline_widget = TimelineWidget()
+        self.timeline_widget.setMinimumHeight(250)
+        main_layout.addWidget(self.timeline_widget)
 
         # 4. FOOTER STATUS BAR
         main_layout.addWidget(self.create_footer())
@@ -394,10 +397,6 @@ class CapCutEditor(QWidget):
                 background-color: #00bcd4;
                 border-color: #00bcd4;
             }
-            QCheckBox::indicator:checked::after {
-                content: "✓";
-                color: white;
-            }
 
             /* Tooltips */
             QToolTip {
@@ -652,6 +651,8 @@ class CapCutEditor(QWidget):
         """)
         self.media_list.setToolTip("Drag media to timeline to add to project")
         self.media_list.itemDoubleClicked.connect(self.preview_media_item)
+        self.media_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.media_list.customContextMenuRequested.connect(self.show_media_context_menu)
         layout.addWidget(self.media_list, 1)
 
         # Media info
@@ -937,223 +938,6 @@ class CapCutEditor(QWidget):
         panel.setLayout(layout)
         return panel
 
-    def create_timeline_section(self):
-        """Create bottom timeline section"""
-        timeline_container = QFrame()
-        timeline_container.setObjectName("darkPanel")
-        timeline_container.setMinimumHeight(250)
-
-        layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        # Timeline Toolbar
-        toolbar = QFrame()
-        toolbar.setStyleSheet("background-color: #1e1e1e; border-bottom: 1px solid #2a2a2a;")
-        toolbar.setFixedHeight(45)
-
-        toolbar_layout = QHBoxLayout()
-        toolbar_layout.setContentsMargins(10, 5, 10, 5)
-        toolbar_layout.setSpacing(8)
-
-        # Timeline Tools
-        tools_label = QLabel("Tools:")
-        tools_label.setStyleSheet("color: #888888; font-weight: bold;")
-        toolbar_layout.addWidget(tools_label)
-
-        tool_buttons = [
-            ("✋ Select", "V"),
-            ("✂️ Split", "C"),
-            ("📏 Slip", "Y"),
-            ("🔍 Zoom", "Z")
-        ]
-
-        for name, shortcut in tool_buttons:
-            btn = QPushButton(name)
-            btn.setToolTip(f"Shortcut: {shortcut}")
-            btn.setCheckable(True)
-            toolbar_layout.addWidget(btn)
-
-        toolbar_layout.addSpacing(20)
-
-        # Zoom Controls
-        zoom_label = QLabel("Zoom:")
-        zoom_label.setStyleSheet("color: #888888; font-weight: bold;")
-        toolbar_layout.addWidget(zoom_label)
-
-        zoom_out_btn = QPushButton("➖")
-        zoom_out_btn.setMaximumWidth(35)
-        zoom_out_btn.setToolTip("Zoom out (Ctrl+-)")
-        toolbar_layout.addWidget(zoom_out_btn)
-
-        zoom_slider = QSlider(Qt.Horizontal)
-        zoom_slider.setRange(0, 100)
-        zoom_slider.setValue(50)
-        zoom_slider.setMaximumWidth(150)
-        toolbar_layout.addWidget(zoom_slider)
-
-        zoom_in_btn = QPushButton("➕")
-        zoom_in_btn.setMaximumWidth(35)
-        zoom_in_btn.setToolTip("Zoom in (Ctrl++)")
-        toolbar_layout.addWidget(zoom_in_btn)
-
-        fit_btn = QPushButton("⬌ Fit")
-        fit_btn.setToolTip("Fit to timeline (Shift+Z)")
-        toolbar_layout.addWidget(fit_btn)
-
-        toolbar_layout.addSpacing(20)
-
-        # Snap Toggle
-        snap_check = QCheckBox("🧲 Snap")
-        snap_check.setChecked(True)
-        snap_check.setToolTip("Enable snapping to clips/markers")
-        toolbar_layout.addWidget(snap_check)
-
-        # Marker
-        marker_btn = QPushButton("📍 Add Marker")
-        marker_btn.setToolTip("Add marker at playhead (M)")
-        toolbar_layout.addWidget(marker_btn)
-
-        toolbar_layout.addStretch()
-
-        # Track Management
-        add_track_btn = QPushButton("➕ Add Track")
-        add_track_btn.setToolTip("Add new video/audio track")
-        toolbar_layout.addWidget(add_track_btn)
-
-        toolbar.setLayout(toolbar_layout)
-        layout.addWidget(toolbar)
-
-        # Timeline Tracks Area
-        tracks_scroll = QScrollArea()
-        tracks_scroll.setWidgetResizable(True)
-        tracks_scroll.setFrameShape(QFrame.NoFrame)
-
-        tracks_widget = QWidget()
-        tracks_layout = QVBoxLayout()
-        tracks_layout.setContentsMargins(0, 0, 0, 0)
-        tracks_layout.setSpacing(2)
-
-        # Import Prompt (when empty)
-        import_prompt = QFrame()
-        import_prompt.setStyleSheet("""
-            QFrame {
-                background-color: #1a1a1a;
-                border: 2px dashed #3a3a3a;
-                border-radius: 8px;
-            }
-        """)
-        import_prompt.setMinimumHeight(150)
-
-        import_layout = QVBoxLayout()
-        import_layout.setAlignment(Qt.AlignCenter)
-
-        import_icon = QLabel("📥")
-        import_icon.setStyleSheet("font-size: 48px;")
-        import_icon.setAlignment(Qt.AlignCenter)
-        import_layout.addWidget(import_icon)
-
-        import_label = QLabel("Import media here or to the Media Library")
-        import_label.setStyleSheet("font-size: 14px; color: #888888; font-weight: bold;")
-        import_label.setAlignment(Qt.AlignCenter)
-        import_layout.addWidget(import_label)
-
-        import_hint = QLabel("Drag and drop files or click to browse")
-        import_hint.setStyleSheet("font-size: 12px; color: #666666;")
-        import_hint.setAlignment(Qt.AlignCenter)
-        import_layout.addWidget(import_hint)
-
-        import_prompt.setLayout(import_layout)
-        tracks_layout.addWidget(import_prompt)
-
-        # Sample Tracks (will be replaced with actual tracks)
-        track_names = ["Video 1", "Video 2", "Audio 1", "Text 1"]
-        for track_name in track_names:
-            track = self.create_timeline_track(track_name)
-            tracks_layout.addWidget(track)
-
-        tracks_layout.addStretch()
-        tracks_widget.setLayout(tracks_layout)
-        tracks_scroll.setWidget(tracks_widget)
-        layout.addWidget(tracks_scroll)
-
-        timeline_container.setLayout(layout)
-        return timeline_container
-
-    def create_timeline_track(self, name: str):
-        """Create a single timeline track"""
-        track = QFrame()
-        track.setStyleSheet("""
-            QFrame {
-                background-color: #1e1e1e;
-                border-bottom: 1px solid #2a2a2a;
-            }
-        """)
-        track.setFixedHeight(60)
-
-        layout = QHBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        # Track header
-        header = QFrame()
-        header.setStyleSheet("background-color: #252525; border-right: 1px solid #2a2a2a;")
-        header.setFixedWidth(120)
-
-        header_layout = QVBoxLayout()
-        header_layout.setContentsMargins(8, 4, 8, 4)
-        header_layout.setSpacing(4)
-
-        # Track name
-        name_label = QLabel(name)
-        name_label.setStyleSheet("font-weight: bold; color: #e0e0e0;")
-        header_layout.addWidget(name_label)
-
-        # Track controls
-        controls_layout = QHBoxLayout()
-        controls_layout.setSpacing(4)
-
-        lock_btn = QPushButton("🔒")
-        lock_btn.setMaximumWidth(25)
-        lock_btn.setMaximumHeight(25)
-        lock_btn.setCheckable(True)
-        lock_btn.setToolTip("Lock track")
-        controls_layout.addWidget(lock_btn)
-
-        visible_btn = QPushButton("👁")
-        visible_btn.setMaximumWidth(25)
-        visible_btn.setMaximumHeight(25)
-        visible_btn.setCheckable(True)
-        visible_btn.setChecked(True)
-        visible_btn.setToolTip("Toggle visibility")
-        controls_layout.addWidget(visible_btn)
-
-        mute_btn = QPushButton("🔇")
-        mute_btn.setMaximumWidth(25)
-        mute_btn.setMaximumHeight(25)
-        mute_btn.setCheckable(True)
-        mute_btn.setToolTip("Mute track")
-        controls_layout.addWidget(mute_btn)
-
-        controls_layout.addStretch()
-        header_layout.addLayout(controls_layout)
-
-        header.setLayout(header_layout)
-        layout.addWidget(header)
-
-        # Track content area (for clips)
-        content = QFrame()
-        content.setStyleSheet("""
-            QFrame {
-                background-color: #1a1a1a;
-                border: none;
-            }
-        """)
-        layout.addWidget(content, 1)
-
-        track.setLayout(layout)
-        return track
-
     def create_footer(self):
         """Create footer status bar"""
         footer = QFrame()
@@ -1370,7 +1154,12 @@ class CapCutEditor(QWidget):
     def extract_video_metadata(self, media_item: MediaItem):
         """Extract metadata from video file using moviepy"""
         try:
-            from moviepy.editor import VideoFileClip
+            # Try moviepy 2.x import path first
+            try:
+                from moviepy import VideoFileClip
+            except ImportError:
+                # Fallback to old import path
+                from moviepy.editor import VideoFileClip
 
             clip = VideoFileClip(media_item.file_path)
             media_item.duration = clip.duration
@@ -1382,37 +1171,40 @@ class CapCutEditor(QWidget):
             try:
                 frame = clip.get_frame(0)
                 from PIL import Image
-                import numpy as np
 
                 img = Image.fromarray(frame)
                 # Resize to thumbnail
                 img.thumbnail((160, 90), Image.Resampling.LANCZOS)
 
-                # Convert to QPixmap
-                img_bytes = img.tobytes('raw', 'RGB')
-                qimage = QPixmap.fromImage(
-                    QPixmap(img.size[0], img.size[1])
-                )
-                media_item.thumbnail = qimage
+                # Convert to QPixmap - simplified approach
+                # For now, skip actual conversion - will be implemented later
+                # media_item.thumbnail = qimage
             except Exception as e:
                 logger.warning(f"Could not generate thumbnail: {e}")
 
             clip.close()
         except Exception as e:
             logger.error(f"Error extracting video metadata: {e}")
-            raise
+            # Don't raise - allow import to continue without metadata
+            logger.warning(f"Continuing import without metadata for: {media_item.file_name}")
 
     def extract_audio_metadata(self, media_item: MediaItem):
         """Extract metadata from audio file"""
         try:
-            from moviepy.editor import AudioFileClip
+            # Try moviepy 2.x import path first
+            try:
+                from moviepy import AudioFileClip
+            except ImportError:
+                # Fallback to old import path
+                from moviepy.editor import AudioFileClip
 
             clip = AudioFileClip(media_item.file_path)
             media_item.duration = clip.duration
             clip.close()
         except Exception as e:
             logger.error(f"Error extracting audio metadata: {e}")
-            raise
+            # Don't raise - allow import to continue without metadata
+            logger.warning(f"Continuing import without metadata for: {media_item.file_name}")
 
     def extract_image_metadata(self, media_item: MediaItem):
         """Extract metadata from image file"""
@@ -1459,6 +1251,71 @@ class CapCutEditor(QWidget):
         list_item.setData(Qt.UserRole, media_item)
 
         self.media_list.addItem(list_item)
+
+    def show_media_context_menu(self, position):
+        """Show context menu for media items"""
+        item = self.media_list.itemAt(position)
+        if not item:
+            return
+
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #252525;
+                border: 1px solid #3a3a3a;
+                border-radius: 8px;
+                padding: 4px;
+            }
+            QMenu::item {
+                padding: 8px 20px;
+                color: #e0e0e0;
+                border-radius: 4px;
+            }
+            QMenu::item:selected {
+                background-color: #2a4a5a;
+            }
+        """)
+
+        # Preview action
+        preview_action = menu.addAction("👁️ Preview")
+        preview_action.triggered.connect(lambda: self.preview_media_item(item))
+
+        menu.addSeparator()
+
+        # Delete action
+        delete_action = menu.addAction("🗑️ Remove from Library")
+        delete_action.triggered.connect(lambda: self.delete_media_item(item))
+
+        # Show menu at cursor position
+        menu.exec_(self.media_list.mapToGlobal(position))
+
+    def delete_media_item(self, item: QListWidgetItem):
+        """Delete a media item from the library"""
+        media_item: MediaItem = item.data(Qt.UserRole)
+
+        # Confirm deletion
+        reply = QMessageBox.question(
+            self,
+            "Remove Media",
+            f"Remove '{media_item.file_name}' from library?\n\nThis will not delete the original file.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+
+        if reply == QMessageBox.Yes:
+            # Remove from media list
+            row = self.media_list.row(item)
+            self.media_list.takeItem(row)
+
+            # Remove from media_items array
+            if media_item in self.media_items:
+                self.media_items.remove(media_item)
+
+            # Update info label
+            self.media_info_label.setText(f"{len(self.media_items)} item(s) in library")
+            self.status_label.setText(f"Removed: {media_item.file_name}")
+
+            logger.info(f"Removed media item: {media_item.file_name}")
 
     def preview_media_item(self, item: QListWidgetItem):
         """Preview a media item when double-clicked"""

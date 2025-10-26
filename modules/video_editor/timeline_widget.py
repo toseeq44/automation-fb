@@ -67,9 +67,27 @@ class TimelineClip(QGraphicsRectItem):
         else:
             self.duration_label = None
 
-        # Trim handles (invisible for now, will activate on hover)
-        self.left_handle = None
-        self.right_handle = None
+        # Trim handles
+        self.trim_handle_width = 8
+        self.is_trimming = False
+        self.trim_side = None  # 'left' or 'right'
+        self.original_rect = None
+
+        # Create trim handles (initially hidden)
+        self.left_handle = QGraphicsRectItem(0, 0, self.trim_handle_width, height, self)
+        self.left_handle.setBrush(QBrush(QColor(0, 188, 212, 150)))
+        self.left_handle.setPen(QPen(Qt.NoPen))
+        self.left_handle.setVisible(False)
+        self.left_handle.setCursor(Qt.SizeHorCursor)
+
+        self.right_handle = QGraphicsRectItem(width - self.trim_handle_width, 0, self.trim_handle_width, height, self)
+        self.right_handle.setBrush(QBrush(QColor(0, 188, 212, 150)))
+        self.right_handle.setPen(QPen(Qt.NoPen))
+        self.right_handle.setVisible(False)
+        self.right_handle.setCursor(Qt.SizeHorCursor)
+
+        # Enable hover events
+        self.setAcceptHoverEvents(True)
 
     def itemChange(self, change, value):
         """Handle item changes (movement, selection, etc.)"""
@@ -88,6 +106,92 @@ class TimelineClip(QGraphicsRectItem):
         """Delete this clip from the timeline"""
         if self.track:
             self.track.remove_clip(self)
+
+    def hoverEnterEvent(self, event):
+        """Show trim handles on hover"""
+        if not self.is_trimming:
+            self.left_handle.setVisible(True)
+            self.right_handle.setVisible(True)
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event):
+        """Hide trim handles when not hovering"""
+        if not self.is_trimming and not self.isSelected():
+            self.left_handle.setVisible(False)
+            self.right_handle.setVisible(False)
+        super().hoverLeaveEvent(event)
+
+    def mousePressEvent(self, event):
+        """Handle mouse press for trimming or moving"""
+        if event.button() == Qt.LeftButton:
+            # Check if clicking on a trim handle
+            local_pos = event.pos()
+
+            if self.left_handle.contains(local_pos):
+                self.is_trimming = True
+                self.trim_side = 'left'
+                self.original_rect = self.rect()
+                self.setFlag(QGraphicsRectItem.ItemIsMovable, False)
+                event.accept()
+                return
+            elif self.right_handle.contains(local_pos):
+                self.is_trimming = True
+                self.trim_side = 'right'
+                self.original_rect = self.rect()
+                self.setFlag(QGraphicsRectItem.ItemIsMovable, False)
+                event.accept()
+                return
+
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        """Handle mouse move for trimming"""
+        if self.is_trimming:
+            current_rect = self.rect()
+            delta_x = event.pos().x() - event.lastPos().x()
+
+            if self.trim_side == 'left':
+                # Trim from left
+                new_x = current_rect.x() + delta_x
+                new_width = current_rect.width() - delta_x
+
+                # Minimum width constraint
+                if new_width >= 50:
+                    current_rect.setLeft(new_x)
+                    self.setRect(current_rect)
+                    # Update handle position
+                    self.left_handle.setPos(0, 0)
+                    self.right_handle.setPos(current_rect.width() - self.trim_handle_width, 0)
+
+            elif self.trim_side == 'right':
+                # Trim from right
+                new_width = current_rect.width() + delta_x
+
+                # Minimum width constraint
+                if new_width >= 50:
+                    current_rect.setWidth(new_width)
+                    self.setRect(current_rect)
+                    # Update handle position
+                    self.right_handle.setPos(current_rect.width() - self.trim_handle_width, 0)
+
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        """Handle mouse release after trimming"""
+        if self.is_trimming:
+            self.is_trimming = False
+            self.trim_side = None
+            self.setFlag(QGraphicsRectItem.ItemIsMovable, True)
+
+            # Log trim operation
+            if hasattr(self.clip_data, 'file_name'):
+                logger.info(f"Trimmed clip: {self.clip_data.file_name}, new width: {self.rect().width()}px")
+
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
 
 
 class TimelineGraphicsView(QGraphicsView):

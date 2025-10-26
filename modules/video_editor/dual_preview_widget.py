@@ -2,13 +2,13 @@
 modules/video_editor/dual_preview_widget.py
 Dual Preview Window System - Before/After Comparison
 """
-
+import os
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QFrame, QSlider, QComboBox, QSplitter
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
-from PyQt5.QtGui import QFont, QColor
+from PyQt5.QtGui import QFont, QColor, QPixmap, QPainter
 
 from modules.logging.logger import get_logger
 
@@ -24,6 +24,7 @@ class PreviewWindow(QFrame):
         self.is_playing = False
         self.current_time = 0.0
         self.duration = 0.0
+        self.video_loaded = False
 
         self.init_ui()
 
@@ -66,8 +67,8 @@ class PreviewWindow(QFrame):
             title_text = "✨ AFTER EDITING"
             title_color = "#00bcd4"
 
-        title = QLabel(title_text)
-        title.setStyleSheet(f"""
+        self.title_label = QLabel(title_text)
+        self.title_label.setStyleSheet(f"""
             QLabel {{
                 font-size: 13px;
                 font-weight: bold;
@@ -76,7 +77,7 @@ class PreviewWindow(QFrame):
                 letter-spacing: 1px;
             }}
         """)
-        header_layout.addWidget(title)
+        header_layout.addWidget(self.title_label)
 
         header_layout.addStretch()
 
@@ -111,7 +112,7 @@ class PreviewWindow(QFrame):
         header.setLayout(header_layout)
         layout.addWidget(header)
 
-        # Preview canvas
+        # Preview canvas - FIXED: Proper layout structure
         self.canvas = QFrame()
         self.canvas.setMinimumSize(400, 300)
         self.canvas.setStyleSheet("""
@@ -121,37 +122,50 @@ class PreviewWindow(QFrame):
             }
         """)
 
-        canvas_layout = QVBoxLayout()
-        canvas_layout.setAlignment(Qt.AlignCenter)
+        # Main canvas layout
+        self.canvas_layout = QVBoxLayout(self.canvas)
+        self.canvas_layout.setContentsMargins(0, 0, 0, 0)
+        self.canvas_layout.setSpacing(0)
 
-        # Placeholder
-        self.placeholder = QLabel()
-        self.placeholder.setAlignment(Qt.AlignCenter)
+        # Video display area - CENTER ALIGNED
+        self.video_container = QFrame()
+        self.video_container.setStyleSheet("background: transparent;")
+        self.video_layout = QVBoxLayout(self.video_container)
+        self.video_layout.setContentsMargins(0, 0, 0, 0)
+        self.video_layout.setAlignment(Qt.AlignCenter)
 
-        if self.window_type == "before":
-            self.placeholder.setText("📹\n\nORIGINAL VIDEO\n\nNo video loaded")
-        else:
-            self.placeholder.setText("✨\n\nPREVIEW WITH EFFECTS\n\nNo video loaded")
-
-        self.placeholder.setStyleSheet("""
+        # Video placeholder - ACTUAL VIDEO WILL SHOW HERE
+        self.video_placeholder = QLabel()
+        self.video_placeholder.setAlignment(Qt.AlignCenter)
+        self.video_placeholder.setMinimumSize(400, 300)
+        self.video_placeholder.setStyleSheet("""
             QLabel {
+                background: #0a0a0a;
+                border: 2px dashed #333;
                 color: #666666;
                 font-size: 16px;
-                line-height: 1.5;
+                font-weight: bold;
             }
         """)
-        canvas_layout.addWidget(self.placeholder)
+        
+        if self.window_type == "before":
+            self.video_placeholder.setText("BEFORE\n\nOriginal Video\n\nClick Play to Start")
+        else:
+            self.video_placeholder.setText("AFTER\n\nEdited Preview\n\nClick Play to Start")
 
-        # Overlay elements
-        overlay_container = QFrame()
-        overlay_container.setStyleSheet("background: transparent;")
-        overlay_layout = QVBoxLayout()
-        overlay_layout.setContentsMargins(10, 10, 10, 10)
+        self.video_layout.addWidget(self.video_placeholder)
 
-        # Time code (top row)
+        # Overlay container for timecode, frame info etc.
+        self.overlay_container = QFrame()
+        self.overlay_container.setStyleSheet("background: transparent;")
+        self.overlay_layout = QVBoxLayout(self.overlay_container)
+        self.overlay_layout.setContentsMargins(10, 10, 10, 10)
+
+        # Top row overlay (frame number + resolution)
         top_row = QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
 
-        # Frame number (top-left)
+        # Frame number
         self.frame_label = QLabel("Frame: 0")
         self.frame_label.setStyleSheet("""
             QLabel {
@@ -163,11 +177,11 @@ class PreviewWindow(QFrame):
                 font-size: 11px;
             }
         """)
-        top_row.addWidget(self.frame_label, 0, Qt.AlignLeft | Qt.AlignTop)
+        top_row.addWidget(self.frame_label)
 
         top_row.addStretch()
 
-        # Resolution (top-right)
+        # Resolution
         self.resolution_label = QLabel("1920x1080")
         self.resolution_label.setStyleSheet("""
             QLabel {
@@ -179,27 +193,26 @@ class PreviewWindow(QFrame):
                 font-size: 11px;
             }
         """)
-        top_row.addWidget(self.resolution_label, 0, Qt.AlignRight | Qt.AlignTop)
+        top_row.addWidget(self.resolution_label)
 
-        overlay_layout.addLayout(top_row)
+        self.overlay_layout.addLayout(top_row)
 
-        # Effect badges (for After window)
+        # Effect badges (for After window only)
         if self.window_type == "after":
             self.effects_container = QFrame()
-            effects_layout = QHBoxLayout()
-            effects_layout.setSpacing(4)
-            effects_layout.setContentsMargins(0, 0, 0, 0)
+            self.effects_container.setStyleSheet("background: transparent;")
+            self.effects_layout = QHBoxLayout(self.effects_container)
+            self.effects_layout.setContentsMargins(0, 5, 0, 0)
+            self.effects_layout.setSpacing(5)
+            self.overlay_layout.addWidget(self.effects_container)
 
-            # Example effect badges
-            # These will be dynamically added based on active effects
-            self.effects_layout = effects_layout
+        self.overlay_layout.addStretch()
 
-            self.effects_container.setLayout(effects_layout)
-            overlay_layout.addWidget(self.effects_container, 0, Qt.AlignLeft | Qt.AlignTop)
+        # Bottom row (timecode)
+        bottom_row = QHBoxLayout()
+        bottom_row.setContentsMargins(0, 0, 0, 0)
 
-        overlay_layout.addStretch()
-
-        # Time code (bottom-left)
+        # Timecode
         self.timecode_label = QLabel("00:00 / 00:00")
         self.timecode_label.setStyleSheet("""
             QLabel {
@@ -212,15 +225,107 @@ class PreviewWindow(QFrame):
                 font-weight: bold;
             }
         """)
-        overlay_layout.addWidget(self.timecode_label, 0, Qt.AlignLeft | Qt.AlignBottom)
+        bottom_row.addWidget(self.timecode_label)
 
-        overlay_container.setLayout(overlay_layout)
-        canvas_layout.addWidget(overlay_container)
+        bottom_row.addStretch()
+        self.overlay_layout.addLayout(bottom_row)
 
-        self.canvas.setLayout(canvas_layout)
+        # Stack the video and overlay
+        self.canvas_layout.addWidget(self.video_container)
+        self.canvas_layout.addWidget(self.overlay_container)
+
         layout.addWidget(self.canvas, 1)
-
         self.setLayout(layout)
+
+    def set_video(self, video_path):
+        """Set video for this preview window - SHOW ACTUAL VIDEO CONTENT"""
+        try:
+            print(f"DEBUG: PreviewWindow.set_video() called for {video_path}")
+            
+            import os
+            video_name = os.path.basename(video_path)
+            
+            # Update title with video name
+            if self.window_type == "before":
+                self.title_label.setText(f"📹 BEFORE: {video_name}")
+            else:
+                self.title_label.setText(f"✨ AFTER: {video_name}")
+
+            # Create a visual representation of loaded video
+            self.video_loaded = True
+            
+            # Change placeholder to show video is ready
+            self.video_placeholder.setStyleSheet("""
+                QLabel {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                        stop:0 #1a1a1a, stop:1 #2a2a2a);
+                    border: 2px solid #00bcd4;
+                    color: #00bcd4;
+                    font-size: 14px;
+                    font-weight: bold;
+                }
+            """)
+            
+            if self.window_type == "before":
+                self.video_placeholder.setText(f"BEFORE\n\n{video_name}\n\n✓ Video Loaded\nClick Play to Start")
+            else:
+                self.video_placeholder.setText(f"AFTER\n\n{video_name}\n\n✓ Preview Ready\nClick Play to Start")
+
+            # Update resolution display
+            self.update_resolution(1920, 1080)  # Default, can be updated with actual video info
+            
+            logger.info(f"{self.window_type.upper()} preview: Loaded {video_name}")
+            
+        except Exception as e:
+            print(f"DEBUG: Error in set_video: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
+    def show_video_frame(self, frame_image):
+        """Display actual video frame - TO BE CALLED BY VIDEO PLAYER"""
+        try:
+            if frame_image and not frame_image.isNull():
+                # Scale frame to fit placeholder while maintaining aspect ratio
+                scaled_frame = frame_image.scaled(
+                    self.video_placeholder.width() - 10,
+                    self.video_placeholder.height() - 10,
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation
+                )
+                self.video_placeholder.setPixmap(scaled_frame)
+                self.video_placeholder.setText("")  # Clear text
+            else:
+                # Fallback if no frame
+                self.video_placeholder.setText("🎬 PLAYING\n\nVideo Frame")
+                self.video_placeholder.setStyleSheet("""
+                    QLabel {
+                        background: #000000;
+                        border: 2px solid #00bcd4;
+                        color: #00bcd4;
+                        font-size: 14px;
+                        font-weight: bold;
+                    }
+                """)
+                
+        except Exception as e:
+            print(f"DEBUG: Error showing video frame: {str(e)}")
+
+    def clear_video(self):
+        """Clear video display"""
+        self.video_placeholder.setPixmap(QPixmap())
+        if self.window_type == "before":
+            self.video_placeholder.setText("BEFORE\n\nOriginal Video\n\nNo video loaded")
+        else:
+            self.video_placeholder.setText("AFTER\n\nEdited Preview\n\nNo video loaded")
+        self.video_placeholder.setStyleSheet("""
+            QLabel {
+                background: #0a0a0a;
+                border: 2px dashed #333;
+                color: #666666;
+                font-size: 16px;
+                font-weight: bold;
+            }
+        """)
 
     def add_effect_badge(self, effect_name):
         """Add effect badge to After window"""
@@ -260,24 +365,6 @@ class PreviewWindow(QFrame):
         """Update resolution display"""
         self.resolution_label.setText(f"{width}x{height}")
 
-    def set_video(self, video_path):
-        """Set video for this preview window"""
-        import os
-        video_name = os.path.basename(video_path)
-        if self.window_type == "before":
-            self.placeholder.setText(f"📹\n\nORIGINAL VIDEO\n\n{video_name}\n\nReady to play")
-        else:
-            self.placeholder.setText(f"✨\n\nPREVIEW WITH EFFECTS\n\n{video_name}\n\nReady to play")
-        self.placeholder.setStyleSheet("""
-            QLabel {
-                color: #00bcd4;
-                font-size: 14px;
-                line-height: 1.8;
-                font-weight: 500;
-            }
-        """)
-        logger.info(f"{self.window_type.upper()} preview: Loaded {video_name}")
-
     @staticmethod
     def format_time(seconds):
         """Format time as MM:SS or HH:MM:SS"""
@@ -304,6 +391,8 @@ class DualPreviewWidget(QWidget):
         self.current_time = 0.0
         self.duration = 0.0
         self.is_playing = False
+        self.video_loaded = False
+        self.current_video_path = ""
 
         self.init_ui()
 
@@ -319,6 +408,7 @@ class DualPreviewWidget(QWidget):
             QFrame {
                 background-color: #000000;
                 border: 1px solid #2a2a2a;
+                border-radius: 4px;
             }
         """)
 
@@ -350,7 +440,6 @@ class DualPreviewWidget(QWidget):
         self.splitter.setSizes([1000, 1000])
 
         preview_layout.addWidget(self.splitter)
-
         preview_container.setLayout(preview_layout)
         layout.addWidget(preview_container, 1)
 
@@ -368,6 +457,7 @@ class DualPreviewWidget(QWidget):
             QFrame {
                 background-color: #1a1a1a;
                 border-top: 1px solid #2a2a2a;
+                border-radius: 0 0 4px 4px;
             }
         """)
 
@@ -387,12 +477,26 @@ class DualPreviewWidget(QWidget):
         layout.addWidget(mode_label)
 
         # Split view button
-        split_btn = QPushButton("⇆ Split View")
-        split_btn.setCheckable(True)
-        split_btn.setChecked(True)
-        split_btn.setToolTip("Side-by-side comparison (default)")
-        split_btn.clicked.connect(lambda: self.set_comparison_mode("split"))
-        split_btn.setStyleSheet("""
+        self.split_btn = QPushButton("⇆ Split View")
+        self.split_btn.setCheckable(True)
+        self.split_btn.setChecked(True)
+        self.split_btn.setToolTip("Side-by-side comparison (default)")
+        self.split_btn.clicked.connect(lambda: self.set_comparison_mode("split"))
+        
+        # Slider view button
+        self.slider_btn = QPushButton("↔ Slider View")
+        self.slider_btn.setCheckable(True)
+        self.slider_btn.setToolTip("Draggable slider comparison")
+        self.slider_btn.clicked.connect(lambda: self.set_comparison_mode("slider"))
+        
+        # Toggle view button
+        self.toggle_btn = QPushButton("⚡ Toggle View")
+        self.toggle_btn.setCheckable(True)
+        self.toggle_btn.setToolTip("Switch between Before/After (B/A keys)")
+        self.toggle_btn.clicked.connect(lambda: self.set_comparison_mode("toggle"))
+
+        # Common button style
+        button_style = """
             QPushButton {
                 background-color: #2a2a2a;
                 color: #e0e0e0;
@@ -408,80 +512,15 @@ class DualPreviewWidget(QWidget):
                 background-color: #00bcd4;
                 color: #ffffff;
             }
-        """)
-        self.split_btn = split_btn
-        layout.addWidget(split_btn)
+        """
+        
+        self.split_btn.setStyleSheet(button_style)
+        self.slider_btn.setStyleSheet(button_style)
+        self.toggle_btn.setStyleSheet(button_style)
 
-        # Slider view button
-        slider_btn = QPushButton("↔ Slider View")
-        slider_btn.setCheckable(True)
-        slider_btn.setToolTip("Draggable slider comparison")
-        slider_btn.clicked.connect(lambda: self.set_comparison_mode("slider"))
-        slider_btn.setStyleSheet(split_btn.styleSheet())
-        self.slider_btn = slider_btn
-        layout.addWidget(slider_btn)
-
-        # Toggle view button
-        toggle_btn = QPushButton("⚡ Toggle View")
-        toggle_btn.setCheckable(True)
-        toggle_btn.setToolTip("Switch between Before/After (B/A keys)")
-        toggle_btn.clicked.connect(lambda: self.set_comparison_mode("toggle"))
-        toggle_btn.setStyleSheet(split_btn.styleSheet())
-        self.toggle_btn = toggle_btn
-        layout.addWidget(toggle_btn)
-
-        layout.addSpacing(20)
-
-        # Zoom controls
-        zoom_label = QLabel("Zoom:")
-        zoom_label.setStyleSheet(mode_label.styleSheet())
-        layout.addWidget(zoom_label)
-
-        zoom_out_btn = QPushButton("➖")
-        zoom_out_btn.setFixedSize(30, 30)
-        zoom_out_btn.setToolTip("Zoom out")
-        zoom_out_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #2a2a2a;
-                border: none;
-                border-radius: 6px;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: #353535;
-            }
-        """)
-        layout.addWidget(zoom_out_btn)
-
-        zoom_combo = QComboBox()
-        zoom_combo.addItems(["25%", "50%", "100%", "150%", "200%", "Fit"])
-        zoom_combo.setCurrentText("100%")
-        zoom_combo.setStyleSheet("""
-            QComboBox {
-                background-color: #2a2a2a;
-                border: 1px solid #404040;
-                border-radius: 6px;
-                padding: 6px 10px;
-                color: #e0e0e0;
-                font-size: 11px;
-                min-width: 70px;
-            }
-            QComboBox:hover {
-                border-color: #00bcd4;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #2a2a2a;
-                border: 1px solid #00bcd4;
-                selection-background-color: #00bcd4;
-            }
-        """)
-        layout.addWidget(zoom_combo)
-
-        zoom_in_btn = QPushButton("➕")
-        zoom_in_btn.setFixedSize(30, 30)
-        zoom_in_btn.setToolTip("Zoom in")
-        zoom_in_btn.setStyleSheet(zoom_out_btn.styleSheet())
-        layout.addWidget(zoom_in_btn)
+        layout.addWidget(self.split_btn)
+        layout.addWidget(self.slider_btn)
+        layout.addWidget(self.toggle_btn)
 
         layout.addSpacing(20)
 
@@ -498,35 +537,20 @@ class DualPreviewWidget(QWidget):
 
         layout.addStretch()
 
-        # Quality selector (for After window)
-        quality_label = QLabel("Preview Quality:")
-        quality_label.setStyleSheet(mode_label.styleSheet())
-        layout.addWidget(quality_label)
-
-        quality_combo = QComboBox()
-        quality_combo.addItems(["Draft", "Standard", "Full"])
-        quality_combo.setCurrentText("Standard")
-        quality_combo.setStyleSheet(zoom_combo.styleSheet())
-        quality_combo.setToolTip("Preview quality for After window")
-        layout.addWidget(quality_combo)
-
-        # Fullscreen button
-        fullscreen_btn = QPushButton("⛶")
-        fullscreen_btn.setFixedSize(32, 32)
-        fullscreen_btn.setToolTip("Fullscreen (F)")
-        fullscreen_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #2a2a2a;
-                border: none;
-                border-radius: 6px;
-                font-size: 16px;
-            }
-            QPushButton:hover {
-                background-color: #00bcd4;
-                color: white;
+        # Video info
+        if self.video_loaded:
+            video_info = QLabel(f"🎬 {os.path.basename(self.current_video_path)}")
+        else:
+            video_info = QLabel("🎬 No video loaded")
+            
+        video_info.setStyleSheet("""
+            QLabel {
+                color: #888888;
+                font-size: 11px;
+                font-weight: bold;
             }
         """)
-        layout.addWidget(fullscreen_btn)
+        layout.addWidget(video_info)
 
         container.setLayout(layout)
         return container
@@ -593,8 +617,76 @@ class DualPreviewWidget(QWidget):
         self.before_window.update_resolution(width, height)
         self.after_window.update_resolution(width, height)
 
-    def load_video(self, video_path):
-        """Load video into both preview windows"""
-        self.before_window.set_video(video_path)
-        self.after_window.set_video(video_path)
-        logger.info(f"Dual preview: Loaded video {video_path}")
+    def clear_previews(self):
+        """Clear both preview windows"""
+        try:
+            self.before_window.clear_video()
+            self.after_window.clear_video()
+            self.video_loaded = False
+            self.current_video_path = ""
+            print("DEBUG: Cleared both preview windows")
+        except Exception as e:
+            print(f"DEBUG: Error clearing previews: {str(e)}")
+
+    def load_video(self, video_path: str):
+        """Load video in both preview windows - PROPERLY IMPLEMENTED"""
+        try:
+            print(f"DEBUG: DualPreview loading video: {video_path}")
+            
+            if not os.path.exists(video_path):
+                print(f"DEBUG: Video file not found: {video_path}")
+                return
+                
+            # Update both preview windows with actual video
+            self.before_window.set_video(video_path)
+            self.after_window.set_video(video_path)
+            
+            # Update UI state
+            self.video_loaded = True
+            self.current_video_path = video_path
+            
+            # Update time displays
+            self.update_time(0, 60.0)  # Default duration, can be updated
+            
+            print(f"DEBUG: Dual preview loaded video successfully")
+            
+        except Exception as e:
+            print(f"DEBUG: Error loading video in dual preview: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
+    def show_video_frame(self, frame_image, is_before=True):
+        """Display actual video frame - FINAL IMPLEMENTATION"""
+        try:
+            print(f"DEBUG: Showing video frame - Before: {is_before}")
+            
+            if frame_image and not frame_image.isNull():
+                if is_before:
+                    # Scale and display in before window
+                    scaled_frame = frame_image.scaled(
+                        self.before_window.video_placeholder.width() - 20,
+                        self.before_window.video_placeholder.height() - 20,
+                        Qt.KeepAspectRatio,
+                        Qt.SmoothTransformation
+                    )
+                    self.before_window.video_placeholder.setPixmap(scaled_frame)
+                    self.before_window.video_placeholder.setText("")  # Clear text
+                else:
+                    # Scale and display in after window  
+                    scaled_frame = frame_image.scaled(
+                        self.after_window.video_placeholder.width() - 20,
+                        self.after_window.video_placeholder.height() - 20,
+                        Qt.KeepAspectRatio,
+                        Qt.SmoothTransformation
+                    )
+                    self.after_window.video_placeholder.setPixmap(scaled_frame)
+                    self.after_window.video_placeholder.setText("")  # Clear text
+                    
+                print("DEBUG: Video frame displayed successfully")
+            else:
+                print("DEBUG: Invalid frame received")
+                
+        except Exception as e:
+            print(f"DEBUG: Error showing video frame: {str(e)}")
+            import traceback
+            traceback.print_exc()

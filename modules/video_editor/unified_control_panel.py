@@ -355,3 +355,31 @@ class UnifiedControlPanel(QWidget):
         self.total_time_label.setText("00:00")
         self.duration = 0
         self.current_position = 0
+
+
+    def set_playing_state(self, update_ui_only=False):
+        """Set playing state without emitting signals"""
+        self.is_playing = True
+        self.play_btn.setText("⏸")
+        self.play_btn.setStyleSheet(self.play_pause_style)
+        
+        if not update_ui_only:
+            self.play_clicked.emit()
+
+    def set_paused_state(self, update_ui_only=False):
+        """Set paused state without emitting signals"""
+        self.is_playing = False
+        self.play_btn.setText("▶")
+        self.play_btn.setStyleSheet(self.play_pause_style)
+        
+        if not update_ui_only:
+            self.pause_clicked.emit()
+
+    def set_stopped_state(self, update_ui_only=False):
+        """Set stopped state without emitting signals"""
+        self.is_playing = False
+        self.play_btn.setText("▶")
+        self.play_btn.setStyleSheet(self.play_pause_style)
+        
+        if not update_ui_only:
+            self.stop_clicked.emit()

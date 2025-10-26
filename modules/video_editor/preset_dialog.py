@@ -188,9 +188,19 @@ class PresetManagerDialog(QDialog):
             self.add_default_presets()
             preset_names = self.preset_manager.list_presets()
 
-        for preset_name in preset_names:
-            item = QListWidgetItem(f"📦 {preset_name}")
-            item.setData(Qt.UserRole, preset_name)
+        for preset_summary in preset_names:
+            # Extract preset name from summary dict
+            preset_name = preset_summary['name']
+            preset_desc = preset_summary.get('description', '')
+            ops_count = preset_summary.get('operations_count', 0)
+
+            # Create display text
+            display_text = f"📦 {preset_name}"
+            if preset_desc:
+                display_text += f"\n   {preset_desc}"
+
+            item = QListWidgetItem(display_text)
+            item.setData(Qt.UserRole, preset_name)  # Store just the name string
             self.preset_list.addItem(item)
 
         self.info_label.setText(f"Found {len(preset_names)} preset(s)")

@@ -8,6 +8,9 @@ Step 2-N: Add functionality incrementally
 import os
 import sys
 from typing import Optional, List, Dict
+from pathlib import Path
+from dataclasses import dataclass
+from datetime import datetime
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
@@ -16,15 +19,42 @@ from PyQt5.QtWidgets import (
     QCheckBox, QTextEdit, QFrame, QGridLayout, QScrollArea,
     QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
     QTabWidget, QMenuBar, QMenu, QAction, QToolBar, QStatusBar,
-    QTreeWidget, QTreeWidgetItem
+    QTreeWidget, QTreeWidgetItem, QShortcut
 )
-from PyQt5.QtCore import Qt, QSize, QTimer
-from PyQt5.QtGui import QFont, QColor, QIcon, QPixmap, QPalette
+from PyQt5.QtCore import Qt, QSize, QTimer, QThread, pyqtSignal, QUrl
+from PyQt5.QtGui import QFont, QColor, QIcon, QPixmap, QPalette, QKeySequence, QDragEnterEvent, QDropEvent
+from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
+from PyQt5.QtMultimediaWidgets import QVideoWidget
 
 from modules.logging.logger import get_logger
 from modules.video_editor.preset_manager import PresetManager, EditingPreset
 
 logger = get_logger(__name__)
+
+
+# Supported file formats
+VIDEO_FORMATS = ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.flv', '.wmv', '.m4v']
+AUDIO_FORMATS = ['.mp3', '.wav', '.aac', '.m4a', '.ogg', '.wma', '.flac']
+IMAGE_FORMATS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg']
+
+
+@dataclass
+class MediaItem:
+    """Represents an imported media file"""
+    file_path: str
+    file_name: str
+    file_type: str  # 'video', 'audio', 'image'
+    file_size: int
+    duration: float = 0.0  # For video/audio
+    width: int = 0  # For video/image
+    height: int = 0  # For video/image
+    thumbnail: Optional[QPixmap] = None
+    fps: float = 0.0  # For video
+    imported_at: datetime = None
+
+    def __post_init__(self):
+        if self.imported_at is None:
+            self.imported_at = datetime.now()
 
 
 class CapCutEditor(QWidget):
@@ -40,10 +70,15 @@ class CapCutEditor(QWidget):
         # State
         self.preset_manager = PresetManager()
         self.current_project = None
-        self.media_items = []
+        self.media_items: List[MediaItem] = []
         self.timeline_clips = []
+        self.current_video_path = None
+
+        # Enable drag and drop
+        self.setAcceptDrops(True)
 
         self.init_ui()
+        self.setup_keyboard_shortcuts()
 
     def init_ui(self):
         """Initialize complete UI layout"""
@@ -428,6 +463,12 @@ class CapCutEditor(QWidget):
         filters_btn.clicked.connect(self.open_filters_feature)
         layout.addWidget(filters_btn)
 
+        preset_btn = QPushButton("📦 Presets")
+        preset_btn.setStyleSheet(feature_style)
+        preset_btn.setToolTip("Manage and apply editing presets")
+        preset_btn.clicked.connect(self.open_preset_manager)
+        layout.addWidget(preset_btn)
+
         bulk_btn = QPushButton("🧩 Bulk Processing")
         bulk_btn.setStyleSheet(feature_style)
         bulk_btn.setToolTip("Process multiple videos")
@@ -610,6 +651,7 @@ class CapCutEditor(QWidget):
             }
         """)
         self.media_list.setToolTip("Drag media to timeline to add to project")
+        self.media_list.itemDoubleClicked.connect(self.preview_media_item)
         layout.addWidget(self.media_list, 1)
 
         # Media info
@@ -637,10 +679,22 @@ class CapCutEditor(QWidget):
         preview_layout = QVBoxLayout()
         preview_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Preview Label
-        self.preview_label = QLabel()
-        self.preview_label.setAlignment(Qt.AlignCenter)
-        self.preview_label.setStyleSheet("""
+        # Video Widget for playback
+        self.video_widget = QVideoWidget()
+        self.video_widget.setStyleSheet("background-color: #000000;")
+        self.video_widget.setMinimumSize(800, 450)
+
+        # Media Player
+        self.media_player = QMediaPlayer(None, QMediaPlayer.VideoSurface)
+        self.media_player.setVideoOutput(self.video_widget)
+        self.media_player.positionChanged.connect(self.update_playback_position)
+        self.media_player.durationChanged.connect(self.update_playback_duration)
+        self.media_player.stateChanged.connect(self.update_playback_state)
+
+        # Placeholder label (shown when no video)
+        self.preview_placeholder = QLabel()
+        self.preview_placeholder.setAlignment(Qt.AlignCenter)
+        self.preview_placeholder.setStyleSheet("""
             QLabel {
                 background-color: #000000;
                 color: #666666;
@@ -648,9 +702,13 @@ class CapCutEditor(QWidget):
                 border: 2px dashed #2a2a2a;
             }
         """)
-        self.preview_label.setMinimumSize(800, 450)
-        self.preview_label.setText("🎬\n\nNo video loaded\n\nImport media and add to timeline")
-        preview_layout.addWidget(self.preview_label)
+        self.preview_placeholder.setMinimumSize(800, 450)
+        self.preview_placeholder.setText("🎬\n\nNo video loaded\n\nImport media and double-click to preview")
+
+        # Stack them (show placeholder by default, video when playing)
+        preview_layout.addWidget(self.preview_placeholder)
+        preview_layout.addWidget(self.video_widget)
+        self.video_widget.hide()  # Hidden by default
 
         preview_container.setLayout(preview_layout)
         layout.addWidget(preview_container)
@@ -1202,6 +1260,18 @@ class CapCutEditor(QWidget):
         )
         logger.info("Filters feature clicked")
 
+    def open_preset_manager(self):
+        """Open preset manager dialog"""
+        from modules.video_editor.preset_dialog import PresetManagerDialog
+        try:
+            dialog = PresetManagerDialog(self, self.preset_manager)
+            if dialog.exec_():
+                # Preset was selected/applied
+                self.status_label.setText("Preset applied successfully")
+        except Exception as e:
+            logger.error(f"Error opening preset manager: {e}")
+            self.status_label.setText("Error opening preset manager")
+
     def export_video(self):
         """Export video - Placeholder"""
         self.status_label.setText("Export dialog - Coming soon")
@@ -1209,19 +1279,282 @@ class CapCutEditor(QWidget):
         logger.info("Export clicked")
 
     def import_media(self):
-        """Import media - Placeholder"""
-        self.status_label.setText("Import media - Coming soon")
-        QMessageBox.information(self, "Import", "Import functionality will be added next!")
-        logger.info("Import media clicked")
+        """Import media files via file dialog"""
+        # Define file filter
+        file_filter = "Media Files ("
+        file_filter += " ".join([f"*{ext}" for ext in VIDEO_FORMATS + AUDIO_FORMATS + IMAGE_FORMATS])
+        file_filter += ");;Video Files ("
+        file_filter += " ".join([f"*{ext}" for ext in VIDEO_FORMATS])
+        file_filter += ");;Audio Files ("
+        file_filter += " ".join([f"*{ext}" for ext in AUDIO_FORMATS])
+        file_filter += ");;Image Files ("
+        file_filter += " ".join([f"*{ext}" for ext in IMAGE_FORMATS])
+        file_filter += ");;All Files (*.*)"
 
-    def toggle_playback(self):
-        """Toggle play/pause - Placeholder"""
-        if self.play_btn.text() == "▶":
+        # Open file dialog
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Import Media Files",
+            "",
+            file_filter
+        )
+
+        if file_paths:
+            self.process_imported_files(file_paths)
+
+    def process_imported_files(self, file_paths: List[str]):
+        """Process and add imported files to media library"""
+        imported_count = 0
+        for file_path in file_paths:
+            try:
+                media_item = self.create_media_item(file_path)
+                if media_item:
+                    self.media_items.append(media_item)
+                    self.add_media_to_list(media_item)
+                    imported_count += 1
+            except Exception as e:
+                logger.error(f"Error importing file {file_path}: {e}")
+                QMessageBox.warning(
+                    self,
+                    "Import Error",
+                    f"Failed to import:\n{os.path.basename(file_path)}\n\nError: {str(e)}"
+                )
+
+        if imported_count > 0:
+            self.status_label.setText(f"Imported {imported_count} file(s)")
+            self.media_info_label.setText(f"{len(self.media_items)} item(s) in library")
+        else:
+            self.status_label.setText("No files imported")
+
+    def create_media_item(self, file_path: str) -> Optional[MediaItem]:
+        """Create a MediaItem from a file path"""
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"File not found: {file_path}")
+
+        path = Path(file_path)
+        file_ext = path.suffix.lower()
+        file_name = path.name
+        file_size = path.stat().st_size
+
+        # Determine file type
+        if file_ext in VIDEO_FORMATS:
+            file_type = 'video'
+        elif file_ext in AUDIO_FORMATS:
+            file_type = 'audio'
+        elif file_ext in IMAGE_FORMATS:
+            file_type = 'image'
+        else:
+            raise ValueError(f"Unsupported file format: {file_ext}")
+
+        # Create media item
+        media_item = MediaItem(
+            file_path=str(file_path),
+            file_name=file_name,
+            file_type=file_type,
+            file_size=file_size
+        )
+
+        # Get metadata based on type
+        try:
+            if file_type == 'video':
+                self.extract_video_metadata(media_item)
+            elif file_type == 'audio':
+                self.extract_audio_metadata(media_item)
+            elif file_type == 'image':
+                self.extract_image_metadata(media_item)
+        except Exception as e:
+            logger.warning(f"Could not extract metadata for {file_name}: {e}")
+
+        return media_item
+
+    def extract_video_metadata(self, media_item: MediaItem):
+        """Extract metadata from video file using moviepy"""
+        try:
+            from moviepy.editor import VideoFileClip
+
+            clip = VideoFileClip(media_item.file_path)
+            media_item.duration = clip.duration
+            media_item.width = clip.w
+            media_item.height = clip.h
+            media_item.fps = clip.fps
+
+            # Generate thumbnail from first frame
+            try:
+                frame = clip.get_frame(0)
+                from PIL import Image
+                import numpy as np
+
+                img = Image.fromarray(frame)
+                # Resize to thumbnail
+                img.thumbnail((160, 90), Image.Resampling.LANCZOS)
+
+                # Convert to QPixmap
+                img_bytes = img.tobytes('raw', 'RGB')
+                qimage = QPixmap.fromImage(
+                    QPixmap(img.size[0], img.size[1])
+                )
+                media_item.thumbnail = qimage
+            except Exception as e:
+                logger.warning(f"Could not generate thumbnail: {e}")
+
+            clip.close()
+        except Exception as e:
+            logger.error(f"Error extracting video metadata: {e}")
+            raise
+
+    def extract_audio_metadata(self, media_item: MediaItem):
+        """Extract metadata from audio file"""
+        try:
+            from moviepy.editor import AudioFileClip
+
+            clip = AudioFileClip(media_item.file_path)
+            media_item.duration = clip.duration
+            clip.close()
+        except Exception as e:
+            logger.error(f"Error extracting audio metadata: {e}")
+            raise
+
+    def extract_image_metadata(self, media_item: MediaItem):
+        """Extract metadata from image file"""
+        try:
+            from PIL import Image
+
+            img = Image.open(media_item.file_path)
+            media_item.width, media_item.height = img.size
+
+            # Generate thumbnail
+            img.thumbnail((160, 90), Image.Resampling.LANCZOS)
+            img_bytes = img.tobytes('raw', img.mode)
+
+            # For now, skip thumbnail - will implement later if needed
+
+        except Exception as e:
+            logger.error(f"Error extracting image metadata: {e}")
+            raise
+
+    def add_media_to_list(self, media_item: MediaItem):
+        """Add media item to the list widget"""
+        # Format file size
+        size_mb = media_item.file_size / (1024 * 1024)
+        size_str = f"{size_mb:.1f} MB" if size_mb < 1024 else f"{size_mb/1024:.1f} GB"
+
+        # Format duration
+        duration_str = ""
+        if media_item.duration > 0:
+            mins, secs = divmod(int(media_item.duration), 60)
+            duration_str = f" | {mins:02d}:{secs:02d}"
+
+        # Format resolution
+        res_str = ""
+        if media_item.width > 0 and media_item.height > 0:
+            res_str = f" | {media_item.width}x{media_item.height}"
+
+        # Create list item
+        icon_map = {'video': '🎬', 'audio': '🎵', 'image': '🖼️'}
+        icon = icon_map.get(media_item.file_type, '📄')
+
+        item_text = f"{icon} {media_item.file_name}\n{size_str}{duration_str}{res_str}"
+
+        list_item = QListWidgetItem(item_text)
+        list_item.setData(Qt.UserRole, media_item)
+
+        self.media_list.addItem(list_item)
+
+    def preview_media_item(self, item: QListWidgetItem):
+        """Preview a media item when double-clicked"""
+        media_item: MediaItem = item.data(Qt.UserRole)
+
+        if media_item.file_type == 'video':
+            # Load video for preview
+            self.load_video_preview(media_item.file_path)
+            self.video_title_input.setText(media_item.file_name)
+            self.current_video_path = media_item.file_path
+            self.status_label.setText(f"Loaded: {media_item.file_name}")
+        elif media_item.file_type == 'audio':
+            # Load audio for preview
+            self.load_audio_preview(media_item.file_path)
+            self.video_title_input.setText(media_item.file_name)
+            self.status_label.setText(f"Loaded audio: {media_item.file_name}")
+        elif media_item.file_type == 'image':
+            self.status_label.setText(f"Image preview - Coming soon: {media_item.file_name}")
+
+    def load_video_preview(self, video_path: str):
+        """Load a video file into the media player"""
+        try:
+            # Hide placeholder, show video widget
+            self.preview_placeholder.hide()
+            self.video_widget.show()
+
+            # Load video
+            media_content = QMediaContent(QUrl.fromLocalFile(video_path))
+            self.media_player.setMedia(media_content)
+
+            # Auto-play
+            self.media_player.play()
+
+            logger.info(f"Loaded video: {video_path}")
+        except Exception as e:
+            logger.error(f"Error loading video: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to load video:\n{str(e)}")
+
+    def load_audio_preview(self, audio_path: str):
+        """Load an audio file into the media player"""
+        try:
+            # Keep placeholder visible (no video to show)
+            self.preview_placeholder.show()
+            self.video_widget.hide()
+
+            # Load audio
+            media_content = QMediaContent(QUrl.fromLocalFile(audio_path))
+            self.media_player.setMedia(media_content)
+
+            # Auto-play
+            self.media_player.play()
+
+            logger.info(f"Loaded audio: {audio_path}")
+        except Exception as e:
+            logger.error(f"Error loading audio: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to load audio:\n{str(e)}")
+
+    def update_playback_position(self, position: int):
+        """Update scrubber position when media position changes"""
+        if self.media_player.duration() > 0:
+            # Update scrubber
+            self.scrubber_slider.setValue(int(position * 100 / self.media_player.duration()))
+
+            # Update time label
+            secs = position // 1000
+            mins, secs = divmod(secs, 60)
+            hrs, mins = divmod(mins, 60)
+            self.current_time_label.setText(f"{hrs:02d}:{mins:02d}:{secs:02d}")
+
+    def update_playback_duration(self, duration: int):
+        """Update total duration label"""
+        if duration > 0:
+            secs = duration // 1000
+            mins, secs = divmod(secs, 60)
+            hrs, mins = divmod(mins, 60)
+            self.total_time_label.setText(f"{hrs:02d}:{mins:02d}:{secs:02d}")
+            self.scrubber_slider.setMaximum(100)
+
+    def update_playback_state(self, state):
+        """Update UI when playback state changes"""
+        if state == QMediaPlayer.PlayingState:
             self.play_btn.setText("⏸")
             self.status_label.setText("Playing...")
-        else:
+        elif state == QMediaPlayer.PausedState:
             self.play_btn.setText("▶")
             self.status_label.setText("Paused")
+        elif state == QMediaPlayer.StoppedState:
+            self.play_btn.setText("▶")
+            self.status_label.setText("Stopped")
+
+    def toggle_playback(self):
+        """Toggle play/pause"""
+        if self.media_player.state() == QMediaPlayer.PlayingState:
+            self.media_player.pause()
+        else:
+            self.media_player.play()
 
     def apply_quick_preset(self, preset_id):
         """Apply quick preset - Placeholder"""
@@ -1258,3 +1591,49 @@ class CapCutEditor(QWidget):
             self.back_callback()
         else:
             self.close()
+
+    # ==================== DRAG AND DROP ====================
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        """Handle drag enter event"""
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            self.status_label.setText("Drop files to import...")
+        else:
+            event.ignore()
+
+    def dropEvent(self, event: QDropEvent):
+        """Handle drop event"""
+        urls = event.mimeData().urls()
+        file_paths = []
+
+        for url in urls:
+            if url.isLocalFile():
+                file_path = url.toLocalFile()
+                file_paths.append(file_path)
+
+        if file_paths:
+            self.process_imported_files(file_paths)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    # ==================== KEYBOARD SHORTCUTS ====================
+
+    def setup_keyboard_shortcuts(self):
+        """Setup keyboard shortcuts for the editor"""
+        # Import
+        QShortcut(QKeySequence("Ctrl+I"), self, self.import_media)
+
+        # Playback
+        QShortcut(QKeySequence(Qt.Key_Space), self, self.toggle_playback)
+
+        # Export
+        QShortcut(QKeySequence("Ctrl+E"), self, self.export_video)
+
+        # Save/Open (placeholders for now)
+        QShortcut(QKeySequence("Ctrl+S"), self, lambda: self.status_label.setText("Save project - Coming soon"))
+        QShortcut(QKeySequence("Ctrl+N"), self, lambda: self.status_label.setText("New project - Coming soon"))
+        QShortcut(QKeySequence("Ctrl+O"), self, lambda: self.status_label.setText("Open project - Coming soon"))
+
+        logger.info("Keyboard shortcuts initialized")

@@ -28,6 +28,7 @@ from PyQt5.QtMultimediaWidgets import QVideoWidget
 
 from modules.logging.logger import get_logger
 from modules.video_editor.preset_manager import PresetManager, EditingPreset
+from modules.video_editor.timeline_widget import TimelineWidget
 
 logger = get_logger(__name__)
 
@@ -121,7 +122,9 @@ class CapCutEditor(QWidget):
         main_layout.addWidget(content_splitter, 1)
 
         # 3. TIMELINE SECTION (Bottom)
-        main_layout.addWidget(self.create_timeline_section())
+        self.timeline_widget = TimelineWidget()
+        self.timeline_widget.setMinimumHeight(250)
+        main_layout.addWidget(self.timeline_widget)
 
         # 4. FOOTER STATUS BAR
         main_layout.addWidget(self.create_footer())
@@ -934,223 +937,6 @@ class CapCutEditor(QWidget):
 
         panel.setLayout(layout)
         return panel
-
-    def create_timeline_section(self):
-        """Create bottom timeline section"""
-        timeline_container = QFrame()
-        timeline_container.setObjectName("darkPanel")
-        timeline_container.setMinimumHeight(250)
-
-        layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        # Timeline Toolbar
-        toolbar = QFrame()
-        toolbar.setStyleSheet("background-color: #1e1e1e; border-bottom: 1px solid #2a2a2a;")
-        toolbar.setFixedHeight(45)
-
-        toolbar_layout = QHBoxLayout()
-        toolbar_layout.setContentsMargins(10, 5, 10, 5)
-        toolbar_layout.setSpacing(8)
-
-        # Timeline Tools
-        tools_label = QLabel("Tools:")
-        tools_label.setStyleSheet("color: #888888; font-weight: bold;")
-        toolbar_layout.addWidget(tools_label)
-
-        tool_buttons = [
-            ("✋ Select", "V"),
-            ("✂️ Split", "C"),
-            ("📏 Slip", "Y"),
-            ("🔍 Zoom", "Z")
-        ]
-
-        for name, shortcut in tool_buttons:
-            btn = QPushButton(name)
-            btn.setToolTip(f"Shortcut: {shortcut}")
-            btn.setCheckable(True)
-            toolbar_layout.addWidget(btn)
-
-        toolbar_layout.addSpacing(20)
-
-        # Zoom Controls
-        zoom_label = QLabel("Zoom:")
-        zoom_label.setStyleSheet("color: #888888; font-weight: bold;")
-        toolbar_layout.addWidget(zoom_label)
-
-        zoom_out_btn = QPushButton("➖")
-        zoom_out_btn.setMaximumWidth(35)
-        zoom_out_btn.setToolTip("Zoom out (Ctrl+-)")
-        toolbar_layout.addWidget(zoom_out_btn)
-
-        zoom_slider = QSlider(Qt.Horizontal)
-        zoom_slider.setRange(0, 100)
-        zoom_slider.setValue(50)
-        zoom_slider.setMaximumWidth(150)
-        toolbar_layout.addWidget(zoom_slider)
-
-        zoom_in_btn = QPushButton("➕")
-        zoom_in_btn.setMaximumWidth(35)
-        zoom_in_btn.setToolTip("Zoom in (Ctrl++)")
-        toolbar_layout.addWidget(zoom_in_btn)
-
-        fit_btn = QPushButton("⬌ Fit")
-        fit_btn.setToolTip("Fit to timeline (Shift+Z)")
-        toolbar_layout.addWidget(fit_btn)
-
-        toolbar_layout.addSpacing(20)
-
-        # Snap Toggle
-        snap_check = QCheckBox("🧲 Snap")
-        snap_check.setChecked(True)
-        snap_check.setToolTip("Enable snapping to clips/markers")
-        toolbar_layout.addWidget(snap_check)
-
-        # Marker
-        marker_btn = QPushButton("📍 Add Marker")
-        marker_btn.setToolTip("Add marker at playhead (M)")
-        toolbar_layout.addWidget(marker_btn)
-
-        toolbar_layout.addStretch()
-
-        # Track Management
-        add_track_btn = QPushButton("➕ Add Track")
-        add_track_btn.setToolTip("Add new video/audio track")
-        toolbar_layout.addWidget(add_track_btn)
-
-        toolbar.setLayout(toolbar_layout)
-        layout.addWidget(toolbar)
-
-        # Timeline Tracks Area
-        tracks_scroll = QScrollArea()
-        tracks_scroll.setWidgetResizable(True)
-        tracks_scroll.setFrameShape(QFrame.NoFrame)
-
-        tracks_widget = QWidget()
-        tracks_layout = QVBoxLayout()
-        tracks_layout.setContentsMargins(0, 0, 0, 0)
-        tracks_layout.setSpacing(2)
-
-        # Import Prompt (when empty)
-        import_prompt = QFrame()
-        import_prompt.setStyleSheet("""
-            QFrame {
-                background-color: #1a1a1a;
-                border: 2px dashed #3a3a3a;
-                border-radius: 8px;
-            }
-        """)
-        import_prompt.setMinimumHeight(150)
-
-        import_layout = QVBoxLayout()
-        import_layout.setAlignment(Qt.AlignCenter)
-
-        import_icon = QLabel("📥")
-        import_icon.setStyleSheet("font-size: 48px;")
-        import_icon.setAlignment(Qt.AlignCenter)
-        import_layout.addWidget(import_icon)
-
-        import_label = QLabel("Import media here or to the Media Library")
-        import_label.setStyleSheet("font-size: 14px; color: #888888; font-weight: bold;")
-        import_label.setAlignment(Qt.AlignCenter)
-        import_layout.addWidget(import_label)
-
-        import_hint = QLabel("Drag and drop files or click to browse")
-        import_hint.setStyleSheet("font-size: 12px; color: #666666;")
-        import_hint.setAlignment(Qt.AlignCenter)
-        import_layout.addWidget(import_hint)
-
-        import_prompt.setLayout(import_layout)
-        tracks_layout.addWidget(import_prompt)
-
-        # Sample Tracks (will be replaced with actual tracks)
-        track_names = ["Video 1", "Video 2", "Audio 1", "Text 1"]
-        for track_name in track_names:
-            track = self.create_timeline_track(track_name)
-            tracks_layout.addWidget(track)
-
-        tracks_layout.addStretch()
-        tracks_widget.setLayout(tracks_layout)
-        tracks_scroll.setWidget(tracks_widget)
-        layout.addWidget(tracks_scroll)
-
-        timeline_container.setLayout(layout)
-        return timeline_container
-
-    def create_timeline_track(self, name: str):
-        """Create a single timeline track"""
-        track = QFrame()
-        track.setStyleSheet("""
-            QFrame {
-                background-color: #1e1e1e;
-                border-bottom: 1px solid #2a2a2a;
-            }
-        """)
-        track.setFixedHeight(60)
-
-        layout = QHBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        # Track header
-        header = QFrame()
-        header.setStyleSheet("background-color: #252525; border-right: 1px solid #2a2a2a;")
-        header.setFixedWidth(120)
-
-        header_layout = QVBoxLayout()
-        header_layout.setContentsMargins(8, 4, 8, 4)
-        header_layout.setSpacing(4)
-
-        # Track name
-        name_label = QLabel(name)
-        name_label.setStyleSheet("font-weight: bold; color: #e0e0e0;")
-        header_layout.addWidget(name_label)
-
-        # Track controls
-        controls_layout = QHBoxLayout()
-        controls_layout.setSpacing(4)
-
-        lock_btn = QPushButton("🔒")
-        lock_btn.setMaximumWidth(25)
-        lock_btn.setMaximumHeight(25)
-        lock_btn.setCheckable(True)
-        lock_btn.setToolTip("Lock track")
-        controls_layout.addWidget(lock_btn)
-
-        visible_btn = QPushButton("👁")
-        visible_btn.setMaximumWidth(25)
-        visible_btn.setMaximumHeight(25)
-        visible_btn.setCheckable(True)
-        visible_btn.setChecked(True)
-        visible_btn.setToolTip("Toggle visibility")
-        controls_layout.addWidget(visible_btn)
-
-        mute_btn = QPushButton("🔇")
-        mute_btn.setMaximumWidth(25)
-        mute_btn.setMaximumHeight(25)
-        mute_btn.setCheckable(True)
-        mute_btn.setToolTip("Mute track")
-        controls_layout.addWidget(mute_btn)
-
-        controls_layout.addStretch()
-        header_layout.addLayout(controls_layout)
-
-        header.setLayout(header_layout)
-        layout.addWidget(header)
-
-        # Track content area (for clips)
-        content = QFrame()
-        content.setStyleSheet("""
-            QFrame {
-                background-color: #1a1a1a;
-                border: none;
-            }
-        """)
-        layout.addWidget(content, 1)
-
-        track.setLayout(layout)
-        return track
 
     def create_footer(self):
         """Create footer status bar"""

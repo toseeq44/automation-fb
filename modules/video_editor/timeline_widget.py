@@ -42,14 +42,29 @@ class TimelineClip(QGraphicsRectItem):
         color = color_map.get(clip_type, QColor(128, 128, 128))
 
         self.setBrush(QBrush(color))
-        self.setPen(QPen(QColor(255, 255, 255, 100), 1))
+        self.setPen(QPen(QColor(255, 255, 255, 180), 2))
 
-        # Add text label
-        self.label = QGraphicsTextItem(self)
-        self.label.setPlainText(clip_data.file_name if hasattr(clip_data, 'file_name') else "Clip")
-        self.label.setDefaultTextColor(QColor(255, 255, 255))
-        self.label.setFont(QFont("Arial", 9))
-        self.label.setPos(5, 5)
+        # Add text labels
+        file_name = clip_data.file_name if hasattr(clip_data, 'file_name') else "Clip"
+
+        self.name_label = QGraphicsTextItem(self)
+        self.name_label.setPlainText(file_name)
+        self.name_label.setDefaultTextColor(QColor(255, 255, 255))
+        self.name_label.setFont(QFont("Arial", 9, QFont.Bold))
+        self.name_label.setPos(5, 5)
+
+        # Duration label (if available)
+        if hasattr(clip_data, 'duration') and clip_data.duration > 0:
+            mins, secs = divmod(int(clip_data.duration), 60)
+            duration_text = f"{mins:02d}:{secs:02d}"
+
+            self.duration_label = QGraphicsTextItem(self)
+            self.duration_label.setPlainText(duration_text)
+            self.duration_label.setDefaultTextColor(QColor(255, 255, 255, 200))
+            self.duration_label.setFont(QFont("Arial", 8))
+            self.duration_label.setPos(5, 25)
+        else:
+            self.duration_label = None
 
         # Trim handles (invisible for now, will activate on hover)
         self.left_handle = None
@@ -60,7 +75,62 @@ class TimelineClip(QGraphicsRectItem):
         if change == QGraphicsRectItem.ItemPositionChange:
             # Snap to grid/clips if needed
             pass
+        elif change == QGraphicsRectItem.ItemSelectedChange:
+            # Highlight when selected
+            if value:  # Selected
+                self.setPen(QPen(QColor(0, 188, 212), 3))  # Cyan highlight
+            else:  # Deselected
+                self.setPen(QPen(QColor(255, 255, 255, 180), 2))
         return super().itemChange(change, value)
+
+
+class TimelineGraphicsView(QGraphicsView):
+    """Custom graphics view for timeline track with drop support"""
+
+    def __init__(self, track_widget, parent=None):
+        super().__init__(parent)
+        self.track_widget = track_widget
+        self.scene = QGraphicsScene(self)
+        self.setScene(self.scene)
+
+        # Set scene size (will expand as needed)
+        self.scene.setSceneRect(0, 0, 10000, 50)
+
+        # View settings
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setStyleSheet("background-color: #1a1a1a; border: none;")
+        self.setRenderHint(QPainter.Antialiasing)
+
+        # Enable drag and drop
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        """Accept drag events from media library"""
+        if event.mimeData().hasText():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        """Handle drag move"""
+        if event.mimeData().hasText():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        """Handle drop event - create clip on timeline"""
+        if event.mimeData().hasText():
+            # Get drop position
+            pos = event.pos()
+            scene_pos = self.mapToScene(pos)
+
+            # Notify track widget
+            self.track_widget.handle_drop(scene_pos.x(), event.mimeData())
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
 
 class TimelineTrack(QFrame):
@@ -71,6 +141,9 @@ class TimelineTrack(QFrame):
         self.track_name = track_name
         self.track_type = track_type
         self.clips = []
+        self.graphics_view = None
+        self.media_item_getter = None  # Function to get MediaItem by path
+        self.pixels_per_second = 30  # Default: 30 pixels = 1 second
 
         self.setFixedHeight(60)
         self.setStyleSheet("""
@@ -165,12 +238,51 @@ class TimelineTrack(QFrame):
         header.setLayout(header_layout)
         layout.addWidget(header)
 
-        # Track content area (will contain QGraphicsView for clips)
-        content = QFrame()
-        content.setStyleSheet("background-color: #1a1a1a; border: none;")
-        layout.addWidget(content, 1)
+        # Track content area (QGraphicsView for clips)
+        self.graphics_view = TimelineGraphicsView(self)
+        layout.addWidget(self.graphics_view, 1)
 
         self.setLayout(layout)
+
+    def handle_drop(self, x_position, mime_data):
+        """Handle media drop on this track"""
+        # Get file path from mime data
+        file_path = mime_data.text()
+
+        logger.info(f"Drop on track {self.track_name} at position {x_position}: {file_path}")
+
+        # Get media item using getter function
+        if self.media_item_getter:
+            media_item = self.media_item_getter(file_path)
+            if media_item:
+                self.create_clip_at_position(x_position, media_item)
+            else:
+                logger.warning(f"Could not find media item for: {file_path}")
+        else:
+            logger.error("No media_item_getter set for timeline track")
+
+    def create_clip_at_position(self, x_pos, media_item):
+        """Create a visual clip on the timeline"""
+        clip_height = 45
+
+        # Calculate clip width based on duration
+        if hasattr(media_item, 'duration') and media_item.duration > 0:
+            clip_width = media_item.duration * self.pixels_per_second
+        else:
+            # Default width for images or items without duration (3 seconds)
+            clip_width = 3 * self.pixels_per_second
+
+        # Minimum width for visibility
+        clip_width = max(clip_width, 50)
+
+        # Create clip
+        clip = TimelineClip(x_pos, 2, clip_width, clip_height, media_item)
+
+        # Add to scene
+        self.graphics_view.scene.addItem(clip)
+        self.clips.append(clip)
+
+        logger.info(f"Created clip on {self.track_name}: {media_item.file_name} (duration: {media_item.duration}s, width: {clip_width}px)")
 
 
 class TimelineWidget(QWidget):
@@ -190,6 +302,8 @@ class TimelineWidget(QWidget):
         self.playhead_position = 0.0
         self.zoom_level = 1.0
         self.snap_enabled = True
+        self.media_item_getter = None  # Function to get MediaItem by path
+        self.pixels_per_second = 30  # Default: 30 pixels = 1 second
 
         self.init_ui()
 
@@ -473,6 +587,14 @@ class TimelineWidget(QWidget):
         """Handle snap toggle"""
         self.snap_enabled = (state == Qt.Checked)
         logger.info(f"Snap enabled: {self.snap_enabled}")
+
+    def set_media_item_getter(self, getter_func):
+        """Set the function to get MediaItem by file path"""
+        self.media_item_getter = getter_func
+
+        # Pass to all tracks
+        for track in self.tracks:
+            track.media_item_getter = getter_func
 
     def add_clip(self, media_item, track_index=0):
         """Add a media clip to the timeline"""

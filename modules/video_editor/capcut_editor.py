@@ -21,8 +21,8 @@ from PyQt5.QtWidgets import (
     QTabWidget, QMenuBar, QMenu, QAction, QToolBar, QStatusBar,
     QTreeWidget, QTreeWidgetItem, QShortcut
 )
-from PyQt5.QtCore import Qt, QSize, QTimer, QThread, pyqtSignal, QUrl
-from PyQt5.QtGui import QFont, QColor, QIcon, QPixmap, QPalette, QKeySequence, QDragEnterEvent, QDropEvent
+from PyQt5.QtCore import Qt, QSize, QTimer, QThread, pyqtSignal, QUrl, QMimeData
+from PyQt5.QtGui import QFont, QColor, QIcon, QPixmap, QPalette, QKeySequence, QDragEnterEvent, QDropEvent, QDrag
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
 from PyQt5.QtMultimediaWidgets import QVideoWidget
 
@@ -56,6 +56,40 @@ class MediaItem:
     def __post_init__(self):
         if self.imported_at is None:
             self.imported_at = datetime.now()
+
+
+class DraggableMediaList(QListWidget):
+    """Custom list widget with enhanced drag support"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setDragEnabled(True)
+        self.setDragDropMode(QListWidget.DragOnly)
+
+    def startDrag(self, supportedActions):
+        """Custom drag start to include media item data"""
+        item = self.currentItem()
+        if not item:
+            return
+
+        media_item = item.data(Qt.UserRole)
+        if not media_item:
+            return
+
+        # Create drag object
+        drag = QDrag(self)
+        mime_data = QMimeData()
+
+        # Set file path as text
+        mime_data.setText(media_item.file_path)
+
+        # Also set as URL for compatibility
+        mime_data.setUrls([QUrl.fromLocalFile(media_item.file_path)])
+
+        drag.setMimeData(mime_data)
+
+        # Execute drag
+        drag.exec_(Qt.CopyAction)
 
 
 class CapCutEditor(QWidget):
@@ -124,6 +158,7 @@ class CapCutEditor(QWidget):
         # 3. TIMELINE SECTION (Bottom)
         self.timeline_widget = TimelineWidget()
         self.timeline_widget.setMinimumHeight(250)
+        self.timeline_widget.set_media_item_getter(self.get_media_item_by_path)
         main_layout.addWidget(self.timeline_widget)
 
         # 4. FOOTER STATUS BAR
@@ -626,8 +661,8 @@ class CapCutEditor(QWidget):
         """)
         layout.addWidget(search_box)
 
-        # Media List
-        self.media_list = QListWidget()
+        # Media List (draggable)
+        self.media_list = DraggableMediaList()
         self.media_list.setStyleSheet("""
             QListWidget {
                 background-color: #1e1e1e;
@@ -1250,7 +1285,15 @@ class CapCutEditor(QWidget):
         list_item = QListWidgetItem(item_text)
         list_item.setData(Qt.UserRole, media_item)
 
+        # Set tooltip for drag hint
+        list_item.setToolTip(f"Drag to timeline to add\nDouble-click to preview")
+
         self.media_list.addItem(list_item)
+
+        # Store reference for drag operations
+        if not hasattr(self, 'media_item_map'):
+            self.media_item_map = {}
+        self.media_item_map[media_item.file_path] = media_item
 
     def show_media_context_menu(self, position):
         """Show context menu for media items"""
@@ -1441,6 +1484,12 @@ class CapCutEditor(QWidget):
             "This feature will be fully implemented!"
         )
         logger.info("Title generator clicked")
+
+    def get_media_item_by_path(self, file_path: str) -> Optional[MediaItem]:
+        """Get media item by file path"""
+        if hasattr(self, 'media_item_map'):
+            return self.media_item_map.get(file_path)
+        return None
 
     def close_editor(self):
         """Close editor"""

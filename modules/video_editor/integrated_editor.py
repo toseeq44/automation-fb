@@ -327,17 +327,27 @@ class IntegratedVideoEditor(QWidget):
         # Get file size
         file_size = os.path.getsize(file_path)
 
-        # Create media item
+        # Create media item with explicit field values
+        from datetime import datetime
         media_item = MediaItem(
             file_path=file_path,
             file_name=file_name,
             file_type=file_type,
             file_size=file_size,
-            duration=0.0,  # TODO: Get actual duration from video
-            width=0,  # TODO: Get actual dimensions
+            duration=0.0,
+            width=0,
             height=0,
-            thumbnail=None,  # TODO: Generate thumbnail
-            fps=0.0
+            thumbnail=None,
+            fps=0.0,
+            imported_at=datetime.now(),
+            is_zoomed=False,
+            is_blurred=False,
+            blur_level="none",
+            is_ai_enhanced=False,
+            ai_features=[],
+            speed_factor=1.0,
+            is_processing=False,
+            is_new=True
         )
 
         return media_item

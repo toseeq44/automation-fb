@@ -163,6 +163,8 @@ class CapCutEditor(QWidget):
         self.timeline_widget = TimelineWidget()
         self.timeline_widget.setMinimumHeight(250)
         self.timeline_widget.set_media_item_getter(self.get_media_item_by_path)
+        # Connect timeline playhead to video seeking
+        self.timeline_widget.playhead_moved.connect(self.seek_video_to_position)
         main_layout.addWidget(self.timeline_widget)
 
         # 4. FOOTER STATUS BAR
@@ -1449,6 +1451,10 @@ class CapCutEditor(QWidget):
             hrs, mins = divmod(mins, 60)
             self.current_time_label.setText(f"{hrs:02d}:{mins:02d}:{secs:02d}")
 
+            # Update timeline playhead
+            time_seconds = position / 1000.0
+            self.timeline_widget.update_playhead(time_seconds)
+
     def update_playback_duration(self, duration: int):
         """Update total duration label"""
         if duration > 0:
@@ -1480,6 +1486,14 @@ class CapCutEditor(QWidget):
             self.custom_player.play()
         else:
             logger.warning(f"Unknown playback state: {current_state}")
+
+    def seek_video_to_position(self, time_seconds: float):
+        """Seek video to timeline position"""
+        if self.custom_player and self.custom_player.video_clip:
+            # Convert seconds to milliseconds
+            position_ms = int(time_seconds * 1000)
+            self.custom_player.seek(position_ms)
+            logger.info(f"Video seeked to {time_seconds:.2f}s via timeline click")
 
     def apply_quick_preset(self, preset_id):
         """Apply quick preset - Placeholder"""

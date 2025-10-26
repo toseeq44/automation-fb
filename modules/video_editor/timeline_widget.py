@@ -105,6 +105,10 @@ class TimelineGraphicsView(QGraphicsView):
         # Enable drag and drop
         self.setAcceptDrops(True)
 
+        # Playhead line
+        self.playhead_line = None
+        self.create_playhead()
+
     def dragEnterEvent(self, event):
         """Accept drag events from media library"""
         if event.mimeData().hasText():
@@ -131,6 +135,48 @@ class TimelineGraphicsView(QGraphicsView):
             event.acceptProposedAction()
         else:
             event.ignore()
+
+    def create_playhead(self):
+        """Create the playhead line"""
+        # Playhead line (red vertical line)
+        self.playhead_line = QGraphicsLineItem(0, 0, 0, 50)
+        self.playhead_line.setPen(QPen(QColor(255, 82, 82), 3))  # Red line, 3px thick
+        self.playhead_line.setZValue(1000)  # Always on top
+        self.scene.addItem(self.playhead_line)
+
+        # Playhead head (triangle at top)
+        from PyQt5.QtWidgets import QGraphicsPolygonItem
+        from PyQt5.QtGui import QPolygonF
+
+        triangle = QPolygonF([
+            QPointF(0, 0),
+            QPointF(-6, -10),
+            QPointF(6, -10)
+        ])
+        self.playhead_head = QGraphicsPolygonItem(triangle)
+        self.playhead_head.setBrush(QBrush(QColor(255, 82, 82)))
+        self.playhead_head.setPen(QPen(Qt.NoPen))
+        self.playhead_head.setZValue(1001)
+        self.scene.addItem(self.playhead_head)
+
+    def set_playhead_position(self, x_position):
+        """Update playhead position"""
+        if self.playhead_line:
+            self.playhead_line.setLine(x_position, 0, x_position, 50)
+            self.playhead_head.setPos(x_position, 0)
+
+    def mousePressEvent(self, event):
+        """Handle mouse clicks for seeking"""
+        if event.button() == Qt.LeftButton:
+            # Get click position in scene
+            scene_pos = self.mapToScene(event.pos())
+            x_pos = scene_pos.x()
+
+            # Notify track widget of click (for seeking)
+            if hasattr(self.track_widget, 'on_timeline_clicked'):
+                self.track_widget.on_timeline_clicked(x_pos)
+
+        super().mousePressEvent(event)
 
 
 class TimelineTrack(QFrame):
@@ -283,6 +329,26 @@ class TimelineTrack(QFrame):
         self.clips.append(clip)
 
         logger.info(f"Created clip on {self.track_name}: {media_item.file_name} (duration: {media_item.duration}s, width: {clip_width}px)")
+
+    def set_playhead_position(self, x_position):
+        """Update playhead position on this track"""
+        if self.graphics_view:
+            self.graphics_view.set_playhead_position(x_position)
+
+    def on_timeline_clicked(self, x_position):
+        """Handle timeline click for seeking"""
+        # Calculate time from x position
+        time_seconds = x_position / self.pixels_per_second
+
+        # Notify parent timeline widget
+        parent = self.parent()
+        while parent and not isinstance(parent, TimelineWidget):
+            parent = parent.parent()
+
+        if parent and isinstance(parent, TimelineWidget):
+            parent.on_timeline_seek(time_seconds)
+
+        logger.debug(f"Timeline clicked at x={x_position}, time={time_seconds}s")
 
 
 class TimelineWidget(QWidget):
@@ -611,3 +677,25 @@ class TimelineWidget(QWidget):
         if clip in self.clips:
             self.clips.remove(clip)
             logger.info("Removed clip from timeline")
+
+    def update_playhead(self, time_seconds):
+        """Update playhead position based on video time"""
+        # Convert time to x position (pixels)
+        x_position = time_seconds * self.pixels_per_second
+
+        # Update on all tracks
+        for track in self.tracks:
+            track.set_playhead_position(x_position)
+
+        # Store current position
+        self.playhead_position = time_seconds
+
+    def on_timeline_seek(self, time_seconds):
+        """Handle seek request from timeline click"""
+        logger.info(f"Seeking to {time_seconds}s")
+
+        # Update playhead visually
+        self.update_playhead(time_seconds)
+
+        # Emit signal for video player to seek
+        self.playhead_moved.emit(time_seconds)

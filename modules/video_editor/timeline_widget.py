@@ -7,7 +7,7 @@ Multi-track timeline with drag, trim, split functionality
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QGraphicsView, QGraphicsScene, QGraphicsRectItem, QGraphicsLineItem,
-    QGraphicsTextItem, QSlider, QCheckBox, QFrame, QScrollArea
+    QGraphicsTextItem, QSlider, QCheckBox, QFrame, QScrollArea, QMenu
 )
 from PyQt5.QtCore import Qt, QRectF, pyqtSignal, QPointF
 from PyQt5.QtGui import QColor, QPen, QBrush, QFont, QPainter
@@ -20,11 +20,12 @@ logger = get_logger(__name__)
 class TimelineClip(QGraphicsRectItem):
     """Represents a video/audio/image clip on the timeline"""
 
-    def __init__(self, x, y, width, height, clip_data, parent=None):
+    def __init__(self, x, y, width, height, clip_data, track=None, parent=None):
         super().__init__(x, y, width, height, parent)
 
         self.clip_data = clip_data  # MediaItem reference
         self.track_index = 0
+        self.track = track  # Reference to parent track
 
         # Visual properties
         self.setFlag(QGraphicsRectItem.ItemIsMovable, True)
@@ -83,6 +84,11 @@ class TimelineClip(QGraphicsRectItem):
                 self.setPen(QPen(QColor(255, 255, 255, 180), 2))
         return super().itemChange(change, value)
 
+    def delete(self):
+        """Delete this clip from the timeline"""
+        if self.track:
+            self.track.remove_clip(self)
+
 
 class TimelineGraphicsView(QGraphicsView):
     """Custom graphics view for timeline track with drop support"""
@@ -104,6 +110,9 @@ class TimelineGraphicsView(QGraphicsView):
 
         # Enable drag and drop
         self.setAcceptDrops(True)
+
+        # Enable keyboard focus for Delete key
+        self.setFocusPolicy(Qt.StrongFocus)
 
         # Playhead line
         self.playhead_line = None
@@ -172,11 +181,73 @@ class TimelineGraphicsView(QGraphicsView):
             scene_pos = self.mapToScene(event.pos())
             x_pos = scene_pos.x()
 
-            # Notify track widget of click (for seeking)
-            if hasattr(self.track_widget, 'on_timeline_clicked'):
-                self.track_widget.on_timeline_clicked(x_pos)
+            # Check if we clicked on a clip
+            item = self.scene.itemAt(scene_pos, self.transform())
+
+            # If not clicking on a clip, handle as seek
+            if not isinstance(item, TimelineClip):
+                # Notify track widget of click (for seeking)
+                if hasattr(self.track_widget, 'on_timeline_clicked'):
+                    self.track_widget.on_timeline_clicked(x_pos)
 
         super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):
+        """Handle keyboard shortcuts"""
+        if event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
+            # Delete selected clips
+            selected_items = self.scene.selectedItems()
+            for item in selected_items:
+                if isinstance(item, TimelineClip):
+                    item.delete()
+            logger.info(f"Deleted {len(selected_items)} clip(s)")
+        else:
+            super().keyPressEvent(event)
+
+    def contextMenuEvent(self, event):
+        """Show context menu for clips"""
+        # Get item at position
+        scene_pos = self.mapToScene(event.pos())
+        item = self.scene.itemAt(scene_pos, self.transform())
+
+        if isinstance(item, TimelineClip):
+            # Create context menu
+            menu = QMenu(self)
+            menu.setStyleSheet("""
+                QMenu {
+                    background-color: #252525;
+                    border: 1px solid #3a3a3a;
+                    border-radius: 8px;
+                    padding: 4px;
+                }
+                QMenu::item {
+                    padding: 8px 20px;
+                    color: #e0e0e0;
+                    border-radius: 4px;
+                }
+                QMenu::item:selected {
+                    background-color: #2a4a5a;
+                }
+            """)
+
+            # Delete action
+            delete_action = menu.addAction("🗑️ Delete Clip")
+            delete_action.triggered.connect(lambda: item.delete())
+
+            menu.addSeparator()
+
+            # Trim action (placeholder)
+            trim_action = menu.addAction("✂️ Trim Clip")
+            trim_action.setEnabled(False)  # Not implemented yet
+
+            # Split action (placeholder)
+            split_action = menu.addAction("✂️ Split Clip")
+            split_action.setEnabled(False)  # Not implemented yet
+
+            # Show menu
+            menu.exec_(event.globalPos())
+        else:
+            super().contextMenuEvent(event)
 
 
 class TimelineTrack(QFrame):
@@ -321,14 +392,26 @@ class TimelineTrack(QFrame):
         # Minimum width for visibility
         clip_width = max(clip_width, 50)
 
-        # Create clip
-        clip = TimelineClip(x_pos, 2, clip_width, clip_height, media_item)
+        # Create clip with track reference
+        clip = TimelineClip(x_pos, 2, clip_width, clip_height, media_item, track=self)
 
         # Add to scene
         self.graphics_view.scene.addItem(clip)
         self.clips.append(clip)
 
         logger.info(f"Created clip on {self.track_name}: {media_item.file_name} (duration: {media_item.duration}s, width: {clip_width}px)")
+
+    def remove_clip(self, clip):
+        """Remove a clip from this track"""
+        if clip in self.clips:
+            # Remove from scene
+            if self.graphics_view and self.graphics_view.scene:
+                self.graphics_view.scene.removeItem(clip)
+
+            # Remove from clips list
+            self.clips.remove(clip)
+
+            logger.info(f"Removed clip from {self.track_name}: {clip.clip_data.file_name if hasattr(clip, 'clip_data') else 'unknown'}")
 
     def set_playhead_position(self, x_position):
         """Update playhead position on this track"""

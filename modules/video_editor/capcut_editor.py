@@ -131,18 +131,17 @@ class CapCutEditor(QWidget):
                 background-color: #2a2a2a;
             }
 
-            /* Buttons */
+            /* Buttons - Modern Flat Style */
             QPushButton {
                 background-color: #2a2a2a;
                 color: #e0e0e0;
-                border: 1px solid #3a3a3a;
-                border-radius: 4px;
+                border: none;
+                border-radius: 10px;
                 padding: 8px 16px;
                 font-weight: 500;
             }
             QPushButton:hover {
                 background-color: #353535;
-                border-color: #4a4a4a;
             }
             QPushButton:pressed {
                 background-color: #202020;
@@ -150,7 +149,6 @@ class CapCutEditor(QWidget):
             QPushButton:disabled {
                 background-color: #1a1a1a;
                 color: #555555;
-                border-color: #2a2a2a;
             }
 
             /* Primary Action Button (Export, etc.) */
@@ -158,6 +156,7 @@ class CapCutEditor(QWidget):
                 background-color: #00bcd4;
                 color: #ffffff;
                 border: none;
+                border-radius: 10px;
                 font-weight: bold;
             }
             QPushButton#primaryButton:hover {
@@ -182,7 +181,7 @@ class CapCutEditor(QWidget):
             /* Group Boxes */
             QGroupBox {
                 border: 1px solid #2a2a2a;
-                border-radius: 6px;
+                border-radius: 12px;
                 margin-top: 12px;
                 padding-top: 16px;
                 font-weight: bold;
@@ -199,7 +198,7 @@ class CapCutEditor(QWidget):
             QFrame#panel {
                 background-color: #1e1e1e;
                 border: 1px solid #2a2a2a;
-                border-radius: 4px;
+                border-radius: 10px;
             }
             QFrame#darkPanel {
                 background-color: #141414;
@@ -210,7 +209,7 @@ class CapCutEditor(QWidget):
             QTabWidget::pane {
                 border: 1px solid #2a2a2a;
                 background-color: #1a1a1a;
-                border-radius: 4px;
+                border-radius: 10px;
             }
             QTabBar::tab {
                 background-color: #1e1e1e;
@@ -219,8 +218,8 @@ class CapCutEditor(QWidget):
                 margin-right: 2px;
                 border: 1px solid #2a2a2a;
                 border-bottom: none;
-                border-top-left-radius: 4px;
-                border-top-right-radius: 4px;
+                border-top-left-radius: 10px;
+                border-top-right-radius: 10px;
             }
             QTabBar::tab:selected {
                 background-color: #1a1a1a;
@@ -235,7 +234,7 @@ class CapCutEditor(QWidget):
             QLineEdit, QTextEdit, QSpinBox, QDoubleSpinBox, QComboBox {
                 background-color: #252525;
                 border: 1px solid #3a3a3a;
-                border-radius: 4px;
+                border-radius: 10px;
                 padding: 6px;
                 color: #e0e0e0;
             }
@@ -275,7 +274,7 @@ class CapCutEditor(QWidget):
             QListWidget, QTableWidget, QTreeWidget {
                 background-color: #1e1e1e;
                 border: 1px solid #2a2a2a;
-                border-radius: 4px;
+                border-radius: 10px;
                 alternate-background-color: #1a1a1a;
             }
             QListWidget::item, QTableWidget::item, QTreeWidget::item {
@@ -333,8 +332,8 @@ class CapCutEditor(QWidget):
             /* Progress Bar */
             QProgressBar {
                 background-color: #2a2a2a;
-                border: 1px solid #3a3a3a;
-                border-radius: 4px;
+                border: none;
+                border-radius: 10px;
                 text-align: center;
                 color: #e0e0e0;
                 height: 24px;
@@ -342,7 +341,7 @@ class CapCutEditor(QWidget):
             QProgressBar::chunk {
                 background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                     stop:0 #00bcd4, stop:1 #00d4ea);
-                border-radius: 3px;
+                border-radius: 10px;
             }
 
             /* Checkboxes */
@@ -353,7 +352,7 @@ class CapCutEditor(QWidget):
                 width: 18px;
                 height: 18px;
                 border: 2px solid #3a3a3a;
-                border-radius: 3px;
+                border-radius: 5px;
                 background-color: #252525;
             }
             QCheckBox::indicator:checked {
@@ -369,9 +368,9 @@ class CapCutEditor(QWidget):
             QToolTip {
                 background-color: #2a2a2a;
                 color: #e0e0e0;
-                border: 1px solid #3a3a3a;
-                border-radius: 4px;
-                padding: 6px;
+                border: none;
+                border-radius: 8px;
+                padding: 8px 12px;
             }
 
             /* Status Bar */
@@ -383,71 +382,150 @@ class CapCutEditor(QWidget):
         """)
 
     def create_top_navigation(self):
-        """Create top navigation bar (CapCut-style header)"""
+        """Create simplified top navigation bar with feature buttons"""
         header = QFrame()
         header.setObjectName("darkPanel")
-        header.setFixedHeight(60)
+        header.setFixedHeight(65)
 
         layout = QHBoxLayout()
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(12)
+        layout.setContentsMargins(15, 10, 15, 10)
+        layout.setSpacing(10)
 
-        # Logo/Brand
-        logo = QLabel("🎬 Professional Video Editor")
-        logo.setStyleSheet("font-size: 16px; font-weight: bold; color: #00bcd4;")
-        layout.addWidget(logo)
+        # Feature Buttons (Left Side)
+        feature_style = """
+            QPushButton {
+                background-color: #2a2a2a;
+                color: #e0e0e0;
+                border: none;
+                border-radius: 10px;
+                padding: 10px 18px;
+                font-size: 14px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background-color: #353535;
+            }
+            QPushButton:pressed {
+                background-color: #202020;
+            }
+        """
 
-        layout.addSpacing(20)
+        audio_btn = QPushButton("🎧 Audio")
+        audio_btn.setStyleSheet(feature_style)
+        audio_btn.setToolTip("Audio controls and effects")
+        audio_btn.clicked.connect(self.open_audio_feature)
+        layout.addWidget(audio_btn)
 
-        # Menu Bar Items (as buttons for now)
-        menu_items = ["File", "Edit", "View", "Window", "Help"]
-        for item in menu_items:
-            btn = QPushButton(item)
-            btn.setFlat(True)
-            btn.setStyleSheet("QPushButton { border: none; padding: 6px 12px; } QPushButton:hover { background-color: #2a2a2a; }")
-            btn.clicked.connect(lambda checked, m=item: self.menu_clicked(m))
-            layout.addWidget(btn)
+        text_btn = QPushButton("✏️ Text")
+        text_btn.setStyleSheet(feature_style)
+        text_btn.setToolTip("Add text overlays")
+        text_btn.clicked.connect(self.open_text_feature)
+        layout.addWidget(text_btn)
+
+        filters_btn = QPushButton("🎨 Filters")
+        filters_btn.setStyleSheet(feature_style)
+        filters_btn.setToolTip("Apply video filters")
+        filters_btn.clicked.connect(self.open_filters_feature)
+        layout.addWidget(filters_btn)
+
+        bulk_btn = QPushButton("🧩 Bulk Processing")
+        bulk_btn.setStyleSheet(feature_style)
+        bulk_btn.setToolTip("Process multiple videos")
+        bulk_btn.clicked.connect(self.open_bulk_processing)
+        layout.addWidget(bulk_btn)
+
+        title_gen_btn = QPushButton("🪄 Title Generator")
+        title_gen_btn.setStyleSheet(feature_style)
+        title_gen_btn.setToolTip("Auto-generate video titles")
+        title_gen_btn.clicked.connect(self.open_title_generator)
+        layout.addWidget(title_gen_btn)
+
+        layout.addSpacing(15)
+
+        # Current Video Title Input (Center)
+        title_label = QLabel("📄")
+        title_label.setStyleSheet("font-size: 16px;")
+        layout.addWidget(title_label)
+
+        self.video_title_input = QLineEdit()
+        self.video_title_input.setPlaceholderText("No video loaded")
+        self.video_title_input.setStyleSheet("""
+            QLineEdit {
+                background-color: #252525;
+                border: 1px solid #3a3a3a;
+                border-radius: 10px;
+                padding: 10px 15px;
+                color: #e0e0e0;
+                font-size: 13px;
+                min-width: 250px;
+            }
+            QLineEdit:focus {
+                border-color: #00bcd4;
+            }
+        """)
+        layout.addWidget(self.video_title_input)
 
         layout.addStretch()
 
-        # Action Buttons
-        new_btn = QPushButton("📄 New")
-        new_btn.setToolTip("Create new project (Ctrl+N)")
-        new_btn.clicked.connect(self.new_project)
-        layout.addWidget(new_btn)
-
-        open_btn = QPushButton("📁 Open")
-        open_btn.setToolTip("Open project (Ctrl+O)")
-        open_btn.clicked.connect(self.open_project)
-        layout.addWidget(open_btn)
-
-        save_btn = QPushButton("💾 Save")
-        save_btn.setToolTip("Save project (Ctrl+S)")
-        save_btn.clicked.connect(self.save_project)
-        layout.addWidget(save_btn)
-
-        layout.addSpacing(10)
-
-        # Primary Export Button
+        # Export Button
         export_btn = QPushButton("📤 Export Video")
-        export_btn.setObjectName("primaryButton")
-        export_btn.setToolTip("Export/Render video (Ctrl+E)")
-        export_btn.setMinimumWidth(130)
-        export_btn.setMinimumHeight(40)
+        export_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #00bcd4;
+                color: #ffffff;
+                border: none;
+                border-radius: 10px;
+                padding: 12px 24px;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #00d4ea;
+            }
+            QPushButton:pressed {
+                background-color: #00a4b8;
+            }
+        """)
+        export_btn.setToolTip("Export/Render video")
         export_btn.clicked.connect(self.export_video)
         layout.addWidget(export_btn)
 
-        layout.addSpacing(10)
+        layout.addSpacing(15)
 
-        # Window Controls
-        minimize_btn = QPushButton("─")
-        minimize_btn.setMaximumWidth(35)
-        minimize_btn.clicked.connect(lambda: self.window().showMinimized())
-        layout.addWidget(minimize_btn)
+        # Navigation Controls (Right Side)
+        back_btn = QPushButton("⬅️ Back")
+        back_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2a2a2a;
+                color: #e0e0e0;
+                border: none;
+                border-radius: 10px;
+                padding: 10px 16px;
+                font-size: 13px;
+            }
+            QPushButton:hover {
+                background-color: #353535;
+            }
+        """)
+        back_btn.setToolTip("Go back to main menu")
+        back_btn.clicked.connect(self.close_editor)
+        layout.addWidget(back_btn)
 
-        close_btn = QPushButton("✕")
-        close_btn.setMaximumWidth(35)
-        close_btn.setStyleSheet("QPushButton:hover { background-color: #c0392b; }")
+        close_btn = QPushButton("❌ Close")
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #c0392b;
+                color: #ffffff;
+                border: none;
+                border-radius: 10px;
+                padding: 10px 16px;
+                font-size: 13px;
+            }
+            QPushButton:hover {
+                background-color: #d63031;
+            }
+        """)
+        close_btn.setToolTip("Close project")
         close_btn.clicked.connect(self.close_editor)
         layout.addWidget(close_btn)
 
@@ -455,98 +533,91 @@ class CapCutEditor(QWidget):
         return header
 
     def create_left_panel(self):
-        """Create left sidebar - Media Library"""
+        """Create left sidebar - Media Library (simplified)"""
         panel = QFrame()
         panel.setObjectName("panel")
         layout = QVBoxLayout()
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
 
         # Header
         header = QLabel("Media Library")
-        header.setObjectName("sectionHeader")
+        header.setStyleSheet("font-size: 14px; font-weight: bold; color: #00bcd4; padding: 8px 4px;")
         layout.addWidget(header)
-
-        # Tabs for different views
-        tabs = QTabWidget()
-
-        # Media Tab
-        media_widget = QWidget()
-        media_layout = QVBoxLayout()
-        media_layout.setContentsMargins(0, 8, 0, 0)
 
         # Import Button
         import_btn = QPushButton("📥 Import Media")
-        import_btn.setMinimumHeight(40)
-        import_btn.setStyleSheet("font-size: 14px; font-weight: bold;")
-        import_btn.setToolTip("Import videos, images, audio (Ctrl+I)")
+        import_btn.setMinimumHeight(45)
+        import_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #00bcd4;
+                color: #ffffff;
+                border: none;
+                border-radius: 12px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #00d4ea;
+            }
+            QPushButton:pressed {
+                background-color: #00a4b8;
+            }
+        """)
+        import_btn.setToolTip("Import videos, images, audio")
         import_btn.clicked.connect(self.import_media)
-        media_layout.addWidget(import_btn)
+        layout.addWidget(import_btn)
 
         # Search
         search_box = QLineEdit()
         search_box.setPlaceholderText("🔍 Search media...")
-        media_layout.addWidget(search_box)
+        search_box.setStyleSheet("""
+            QLineEdit {
+                background-color: #252525;
+                border: 1px solid #3a3a3a;
+                border-radius: 10px;
+                padding: 8px 12px;
+                color: #e0e0e0;
+                font-size: 13px;
+            }
+            QLineEdit:focus {
+                border-color: #00bcd4;
+            }
+        """)
+        layout.addWidget(search_box)
 
         # Media List
         self.media_list = QListWidget()
+        self.media_list.setStyleSheet("""
+            QListWidget {
+                background-color: #1e1e1e;
+                border: 1px solid #2a2a2a;
+                border-radius: 10px;
+                padding: 4px;
+            }
+            QListWidget::item {
+                padding: 10px;
+                border-bottom: 1px solid #252525;
+                border-radius: 8px;
+                margin: 2px;
+            }
+            QListWidget::item:selected {
+                background-color: #2a4a5a;
+                color: #ffffff;
+            }
+            QListWidget::item:hover:!selected {
+                background-color: #252525;
+            }
+        """)
         self.media_list.setToolTip("Drag media to timeline to add to project")
-        media_layout.addWidget(self.media_list)
+        layout.addWidget(self.media_list, 1)
 
         # Media info
-        info_label = QLabel("No media imported")
-        info_label.setStyleSheet("color: #888888; font-size: 11px; padding: 4px;")
-        media_layout.addWidget(info_label)
+        self.media_info_label = QLabel("No media imported")
+        self.media_info_label.setStyleSheet("color: #888888; font-size: 11px; padding: 8px 4px;")
+        self.media_info_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.media_info_label)
 
-        media_widget.setLayout(media_layout)
-        tabs.addTab(media_widget, "📁 Media")
-
-        # Library/Presets Tab
-        library_widget = QWidget()
-        library_layout = QVBoxLayout()
-        library_layout.setContentsMargins(0, 8, 0, 0)
-
-        # Preset buttons
-        preset_label = QLabel("Quick Presets:")
-        preset_label.setStyleSheet("font-weight: bold; color: #00bcd4; margin-top: 8px;")
-        library_layout.addWidget(preset_label)
-
-        preset_buttons = [
-            ("📦 TikTok Standard", "tiktok"),
-            ("📦 Instagram Reels", "instagram"),
-            ("📦 YouTube Shorts", "youtube"),
-            ("📦 Cinematic", "cinematic"),
-            ("📦 Vintage", "vintage")
-        ]
-
-        for name, preset_id in preset_buttons:
-            btn = QPushButton(name)
-            btn.clicked.connect(lambda checked, p=preset_id: self.apply_quick_preset(p))
-            library_layout.addWidget(btn)
-
-        library_layout.addSpacing(10)
-
-        # Bulk Processing Button
-        bulk_btn = QPushButton("🚀 Bulk Processing")
-        bulk_btn.setMinimumHeight(40)
-        bulk_btn.setStyleSheet("background-color: #9b59b6; font-weight: bold;")
-        bulk_btn.setToolTip("Process multiple videos with same preset")
-        bulk_btn.clicked.connect(self.open_bulk_processing)
-        library_layout.addWidget(bulk_btn)
-
-        # Title Generator Button
-        title_btn = QPushButton("🤖 Title Generator")
-        title_btn.setMinimumHeight(40)
-        title_btn.setStyleSheet("background-color: #3498db; font-weight: bold;")
-        title_btn.setToolTip("Generate video titles automatically")
-        title_btn.clicked.connect(self.open_title_generator)
-        library_layout.addWidget(title_btn)
-
-        library_layout.addStretch()
-        library_widget.setLayout(library_layout)
-        tabs.addTab(library_widget, "📚 Library")
-
-        layout.addWidget(tabs)
         panel.setLayout(layout)
         return panel
 
@@ -1081,25 +1152,55 @@ class CapCutEditor(QWidget):
     # ==================== PLACEHOLDER METHODS ====================
     # These will be implemented incrementally
 
-    def menu_clicked(self, menu_name):
-        """Handle menu clicks - Placeholder"""
-        self.status_label.setText(f"{menu_name} menu - Coming soon")
-        logger.info(f"Menu clicked: {menu_name}")
+    def open_audio_feature(self):
+        """Open audio feature dialog - Placeholder"""
+        self.status_label.setText("Audio feature - Coming soon")
+        QMessageBox.information(
+            self,
+            "🎧 Audio Feature",
+            "Audio controls will include:\n\n"
+            "• Extract audio from video\n"
+            "• Remove vocals (ML)\n"
+            "• Remove music (ML)\n"
+            "• Volume control\n"
+            "• Fade in/out\n"
+            "• Audio effects\n\n"
+            "This feature will be implemented next!"
+        )
+        logger.info("Audio feature clicked")
 
-    def new_project(self):
-        """New project - Placeholder"""
-        self.status_label.setText("New project - Coming soon")
-        logger.info("New project clicked")
+    def open_text_feature(self):
+        """Open text overlay feature - Placeholder"""
+        self.status_label.setText("Text feature - Coming soon")
+        QMessageBox.information(
+            self,
+            "✏️ Text Feature",
+            "Text overlay will include:\n\n"
+            "• Add text to video\n"
+            "• Custom fonts and colors\n"
+            "• Text animations\n"
+            "• Position control\n"
+            "• Opacity and styling\n\n"
+            "This feature will be implemented next!"
+        )
+        logger.info("Text feature clicked")
 
-    def open_project(self):
-        """Open project - Placeholder"""
-        self.status_label.setText("Open project - Coming soon")
-        logger.info("Open project clicked")
-
-    def save_project(self):
-        """Save project - Placeholder"""
-        self.status_label.setText("Save project - Coming soon")
-        logger.info("Save project clicked")
+    def open_filters_feature(self):
+        """Open filters feature - Placeholder"""
+        self.status_label.setText("Filters feature - Coming soon")
+        QMessageBox.information(
+            self,
+            "🎨 Filters Feature",
+            "Video filters will include:\n\n"
+            "• Color correction\n"
+            "• Brightness/Contrast\n"
+            "• Saturation control\n"
+            "• Artistic effects\n"
+            "• Vintage/Cinematic looks\n"
+            "• Filter intensity control\n\n"
+            "This feature will be implemented next!"
+        )
+        logger.info("Filters feature clicked")
 
     def export_video(self):
         """Export video - Placeholder"""

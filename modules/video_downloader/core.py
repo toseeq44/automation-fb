@@ -206,8 +206,8 @@ class VideoDownloaderThread(QThread):
                 return True
             else:
                 error_msg = result.stderr[:200] if result.stderr else "Unknown error"
-                self.progress.emit(f"⚠️ Method 1 failed: {error_msg}")
-                return False
+                self.progress.emit(f"⚠️ Method 1 failed (format {fmt}): {error_msg}")
+            return False
         except subprocess.TimeoutExpired:
             self.progress.emit("⚠️ Method 1 timeout")
             return False
@@ -246,19 +246,32 @@ class VideoDownloaderThread(QThread):
                             self.progress.emit(f"✅ TikTok Approach {i} SUCCESS!")
                             return True
                     else:
-                        ydl_opts = {
+                        base_opts = {
                             'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
                             'format': self.format_override or approach.get('format', 'best'),
                             'quiet': True, 'no_warnings': True,
                             'restrictfilenames': True, 'geo_bypass': True
                         }
-                        ydl_opts.update(approach)
-                        if cookie_file:
-                            ydl_opts['cookiefile'] = cookie_file
-                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                            ydl.download([url])
-                        self.progress.emit(f"✅ TikTok Approach {i} SUCCESS!")
-                        return True
+                        base_opts.update(approach)
+                        format_candidates = []
+                        if self.format_override:
+                            format_candidates.append(self.format_override)
+                        default_fmt = base_opts.get('format', 'best')
+                        if default_fmt not in format_candidates:
+                            format_candidates.append(default_fmt)
+                        for fmt in format_candidates:
+                            try:
+                                opts = dict(base_opts)
+                                opts['format'] = fmt
+                                if cookie_file:
+                                    opts['cookiefile'] = cookie_file
+                                with yt_dlp.YoutubeDL(opts) as ydl:
+                                    ydl.download([url])
+                                self.progress.emit(f"✅ TikTok Approach {i} SUCCESS!")
+                                return True
+                            except Exception as inner_e:
+                                self.progress.emit(f"⚠️ TikTok Approach {i} failed (format {fmt}): {str(inner_e)[:60]}")
+                                continue
                 except Exception as e:
                     self.progress.emit(f"⚠️ TikTok Approach {i} failed: {str(e)[:50]}")
                     continue
@@ -285,7 +298,7 @@ class VideoDownloaderThread(QThread):
             self.progress.emit("✅ Method 3 SUCCESS")
             return True
         except Exception as e:
-            self.progress.emit(f"⚠️ Method 3 failed: {str(e)[:100]}")
+            self.progress.emit(f"⚠️ Method 3 error: {str(e)[:100]}")
             return False
 
     def _method4_alternative_formats(self, url, output_path, cookie_file=None):

@@ -59,13 +59,13 @@ class SingleControlPanel(QFrame):
         
         # Main controls layout
         controls_layout = QHBoxLayout()
-        controls_layout.setSpacing(6)
+        controls_layout.setSpacing(12)
         
-        # Control buttons
-        self.skip_backward_btn = self.create_control_button("⏮", "Skip Backward", "#e91e63")
-        self.play_btn = self.create_control_button("▶", "Play", "#00bcd4") 
-        self.stop_btn = self.create_control_button("⏹", "Stop", "#f44336")
-        self.skip_forward_btn = self.create_control_button("⏭", "Skip Forward", "#e91e63")
+        # Control buttons (minimal design: single play/pause toggle)
+        self.skip_backward_btn = None
+        self.stop_btn = None
+        self.skip_forward_btn = None
+        self.play_btn = self.create_control_button("▶", "Play / Pause", "#00bcd4", role="play")
         
         # Time display
         self.time_label = QLabel("00:00 / 00:00")
@@ -83,11 +83,8 @@ class SingleControlPanel(QFrame):
         self.time_label.setAlignment(Qt.AlignCenter)
         
         # Add to layout
-        controls_layout.addWidget(self.skip_backward_btn)
         controls_layout.addWidget(self.play_btn)
-        controls_layout.addWidget(self.stop_btn)
-        controls_layout.addWidget(self.skip_forward_btn)
-        controls_layout.addSpacing(10)
+        controls_layout.addSpacing(12)
         controls_layout.addWidget(self.time_label)
         controls_layout.addStretch()
         
@@ -130,8 +127,11 @@ class SingleControlPanel(QFrame):
                 margin: 2px;
             }
         """)
+
+        # Connect button handlers after UI is ready
+        self._bind_button_handlers()
         
-    def create_control_button(self, icon, tooltip, color):
+    def create_control_button(self, icon, tooltip, color, role):
         """Create a styled control button"""
         btn = QPushButton(icon)
         btn.setToolTip(tooltip)
@@ -157,18 +157,43 @@ class SingleControlPanel(QFrame):
             }}
         """)
         
-        # Connect signals
-        if icon == "⏮":
-            btn.clicked.connect(self.skip_backward_clicked.emit)
-        elif icon == "▶":
-            btn.clicked.connect(self.play_clicked.emit)
-        elif icon == "⏹":
-            btn.clicked.connect(self.stop_clicked.emit)
-        elif icon == "⏭":
-            btn.clicked.connect(self.skip_forward_clicked.emit)
-            
+        # Store role on button for handler lookup
+        btn._control_role = role  # type: ignore[attr-defined]
         return btn
         
+    def _bind_button_handlers(self):
+        """Attach button click handlers that emit high-level signals."""
+        if self.play_btn is not None:
+            self.play_btn.clicked.connect(self._handle_play_clicked)
+        if self.stop_btn is not None:
+            self.stop_btn.clicked.connect(self._handle_stop_clicked)
+        if self.skip_backward_btn is not None:
+            self.skip_backward_btn.clicked.connect(self._handle_skip_backward_clicked)
+        if self.skip_forward_btn is not None:
+            self.skip_forward_btn.clicked.connect(self._handle_skip_forward_clicked)
+
+    def _handle_skip_backward_clicked(self):
+        print(f"DEBUG: {self.panel_name} skip backward button clicked")
+        self.skip_backward_clicked.emit()
+
+    def _handle_play_clicked(self):
+        print(f"DEBUG: {self.panel_name} play button clicked (is_playing={self.is_playing})")
+        if self.is_playing:
+            self.set_paused_state(update_ui_only=True)
+            self.pause_clicked.emit()
+        else:
+            self.set_playing_state(update_ui_only=True)
+            self.play_clicked.emit()
+
+    def _handle_stop_clicked(self):
+        print(f"DEBUG: {self.panel_name} stop triggered")
+        self.set_stopped_state(update_ui_only=True)
+        self.stop_clicked.emit()
+
+    def _handle_skip_forward_clicked(self):
+        print(f"DEBUG: {self.panel_name} skip forward triggered")
+        self.skip_forward_clicked.emit()
+
     def lighten_color(self, color):
         """Lighten color for hover effect"""
         return color  # Simple implementation
@@ -211,17 +236,20 @@ class SingleControlPanel(QFrame):
     def set_playing_state(self, update_ui_only=False):
         """Set playing state without emitting signals"""
         self.is_playing = True
-        self.play_btn.setText("⏸")
+        if self.play_btn:
+            self.play_btn.setText("⏸")
         
     def set_paused_state(self, update_ui_only=False):
         """Set paused state without emitting signals"""
         self.is_playing = False
-        self.play_btn.setText("▶")
+        if self.play_btn:
+            self.play_btn.setText("▶")
         
     def set_stopped_state(self, update_ui_only=False):
         """Set stopped state without emitting signals"""
         self.is_playing = False
-        self.play_btn.setText("▶")
+        if self.play_btn:
+            self.play_btn.setText("▶")
         self.set_position(0)
 
 

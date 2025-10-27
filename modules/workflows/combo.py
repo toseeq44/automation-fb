@@ -42,7 +42,6 @@ class CombinedWorkflowPage(QWidget):
         self.selected_quality = "HD"
         self.download_errors: List[str] = []
         self._last_creator_data: Dict[str, dict] = {}
-        self.active_download_limit = 0
         self.init_ui()
 
     def init_ui(self):
@@ -101,50 +100,28 @@ class CombinedWorkflowPage(QWidget):
         grab_label.setStyleSheet("font-size: 14px; font-weight: bold;")
         controls_row.addWidget(grab_label)
 
-        self.grab_mode_combo = QComboBox()
-        self.grab_mode_combo.addItems(["All Links", "Custom Limit"])
-        self.grab_mode_combo.setStyleSheet(
-            "QComboBox { background-color: #2C2F33; color: #F5F6F5; border: 2px solid #4B5057;"
-            " padding: 6px; border-radius: 6px; font-size: 14px; }"
-            "QComboBox QAbstractItemView { background-color: #2C2F33; color: #F5F6F5;"
-            " selection-background-color: #1ABC9C; }"
-        )
-        controls_row.addWidget(self.grab_mode_combo)
-
         self.grab_limit_spin = QSpinBox()
-        self.grab_limit_spin.setRange(1, 500)
-        self.grab_limit_spin.setValue(10)
-        self.grab_limit_spin.setToolTip("Select custom limit when needed")
+        self.grab_limit_spin.setRange(0, 500)
+        self.grab_limit_spin.setValue(0)
+        self.grab_limit_spin.setToolTip("0 = grab all available links")
         self.grab_limit_spin.setStyleSheet(
             "QSpinBox { background-color: #2C2F33; color: #F5F6F5; border: 2px solid #4B5057;"
             " padding: 6px; border-radius: 6px; font-size: 14px; }"
         )
-        self.grab_limit_spin.setEnabled(False)
         controls_row.addWidget(self.grab_limit_spin)
 
         download_label = QLabel("📥 Videos to download:")
         download_label.setStyleSheet("font-size: 14px; font-weight: bold;")
         controls_row.addWidget(download_label)
 
-        self.download_mode_combo = QComboBox()
-        self.download_mode_combo.addItems(["All Videos", "Custom Limit"])
-        self.download_mode_combo.setStyleSheet(
-            "QComboBox { background-color: #2C2F33; color: #F5F6F5; border: 2px solid #4B5057;"
-            " padding: 6px; border-radius: 6px; font-size: 14px; }"
-            "QComboBox QAbstractItemView { background-color: #2C2F33; color: #F5F6F5;"
-            " selection-background-color: #1ABC9C; }"
-        )
-        controls_row.addWidget(self.download_mode_combo)
-
         self.download_limit_spin = QSpinBox()
-        self.download_limit_spin.setRange(1, 500)
-        self.download_limit_spin.setValue(5)
-        self.download_limit_spin.setToolTip("Select custom limit when needed")
+        self.download_limit_spin.setRange(0, 500)
+        self.download_limit_spin.setValue(0)
+        self.download_limit_spin.setToolTip("0 = download all grabbed links")
         self.download_limit_spin.setStyleSheet(
             "QSpinBox { background-color: #2C2F33; color: #F5F6F5; border: 2px solid #4B5057;"
             " padding: 6px; border-radius: 6px; font-size: 14px; }"
         )
-        self.download_limit_spin.setEnabled(False)
         controls_row.addWidget(self.download_limit_spin)
 
         quality_label = QLabel("🎥 Quality:")
@@ -196,8 +173,6 @@ class CombinedWorkflowPage(QWidget):
         self.back_btn.clicked.connect(self.handle_back)
         self.start_btn.clicked.connect(self.start_workflow)
         self.cancel_btn.clicked.connect(self.cancel_workflow)
-        self.grab_mode_combo.currentIndexChanged.connect(self.on_grab_mode_changed)
-        self.download_mode_combo.currentIndexChanged.connect(self.on_download_mode_changed)
 
         button_row.addWidget(self.back_btn)
         button_row.addWidget(self.start_btn)
@@ -241,33 +216,6 @@ class CombinedWorkflowPage(QWidget):
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.log_area.append(f"[{timestamp}] {message}")
         self.log_area.ensureCursorVisible()
-
-    def _quality_to_format(self, label: str) -> str | None:
-        quality_map = {
-            "Mobile (480p, small)": "bestvideo[height<=480]+bestaudio/best[height<=480]",
-            "HD (1080p)": "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
-            "4K (max)": "bestvideo[height<=2160]+bestaudio/best",
-            "Best Available": "bestvideo+bestaudio/best",
-            "Medium (720p)": "bestvideo[height<=720]+bestaudio/best[height<=720]",
-            "Low (360p)": "bestvideo[height<=360]+bestaudio/best[height<=360]",
-        }
-        return quality_map.get(label)
-
-    def on_grab_mode_changed(self, index: int):
-        is_custom = self.grab_mode_combo.currentText() == "Custom Limit"
-        self.grab_limit_spin.setEnabled(is_custom)
-        if not is_custom:
-            self.grab_limit_spin.setToolTip("All available links will be grabbed")
-        else:
-            self.grab_limit_spin.setToolTip("Enter how many links to grab per creator")
-
-    def on_download_mode_changed(self, index: int):
-        is_custom = self.download_mode_combo.currentText() == "Custom Limit"
-        self.download_limit_spin.setEnabled(is_custom)
-        if not is_custom:
-            self.download_limit_spin.setToolTip("All grabbed links will be downloaded")
-        else:
-            self.download_limit_spin.setToolTip("Enter how many videos to download")
 
     def handle_back(self):
         if self.workflow_active:
@@ -324,41 +272,17 @@ class CombinedWorkflowPage(QWidget):
         self.cancel_btn.setVisible(True)
         self.back_btn.setEnabled(False)
 
-        grab_mode = self.grab_mode_combo.currentText()
-        download_mode = self.download_mode_combo.currentText()
-
-        grab_limit = 0 if grab_mode == "All Links" else self.grab_limit_spin.value()
-        if grab_mode == "Custom Limit" and grab_limit <= 0:
-            QMessageBox.warning(self, "Invalid", "Grab limit must be at least 1.")
-            self.start_btn.setEnabled(True)
-            self.cancel_btn.setVisible(False)
-            self.back_btn.setEnabled(True)
-            self.workflow_active = False
-            return
-
-        download_limit = 0 if download_mode == "All Videos" else self.download_limit_spin.value()
-        if download_mode == "Custom Limit" and download_limit <= 0:
-            QMessageBox.warning(self, "Invalid", "Download limit must be at least 1.")
-            self.start_btn.setEnabled(True)
-            self.cancel_btn.setVisible(False)
-            self.back_btn.setEnabled(True)
-            self.workflow_active = False
-            return
+        grab_limit = self.grab_limit_spin.value()
+        download_limit = self.download_limit_spin.value()
         self.selected_quality = self.quality_combo.currentText()
-        self.active_download_limit = download_limit
 
-        grab_log = grab_limit if grab_limit > 0 else "ALL"
-        download_log = download_limit if download_limit > 0 else "ALL"
         self.log_message(
-            f"🚀 Starting bot | URLs: {len(urls)} | Grab limit: {grab_log} | "
-            f"Download limit: {download_log}"
+            f"🚀 Starting bot | URLs: {len(urls)} | Grab limit: {grab_limit or 'ALL'} | "
+            f"Download limit: {download_limit or 'ALL'}"
         )
         self.set_status("Grabbing links...", None)
 
-        options = {
-            "max_videos": grab_limit if grab_limit > 0 else 0,
-            "force_all_methods": True,
-        }
+        options = {"max_videos": grab_limit if grab_limit > 0 else 0}
 
         self.grabber_thread = BulkLinkGrabberThread(urls, options)
         self.grabber_thread.progress.connect(
@@ -434,7 +358,7 @@ class CombinedWorkflowPage(QWidget):
 
         self._last_creator_data = creator_data
 
-        download_limit = self.active_download_limit
+        download_limit = self.download_limit_spin.value()
         remaining = download_limit if download_limit > 0 else None
 
         self.creator_queue = []
@@ -506,8 +430,6 @@ class CombinedWorkflowPage(QWidget):
             "playlist": False,
             "subtitles": False,
             "thumbnail": False,
-            "force_all_methods": True,
-            "format": self._quality_to_format(self.selected_quality),
         }
 
         self.downloader_thread = VideoDownloaderThread(urls, folder, options)
@@ -551,7 +473,6 @@ class CombinedWorkflowPage(QWidget):
         self.cancel_requested = False
         self.current_download_index = -1
         self.creator_queue = []
-        self.active_download_limit = 0
 
         self.start_btn.setEnabled(True)
         self.cancel_btn.setVisible(False)

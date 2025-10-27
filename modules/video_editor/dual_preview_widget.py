@@ -592,12 +592,12 @@ class DualPreviewWidget(QWidget):
             self.before_window.setVisible(not before_visible)
             self.after_window.setVisible(before_visible)
 
-    def update_time(self, current, total):
-        """Update time displays in both windows"""
-        self.current_time = current
-        self.duration = total
-        self.before_window.update_timecode(current, total)
-        self.after_window.update_timecode(current, total)
+    def update_time_for_panel(self, is_before: bool, current: float, total: float):
+        """Update time display for a specific preview panel."""
+        if is_before:
+            self.before_window.update_timecode(current, total)
+        else:
+            self.after_window.update_timecode(current, total)
 
     def update_frame_number(self, frame):
         """Update frame number in both windows"""
@@ -646,7 +646,8 @@ class DualPreviewWidget(QWidget):
             self.current_video_path = video_path
             
             # Update time displays
-            self.update_time(0, 60.0)  # Default duration, can be updated
+            self.update_time_for_panel(True, 0, 60.0)   # Default duration, can be updated
+            self.update_time_for_panel(False, 0, 60.0)  # Default duration, can be updated
             
             print(f"DEBUG: Dual preview loaded video successfully")
             

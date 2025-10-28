@@ -1,73 +1,21 @@
-"""
-modules/video_downloader/core.py
-SMART Video Downloader with Resume, Platform Fallbacks & Accurate Folder Save
+"""Core implementation for the smart video downloader."""
 
-FEATURES:
-- Every video always saves in the same folder as its link source text file
-- TikTok multi-method (IP bypass, retries)
-- Platform-specific fallback (YouTube, Instagram, Facebook, Twitter)
-- Smart cookies: triple fallback
-- Dupe skip (no repeated download)
-- Remove downloaded link from its source txt
-- Last-24-hour skip per folder
-- Resume support, progress, speed, ETA, cancel
-"""
-
-import yt_dlp
 import os
-from pathlib import Path
-from PyQt5.QtCore import QThread, pyqtSignal
-import re
 import subprocess
 from datetime import datetime, timedelta
+from pathlib import Path
+
+import yt_dlp
+from PyQt5.QtCore import QThread, pyqtSignal
+
+from .url_utils import (
+    coerce_bool,
+    extract_urls,
+    normalize_url,
+    quality_to_format,
+)
 
 # ===================== HELPERS ====================
-
-def _safe_filename(s: str) -> str:
-    try:
-        s = re.sub(r'[<>:"/\\|?*\n\r\t]+', '_', s.strip())
-        return s[:200] if s else "video"
-    except Exception:
-        return "video"
-
-def _normalize_url(url: str) -> str:
-    try:
-        url = re.sub(r'[?&]utm_[^&]*', '', url)
-        url = re.sub(r'[?&]fbclid=[^&]*', '', url)
-        if 'tiktok.com' in url:
-            match = re.search(r'/video/(\d+)', url)
-            if match:
-                return f"tiktok_{match.group(1)}"
-        elif 'youtube.com' in url or 'youtu.be' in url:
-            match = re.search(r'(?:v=|/)([a-zA-Z0-9_-]{11})', url)
-            if match:
-                return f"youtube_{match.group(1)}"
-        elif 'instagram.com' in url:
-            match = re.search(r'/(?:p|reel)/([^/?]+)', url)
-            if match:
-                return f"instagram_{match.group(1)}"
-        return url.strip()
-    except Exception:
-        return url.strip()
-
-def _coerce_bool(value, default: bool = True) -> bool:
-    """Best-effort boolean parsing that honours user intent."""
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value != 0
-    if isinstance(value, str):
-        val = value.strip().lower()
-        if val in {'true', '1', 'yes', 'on', 'enable', 'enabled'}:
-            return True
-        if val in {'false', '0', 'no', 'off', 'disable', 'disabled'}:
-            return False
-    try:
-        return bool(value)
-    except Exception:
-        return default
 
 def _detect_platform(url: str) -> str:
     url = url.lower()
@@ -92,11 +40,8 @@ class VideoDownloaderThread(QThread):
 
     def __init__(self, urls, save_path, options, parent=None):
         super().__init__(parent)
-        # Accept string/list input for URLs
-        if isinstance(urls, str):
-            self.urls = [u.strip() for u in urls.replace(',', '\n').splitlines() if u.strip()]
-        else:
-            self.urls = [u.strip() for u in urls if u.strip()]
+        # Accept flexible input for URLs (string, list, dicts from Link Grabber, etc.)
+        self.urls = extract_urls(urls)
         self.save_path = save_path
         # Ensure options behave like a dict so feature flags don't break older callers
         if options is None:
@@ -112,9 +57,18 @@ class VideoDownloaderThread(QThread):
         self.cancelled = False
         self.success_count = 0
         self.skipped_count = 0
+        self.skip_recent_window = coerce_bool(
+            self.options.get('skip_recent_window'),
+            default=self.skip_recent_window,
+        )
         self.max_retries = self.options.get('max_retries', 3)
         self.force_all_methods = bool(self.options.get('force_all_methods', False))
-        self.format_override = self.options.get('format')
+        # Map quality preference to yt-dlp format selection if caller didn't supply one
+        format_override = self.options.get('format')
+        if not format_override:
+            quality_pref = self.options.get('quality')
+            format_override = quality_to_format(quality_pref)
+        self.format_override = format_override
         self.downloaded_links_file = Path(save_path) / ".downloaded_links.txt"
         self.downloaded_links = self._load_downloaded_links()
 
@@ -129,7 +83,7 @@ class VideoDownloaderThread(QThread):
 
     def _mark_as_downloaded(self, url: str):
         try:
-            normalized = _normalize_url(url)
+            normalized = normalize_url(url)
             self.downloaded_links.add(normalized)
             with open(self.downloaded_links_file, 'a', encoding='utf-8') as f:
                 f.write(f"{normalized}\n")
@@ -137,7 +91,7 @@ class VideoDownloaderThread(QThread):
             self.progress.emit(f"⚠️ Could not save download record: {str(e)[:50]}")
 
     def _is_already_downloaded(self, url: str) -> bool:
-        normalized = _normalize_url(url)
+        normalized = normalize_url(url)
         return normalized in self.downloaded_links
 
     def _should_skip_folder(self, folder_path: str) -> bool:
@@ -172,7 +126,15 @@ class VideoDownloaderThread(QThread):
                 try:
                     with open(txt_file, 'r', encoding='utf-8', errors='ignore') as f:
                         lines = f.readlines()
-                    new_lines = [line for line in lines if url.strip() not in line]
+                    target = url.strip()
+                    if not target:
+                        continue
+                    target_lower = target.lower()
+                    new_lines = [
+                        line
+                        for line in lines
+                        if target not in line and target_lower not in line.lower()
+                    ]
                     if len(new_lines) != len(lines):
                         with open(txt_file, 'w', encoding='utf-8') as f:
                             f.writelines(new_lines)
@@ -182,34 +144,56 @@ class VideoDownloaderThread(QThread):
         except Exception:
             pass
 
-    def get_cookie_file(self, url):
+    def get_cookie_file(self, url, source_folder=None):
+        """Return the most relevant cookies file for the given URL."""
+
         try:
-            url_lower = url.lower()
+            candidates = []
+            platform = _detect_platform(url)
+
+            def _extend_with_platform_variants(base_path: Path):
+                if not base_path:
+                    return
+                names = ["cookies.txt"]
+                if platform != 'other':
+                    names.insert(0, f"{platform}.txt")
+                for name in names:
+                    candidate = base_path / name
+                    if candidate not in candidates:
+                        candidates.append(candidate)
+
+            if source_folder:
+                folder_path = Path(source_folder)
+                _extend_with_platform_variants(folder_path)
+                cookies_sub = folder_path / "cookies"
+                _extend_with_platform_variants(cookies_sub)
+                parent_cookies = folder_path.parent / "cookies"
+                if parent_cookies != cookies_sub:
+                    _extend_with_platform_variants(parent_cookies)
+
             current_file = Path(__file__).resolve()
             project_root = current_file.parent.parent.parent
             cookies_dir = project_root / "cookies"
             cookies_dir.mkdir(parents=True, exist_ok=True)
-            # Universal
+
+            if platform != 'other':
+                platform_cookie = cookies_dir / f"{platform}.txt"
+                _extend_with_platform_variants(platform_cookie.parent)
+
             universal_cookie = cookies_dir / "cookies.txt"
-            if universal_cookie.exists() and universal_cookie.stat().st_size > 10:
-                return str(universal_cookie)
-            # Platform-specific
-            platform_map = {
-                'youtube': 'youtube.txt',
-                'instagram': 'instagram.txt',
-                'tiktok': 'tiktok.txt',
-                'facebook': 'facebook.txt',
-                'twitter': 'twitter.txt'
-            }
-            for platform, cookie_file in platform_map.items():
-                if platform in url_lower:
-                    platform_cookie = cookies_dir / cookie_file
-                    if platform_cookie.exists() and platform_cookie.stat().st_size > 10:
-                        return str(platform_cookie)
-            # Desktop fallback
+            if universal_cookie not in candidates:
+                candidates.append(universal_cookie)
+
             desktop_cookie = Path.home() / "Desktop" / "toseeq-cookies.txt"
-            if desktop_cookie.exists() and desktop_cookie.stat().st_size > 10:
-                return str(desktop_cookie)
+            if desktop_cookie not in candidates:
+                candidates.append(desktop_cookie)
+
+            for candidate in candidates:
+                try:
+                    if candidate and candidate.exists() and candidate.stat().st_size > 10:
+                        return str(candidate)
+                except Exception:
+                    continue
         except Exception:
             pass
         return None
@@ -240,7 +224,9 @@ class VideoDownloaderThread(QThread):
                 return True
             else:
                 error_msg = result.stderr[:200] if result.stderr else "Unknown error"
-                self.progress.emit(f"⚠️ Method 1 failed (format {fmt}): {error_msg}")
+                self.progress.emit(
+                    f"⚠️ Method 1 failed (format {self.format_override or 'best'}): {error_msg}"
+                )
             return False
         except subprocess.TimeoutExpired:
             self.progress.emit("⚠️ Method 1 timeout")
@@ -447,19 +433,23 @@ class VideoDownloaderThread(QThread):
                         try:
                             with open(txt_path, 'r', encoding='utf-8', errors='ignore') as f:
                                 for line in f:
-                                    url = line.strip()
-                                    if url:
-                                        url_folder_map[url] = root
+                                    raw_url = line.strip()
+                                    if not raw_url:
+                                        continue
+                                    key = normalize_url(raw_url)
+                                    if key:
+                                        url_folder_map[key] = root
                         except Exception:
                             continue
             # Fallback: direct URLs go to main save_path
             for url in self.urls:
-                if url not in url_folder_map:
-                    url_folder_map[url] = self.save_path
+                key = normalize_url(url)
+                if key not in url_folder_map:
+                    url_folder_map[key] = self.save_path
             processed = 0
             for url in self.urls:
                 if self.cancelled: break
-                folder = url_folder_map.get(url, self.save_path)
+                folder = url_folder_map.get(normalize_url(url), self.save_path)
                 os.makedirs(folder, exist_ok=True)
                 if self._should_skip_folder(folder):
                     self.progress.emit(f"\n⏭️ SKIPPING (in 24h): [{folder}] {url[:60]}")
@@ -472,7 +462,7 @@ class VideoDownloaderThread(QThread):
                     self.skipped_count += 1
                     continue
                 self.progress.emit(f"\n📥 [{processed}/{total}] {url[:80]}...")
-                cookie_file = self.get_cookie_file(url)
+                cookie_file = self.get_cookie_file(url, folder)
                 # Platform-wize methods
                 platform = _detect_platform(url)
                 if platform == 'tiktok':

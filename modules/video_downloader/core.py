@@ -144,34 +144,56 @@ class VideoDownloaderThread(QThread):
         except Exception:
             pass
 
-    def get_cookie_file(self, url):
+    def get_cookie_file(self, url, source_folder=None):
+        """Return the most relevant cookies file for the given URL."""
+
         try:
-            url_lower = url.lower()
+            candidates = []
+            platform = _detect_platform(url)
+
+            def _extend_with_platform_variants(base_path: Path):
+                if not base_path:
+                    return
+                names = ["cookies.txt"]
+                if platform != 'other':
+                    names.insert(0, f"{platform}.txt")
+                for name in names:
+                    candidate = base_path / name
+                    if candidate not in candidates:
+                        candidates.append(candidate)
+
+            if source_folder:
+                folder_path = Path(source_folder)
+                _extend_with_platform_variants(folder_path)
+                cookies_sub = folder_path / "cookies"
+                _extend_with_platform_variants(cookies_sub)
+                parent_cookies = folder_path.parent / "cookies"
+                if parent_cookies != cookies_sub:
+                    _extend_with_platform_variants(parent_cookies)
+
             current_file = Path(__file__).resolve()
             project_root = current_file.parent.parent.parent
             cookies_dir = project_root / "cookies"
             cookies_dir.mkdir(parents=True, exist_ok=True)
-            # Universal
+
+            if platform != 'other':
+                platform_cookie = cookies_dir / f"{platform}.txt"
+                _extend_with_platform_variants(platform_cookie.parent)
+
             universal_cookie = cookies_dir / "cookies.txt"
-            if universal_cookie.exists() and universal_cookie.stat().st_size > 10:
-                return str(universal_cookie)
-            # Platform-specific
-            platform_map = {
-                'youtube': 'youtube.txt',
-                'instagram': 'instagram.txt',
-                'tiktok': 'tiktok.txt',
-                'facebook': 'facebook.txt',
-                'twitter': 'twitter.txt'
-            }
-            for platform, cookie_file in platform_map.items():
-                if platform in url_lower:
-                    platform_cookie = cookies_dir / cookie_file
-                    if platform_cookie.exists() and platform_cookie.stat().st_size > 10:
-                        return str(platform_cookie)
-            # Desktop fallback
+            if universal_cookie not in candidates:
+                candidates.append(universal_cookie)
+
             desktop_cookie = Path.home() / "Desktop" / "toseeq-cookies.txt"
-            if desktop_cookie.exists() and desktop_cookie.stat().st_size > 10:
-                return str(desktop_cookie)
+            if desktop_cookie not in candidates:
+                candidates.append(desktop_cookie)
+
+            for candidate in candidates:
+                try:
+                    if candidate and candidate.exists() and candidate.stat().st_size > 10:
+                        return str(candidate)
+                except Exception:
+                    continue
         except Exception:
             pass
         return None
@@ -440,7 +462,7 @@ class VideoDownloaderThread(QThread):
                     self.skipped_count += 1
                     continue
                 self.progress.emit(f"\n📥 [{processed}/{total}] {url[:80]}...")
-                cookie_file = self.get_cookie_file(url)
+                cookie_file = self.get_cookie_file(url, folder)
                 # Platform-wize methods
                 platform = _detect_platform(url)
                 if platform == 'tiktok':

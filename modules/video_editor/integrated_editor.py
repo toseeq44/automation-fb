@@ -11,7 +11,8 @@ from PyQt5.QtWidgets import (
     QSplitter, QFrame, QFileDialog, QMessageBox
 )
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QPixmap
+from PyQt5.QtGui import QPixmap, QImage
+import numpy as np
 
 from modules.logging.logger import get_logger
 from modules.video_editor.media_library_enhanced import EnhancedMediaLibrary, MediaItem
@@ -55,65 +56,62 @@ class IntegratedVideoEditor(QWidget):
             # Import the fixed video player
             from modules.video_editor.custom_video_player import IntegratedVideoPlayer
             
-            # Create video player instance
-            self.video_player = IntegratedVideoPlayer()
-            print("DEBUG: Video player instance created")
-            
-            # Connect video player signals
-            self.video_player.frame_ready.connect(self.on_video_frame_ready)
-            self.video_player.position_changed.connect(self.on_video_position_changed)
-            self.video_player.duration_changed.connect(self.on_video_duration_changed)
-            self.video_player.state_changed.connect(self.on_video_state_changed)
-            
-            print("✅ Integrated video player setup completed")
+            # Create independent players for BEFORE and AFTER panels
+            self.before_player = IntegratedVideoPlayer(preview_role="before")
+            self.after_player = IntegratedVideoPlayer(preview_role="after")
+
+            print("DEBUG: Video player instances created (before & after)")
+
+            # Connect BEFORE player signals
+            self.before_player.frame_ready.connect(self._on_before_frame_signal)
+            self.before_player.position_changed.connect(self.on_before_position_changed)
+            self.before_player.duration_changed.connect(self.on_before_duration_changed)
+            self.before_player.state_changed.connect(self.on_before_state_changed)
+
+            # Connect AFTER player signals
+            self.after_player.frame_ready.connect(self._on_after_frame_signal)
+            self.after_player.position_changed.connect(self.on_after_position_changed)
+            self.after_player.duration_changed.connect(self.on_after_duration_changed)
+            self.after_player.state_changed.connect(self.on_after_state_changed)
+
+            print("✅ Integrated video players setup completed")
             
         except Exception as e:
             print(f"❌ Error setting up video player: {str(e)}")
             import traceback
             traceback.print_exc()
             # Set video_player to None to avoid attribute errors
-            self.video_player = None
+            self.before_player = None
+            self.after_player = None
 
     def setup_dual_controls(self):
-        """Setup dual independent control panels"""
+        """Wire up dual control panels after UI creation."""
+        if hasattr(self, "control_panel"):
+            # Using legacy unified control panel; skip dual wiring
+            return
         try:
-            from modules.video_editor.dual_control_panel import DualControlPanel
-            
-            # Create dual control panel
-            self.dual_controls = DualControlPanel()
-            
-            # Connect BEFORE controls
-            self.dual_controls.before_controls.play_clicked.connect(
-                lambda: self.on_before_play_clicked()
-            )
-            self.dual_controls.before_controls.pause_clicked.connect(
-                lambda: self.on_before_pause_clicked()
-            )
-            self.dual_controls.before_controls.stop_clicked.connect(
-                lambda: self.on_before_stop_clicked()
-            )
-            self.dual_controls.before_controls.scrubber_moved.connect(
-                lambda pos: self.on_before_scrubber_moved(pos)
-            )
-            
-            # Connect AFTER controls  
-            self.dual_controls.after_controls.play_clicked.connect(
-                lambda: self.on_after_play_clicked()
-            )
-            self.dual_controls.after_controls.pause_clicked.connect(
-                lambda: self.on_after_pause_clicked()
-            )
-            self.dual_controls.after_controls.stop_clicked.connect(
-                lambda: self.on_after_stop_clicked()
-            )
-            self.dual_controls.after_controls.scrubber_moved.connect(
-                lambda pos: self.on_after_scrubber_moved(pos)
-            )
-            
-            print("✅ Dual control panels setup completed")
-            
+            if not hasattr(self, 'dual_controls'):
+                from modules.video_editor.dual_control_panel import DualControlPanel
+                self.dual_controls = DualControlPanel()
+
+            controls = self.dual_controls
+
+            # BEFORE controls
+            controls.before_controls.play_clicked.connect(self.on_before_play_clicked)
+            controls.before_controls.pause_clicked.connect(self.on_before_pause_clicked)
+            controls.before_controls.stop_clicked.connect(self.on_before_stop_clicked)
+            controls.before_controls.scrubber_moved.connect(self.on_before_scrubber_moved)
+
+            # AFTER controls  
+            controls.after_controls.play_clicked.connect(self.on_after_play_clicked)
+            controls.after_controls.pause_clicked.connect(self.on_after_pause_clicked)
+            controls.after_controls.stop_clicked.connect(self.on_after_stop_clicked)
+            controls.after_controls.scrubber_moved.connect(self.on_after_scrubber_moved)
+
+            print("DEBUG: Dual control panels connected")
+
         except Exception as e:
-            print(f"❌ Error setting up dual controls: {str(e)}")
+            print(f"DEBUG: Error setting up dual controls: {str(e)}")
             import traceback
             traceback.print_exc()
 
@@ -160,10 +158,7 @@ class IntegratedVideoEditor(QWidget):
             from modules.video_editor.dual_control_panel import DualControlPanel
             self.dual_controls = DualControlPanel()
             center_layout.addWidget(self.dual_controls)
-            
-            # Connect dual controls
-            self.setup_dual_controls_connections()
-            
+
         except ImportError:
             # Fallback to old control panel
             self.control_panel = UnifiedControlPanel()
@@ -200,55 +195,18 @@ class IntegratedVideoEditor(QWidget):
     def debug_video_player_state(self):
         """Debug video player state"""
         try:
-            if hasattr(self, 'video_player') and self.video_player:
-                print(f"DEBUG: Video Player State: {self.video_player.get_state()}")
-                print(f"DEBUG: Video Duration: {self.video_player.get_duration()}")
-                print(f"DEBUG: Video Position: {self.video_player.get_position()}")
-            else:
-                print("DEBUG: Video player not available")
+            for label, player in (
+                ("BEFORE", getattr(self, 'before_player', None)),
+                ("AFTER", getattr(self, 'after_player', None)),
+            ):
+                if player:
+                    print(f"DEBUG: {label} Player State: {player.get_state()}")
+                    print(f"DEBUG: {label} Duration: {player.get_duration()}")
+                    print(f"DEBUG: {label} Position: {player.get_position()}")
+                else:
+                    print(f"DEBUG: {label} player not available")
         except Exception as e:
             print(f"DEBUG: Error checking video player state: {str(e)}")
-
-    def setup_dual_controls_connections(self):
-        """Connect dual control panels to video player - FIXED VERSION"""
-        try:
-            if hasattr(self, 'dual_controls') and hasattr(self, 'video_player'):
-                print("DEBUG: Setting up dual controls connections...")
-                
-                # BEFORE controls - DIRECT CONNECTION
-                self.dual_controls.before_controls.play_clicked.connect(
-                    self.on_before_play_clicked
-                )
-                self.dual_controls.before_controls.pause_clicked.connect(
-                    self.on_before_pause_clicked
-                )
-                self.dual_controls.before_controls.stop_clicked.connect(
-                    self.on_before_stop_clicked
-                )
-                self.dual_controls.before_controls.scrubber_moved.connect(
-                    self.on_before_scrubber_moved
-                )
-                
-                # AFTER controls - DIRECT CONNECTION  
-                self.dual_controls.after_controls.play_clicked.connect(
-                    self.on_after_play_clicked
-                )
-                self.dual_controls.after_controls.pause_clicked.connect(
-                    self.on_after_pause_clicked
-                )
-                self.dual_controls.after_controls.stop_clicked.connect(
-                    self.on_after_stop_clicked
-                )
-                self.dual_controls.after_controls.scrubber_moved.connect(
-                    self.on_after_scrubber_moved
-                )
-                
-                print("✅ Dual controls connections setup completed")
-                
-        except Exception as e:
-            print(f"❌ Error setting up dual controls connections: {str(e)}")
-            import traceback
-            traceback.print_exc()
 
     def apply_theme(self):
         """Apply professional dark theme"""
@@ -605,26 +563,30 @@ class IntegratedVideoEditor(QWidget):
             # 1. Load in dual preview (UI update)
             self.dual_preview.load_video(video_path)
             
-            # 2. Load in integrated video player (ACTUAL VIDEO PLAYBACK)
-            if hasattr(self, 'video_player') and self.video_player:
-                success = self.video_player.load_video(video_path)
-                
-                if success:
-                    print("DEBUG: Video loaded successfully in integrated player")
-                    
-                    # Show first frame immediately
-                    self.video_player.seek(0)
-                    
-                    # Update control panels with duration
-                    duration = self.video_player.get_duration()
-                    self.update_control_panels_duration(duration)
+            # 2. Load BEFORE player
+            before_success = False
+            if hasattr(self, 'before_player') and self.before_player:
+                before_success = self.before_player.load_video(video_path)
+                if before_success:
+                    self.before_player.seek(0)
+                    before_duration = self.before_player.get_duration()
+                    self._update_panel_duration(before_duration, getattr(self.dual_controls, 'before_controls', None), True)
                 else:
-                    print("DEBUG: Failed to load video in player")
-                    self.show_error_message("Failed to load video in player")
-            else:
-                print("DEBUG: Video player not available, using fallback")
-                # Fallback: Just update UI without actual playback
-                pass
+                    print("DEBUG: Failed to load video in BEFORE player")
+
+            # 3. Load AFTER player
+            after_success = False
+            if hasattr(self, 'after_player') and self.after_player:
+                after_success = self.after_player.load_video(video_path)
+                if after_success:
+                    self.after_player.seek(0)
+                    after_duration = self.after_player.get_duration()
+                    self._update_panel_duration(after_duration, getattr(self.dual_controls, 'after_controls', None), False)
+                else:
+                    print("DEBUG: Failed to load video in AFTER player")
+
+            if not before_success or not after_success:
+                self.show_error_message("One of the preview players failed to load the video.")
                 
             logger.info(f"Video loaded successfully: {os.path.basename(video_path)}")
             
@@ -633,218 +595,265 @@ class IntegratedVideoEditor(QWidget):
             import traceback
             traceback.print_exc()
 
-    def update_control_panels_duration(self, duration_seconds):
-        """Update both control panels with video duration"""
-        try:
-            if hasattr(self, 'dual_controls'):
-                self.dual_controls.before_controls.set_duration(duration_seconds)
-                self.dual_controls.after_controls.set_duration(duration_seconds)
-            elif hasattr(self, 'control_panel'):
-                self.control_panel.set_duration(duration_seconds)
-        except Exception as e:
-            print(f"DEBUG: Error updating control panels: {str(e)}")
+    def _on_before_frame_signal(self, frame_data, _is_before):
+        self._display_frame(frame_data, True)
 
-    def on_video_frame_ready(self, frame_pixmap, is_before):
-        """Receive video frames and display in preview windows"""
+    def _on_after_frame_signal(self, frame_data, _is_before):
+        self._display_frame(frame_data, False)
+
+    def _display_frame(self, frame_data, is_before):
+        """Render a frame into the appropriate preview panel."""
         try:
-            # Display frame in appropriate preview window
+            frame_pixmap = self._frame_data_to_pixmap(frame_data)
             self.dual_preview.show_video_frame(frame_pixmap, is_before)
-            
         except Exception as e:
             print(f"DEBUG: Error displaying video frame: {str(e)}")
 
-    def on_video_position_changed(self, position_seconds):
-        """Update UI when video position changes"""
+    def _frame_data_to_pixmap(self, frame_data):
+        """Convert numpy frame data to QPixmap."""
+        frame_pixmap = QPixmap()
+
+        if isinstance(frame_data, np.ndarray) and frame_data.size:
+            height, width = frame_data.shape[:2]
+            channels = frame_data.shape[2] if frame_data.ndim == 3 else 1
+
+            if channels == 3:
+                bytes_per_line = channels * width
+                q_image = QImage(frame_data.data, width, height, bytes_per_line, QImage.Format_RGB888)
+            elif channels == 4:
+                bytes_per_line = channels * width
+                image_format = QImage.Format_RGBA8888 if hasattr(QImage, "Format_RGBA8888") else QImage.Format_RGB32
+                q_image = QImage(frame_data.data, width, height, bytes_per_line, image_format)
+            else:
+                q_image = QImage()
+
+            if not q_image.isNull():
+                frame_pixmap = QPixmap.fromImage(q_image.copy())
+
+        return frame_pixmap
+
+    def on_before_position_changed(self, position_seconds):
+        """Update BEFORE panel when its playback position changes."""
+        self._update_panel_position(
+            position_seconds=position_seconds,
+            player=getattr(self, 'before_player', None),
+            control=getattr(self.dual_controls, 'before_controls', None),
+            is_before=True,
+        )
+
+    def on_after_position_changed(self, position_seconds):
+        """Update AFTER panel when its playback position changes."""
+        self._update_panel_position(
+            position_seconds=position_seconds,
+            player=getattr(self, 'after_player', None),
+            control=getattr(self.dual_controls, 'after_controls', None),
+            is_before=False,
+        )
+
+    def _update_panel_position(self, position_seconds, player, control, is_before):
         try:
-            duration = self.video_player.get_duration()
-            
-            if duration > 0:
-                # Convert seconds to scrubber position (0-1000)
+            if not player:
+                return
+
+            duration = player.get_duration()
+
+            if duration > 0 and control:
                 scrubber_position = int((position_seconds / duration) * 1000)
-                
-                # Update control panels
-                if hasattr(self, 'dual_controls'):
-                    self.dual_controls.before_controls.set_position(scrubber_position)
-                    self.dual_controls.after_controls.set_position(scrubber_position)
-                elif hasattr(self, 'control_panel'):
-                    self.control_panel.set_position(scrubber_position)
-            
-            # Update dual preview time display
-            self.dual_preview.update_time(position_seconds, duration)
-            
-        except Exception as e:
-            print(f"DEBUG: Error updating position: {str(e)}")
+                control.set_position(scrubber_position)
 
-    def on_video_duration_changed(self, duration_seconds):
-        """Update UI when video duration is known"""
-        try:
-            # Update control panels
-            self.update_control_panels_duration(duration_seconds)
-            
-            # Update dual preview
-            self.dual_preview.update_time(0, duration_seconds)
-            
+            self.dual_preview.update_time_for_panel(is_before, position_seconds, duration)
         except Exception as e:
-            print(f"DEBUG: Error updating duration: {str(e)}")
+            print(f"DEBUG: Error updating position for panel ({'before' if is_before else 'after'}): {str(e)}")
 
-    def on_video_state_changed(self, state):
-        """Handle video state changes - FIXED to prevent recursion"""
-        try:
-            print(f"DEBUG: Video state changed to: {state}")
-            
-            # Update control panels WITHOUT emitting signals (prevent recursion)
-            if hasattr(self, 'dual_controls'):
-                if state == "playing":
-                    self.dual_controls.before_controls.set_playing_state(update_ui_only=True)
-                    self.dual_controls.after_controls.set_playing_state(update_ui_only=True)
-                elif state == "paused":
-                    self.dual_controls.before_controls.set_paused_state(update_ui_only=True)
-                    self.dual_controls.after_controls.set_paused_state(update_ui_only=True)
-                elif state == "stopped":
-                    self.dual_controls.before_controls.set_stopped_state(update_ui_only=True)
-                    self.dual_controls.after_controls.set_stopped_state(update_ui_only=True)
-                    
-        except Exception as e:
-            print(f"DEBUG: Error handling state change: {str(e)}")
+    def on_before_duration_changed(self, duration_seconds):
+        """Update BEFORE panel when duration is known."""
+        self._update_panel_duration(
+            duration_seconds,
+            control=getattr(self.dual_controls, 'before_controls', None),
+            is_before=True,
+        )
 
-    def on_scrubber_moved(self, scrubber_position):
-        """Handle scrubber movement - seek video"""
+    def on_after_duration_changed(self, duration_seconds):
+        """Update AFTER panel when duration is known."""
+        self._update_panel_duration(
+            duration_seconds,
+            control=getattr(self.dual_controls, 'after_controls', None),
+            is_before=False,
+        )
+
+    def _update_panel_duration(self, duration_seconds, control, is_before):
         try:
-            if hasattr(self, 'video_player') and self.video_player:
-                # Convert scrubber position (0-1000) to seconds
-                duration = self.video_player.get_duration()
-                target_time = (scrubber_position / 1000.0) * duration
-                self.video_player.seek(target_time)
-                
+            if control:
+                control.set_duration(duration_seconds)
+            self.dual_preview.update_time_for_panel(is_before, 0, duration_seconds)
         except Exception as e:
-            print(f"DEBUG: Error seeking video: {str(e)}")
+            print(f"DEBUG: Error updating duration for panel ({'before' if is_before else 'after'}): {str(e)}")
+
+    def on_before_state_changed(self, state):
+        self._update_panel_state(state, getattr(self.dual_controls, 'before_controls', None), "before")
+
+    def on_after_state_changed(self, state):
+        self._update_panel_state(state, getattr(self.dual_controls, 'after_controls', None), "after")
+
+    def _update_panel_state(self, state, control_panel, label):
+        """Update panel buttons without re-triggering signals."""
+        try:
+            if not control_panel:
+                return
+
+            print(f"DEBUG: {label.upper()} panel state -> {state}")
+
+            if state == "playing":
+                control_panel.set_playing_state(update_ui_only=True)
+            elif state == "paused":
+                control_panel.set_paused_state(update_ui_only=True)
+            elif state == "stopped":
+                control_panel.set_stopped_state(update_ui_only=True)
+        except Exception as e:
+            print(f"DEBUG: Error handling state change for {label}: {str(e)}")
+
+    def _seek_player(self, player, scrubber_position, label):
+        """Seek the given player based on a 0-1000 scrubber value."""
+        try:
+            if not player or not player.has_video():
+                return
+
+            duration = player.get_duration()
+            if duration <= 0:
+                return
+
+            target_time = (scrubber_position / 1000.0) * duration
+            player.seek(target_time)
+            print(f"DEBUG: {label} seek -> {target_time:.2f}s ({scrubber_position}/1000)")
+
+        except Exception as e:
+            print(f"DEBUG: Error seeking video for {label}: {str(e)}")
 
     # Dual control panel methods
     def on_before_play_clicked(self):
         """Handle before window play - FIXED"""
         try:
-            print("DEBUG: 🎬 BEFORE Play button clicked")
+            print("DEBUG: BEFORE Controls -> play clicked")
             self.debug_video_player_state()
             
-            if hasattr(self, 'video_player') and self.video_player:
-                # Check if video is loaded
-                if self.video_player.get_duration() > 0:
-                    self.video_player.play()
-                    print("DEBUG: ✅ Video player play command sent")
-                    
-                    # Update UI state
-                    self.dual_controls.before_controls.set_playing_state(update_ui_only=True)
-                    self.dual_controls.after_controls.set_playing_state(update_ui_only=True)
-                else:
-                    print("DEBUG: ❌ No video loaded to play")
+            player = getattr(self, 'before_player', None)
+            control = getattr(self.dual_controls, 'before_controls', None)
+
+            if player and player.has_video():
+                player.play()
+                print("DEBUG: BEFORE player play command sent")
+                if control:
+                    control.set_playing_state(update_ui_only=True)
             else:
-                print("DEBUG: ❌ Video player not available")
+                print("DEBUG: BEFORE player not ready")
                 
         except Exception as e:
-            print(f"DEBUG: ❌ Error in on_before_play_clicked: {str(e)}")
+            print(f"DEBUG: Error in on_before_play_clicked: {str(e)}")
             import traceback
             traceback.print_exc()
 
     def on_before_pause_clicked(self):
         """Handle before window pause - FIXED"""
         try:
-            print("DEBUG: ⏸️ BEFORE Pause button clicked")
+            print("DEBUG: BEFORE Controls -> pause clicked")
             
-            if hasattr(self, 'video_player') and self.video_player:
-                self.video_player.pause()
-                print("DEBUG: ✅ Video player pause command sent")
-                
-                # Update UI state
-                self.dual_controls.before_controls.set_paused_state(update_ui_only=True)
-                self.dual_controls.after_controls.set_paused_state(update_ui_only=True)
+            player = getattr(self, 'before_player', None)
+            control = getattr(self.dual_controls, 'before_controls', None)
+
+            if player and player.has_video():
+                player.pause()
+                print("DEBUG: BEFORE player pause command sent")
+                if control:
+                    control.set_paused_state(update_ui_only=True)
             else:
-                print("DEBUG: ❌ Video player not available")
+                print("DEBUG: BEFORE player not available")
                 
         except Exception as e:
-            print(f"DEBUG: ❌ Error in on_before_pause_clicked: {str(e)}")
+            print(f"DEBUG: Error in on_before_pause_clicked: {str(e)}")
 
     def on_before_stop_clicked(self):
         """Handle before window stop - FIXED"""
         try:
-            print("DEBUG: ⏹️ BEFORE Stop button clicked")
+            print("DEBUG: BEFORE Controls -> stop clicked")
             
-            if hasattr(self, 'video_player') and self.video_player:
-                self.video_player.stop()
-                print("DEBUG: ✅ Video player stop command sent")
-                
-                # Update UI state
-                self.dual_controls.before_controls.set_stopped_state(update_ui_only=True)
-                self.dual_controls.after_controls.set_stopped_state(update_ui_only=True)
+            player = getattr(self, 'before_player', None)
+            control = getattr(self.dual_controls, 'before_controls', None)
+
+            if player and player.has_video():
+                player.stop()
+                print("DEBUG: BEFORE player stop command sent")
+                if control:
+                    control.set_stopped_state(update_ui_only=True)
             else:
-                print("DEBUG: ❌ Video player not available")
+                print("DEBUG: BEFORE player not available")
                 
         except Exception as e:
-            print(f"DEBUG: ❌ Error in on_before_stop_clicked: {str(e)}")     
+            print(f"DEBUG: Error in on_before_stop_clicked: {str(e)}")     
     
     def on_before_scrubber_moved(self, position):
         """Handle before window scrubber movement"""
-        self.on_scrubber_moved(position)
+        self._seek_player(getattr(self, 'before_player', None), position, "before")
 
     def on_after_play_clicked(self):
         """Handle after window play - FIXED"""
         try:
-            print("DEBUG: 🎬 AFTER Play button clicked")
+            print("DEBUG: AFTER Controls -> play clicked")
             self.debug_video_player_state()
             
-            if hasattr(self, 'video_player') and self.video_player:
-                if self.video_player.get_duration() > 0:
-                    self.video_player.play()
-                    print("DEBUG: ✅ Video player play command sent")
-                    
-                    # Update UI state
-                    self.dual_controls.before_controls.set_playing_state(update_ui_only=True)
-                    self.dual_controls.after_controls.set_playing_state(update_ui_only=True)
-                else:
-                    print("DEBUG: ❌ No video loaded to play")
+            player = getattr(self, 'after_player', None)
+            control = getattr(self.dual_controls, 'after_controls', None)
+
+            if player and player.has_video():
+                player.play()
+                print("DEBUG: AFTER player play command sent")
+                if control:
+                    control.set_playing_state(update_ui_only=True)
             else:
-                print("DEBUG: ❌ Video player not available")
+                print("DEBUG: AFTER player not ready")
                 
         except Exception as e:
-            print(f"DEBUG: ❌ Error in on_after_play_clicked: {str(e)}")
+            print(f"DEBUG: Error in on_after_play_clicked: {str(e)}")
 
     def on_after_pause_clicked(self):
         """Handle after window pause - FIXED"""
         try:
-            print("DEBUG: ⏸️ AFTER Pause button clicked")
+            print("DEBUG: AFTER Controls -> pause clicked")
             
-            if hasattr(self, 'video_player') and self.video_player:
-                self.video_player.pause()
-                print("DEBUG: ✅ Video player pause command sent")
-                
-                # Update UI state
-                self.dual_controls.before_controls.set_paused_state(update_ui_only=True)
-                self.dual_controls.after_controls.set_paused_state(update_ui_only=True)
+            player = getattr(self, 'after_player', None)
+            control = getattr(self.dual_controls, 'after_controls', None)
+
+            if player and player.has_video():
+                player.pause()
+                print("DEBUG: AFTER player pause command sent")
+                if control:
+                    control.set_paused_state(update_ui_only=True)
             else:
-                print("DEBUG: ❌ Video player not available")
+                print("DEBUG: AFTER player not available")
                 
         except Exception as e:
-            print(f"DEBUG: ❌ Error in on_after_pause_clicked: {str(e)}")
+            print(f"DEBUG: Error in on_after_pause_clicked: {str(e)}")
 
     def on_after_stop_clicked(self):
         """Handle after window stop - FIXED"""
         try:
-            print("DEBUG: ⏹️ AFTER Stop button clicked")
+            print("DEBUG: AFTER Controls -> stop clicked")
             
-            if hasattr(self, 'video_player') and self.video_player:
-                self.video_player.stop()
-                print("DEBUG: ✅ Video player stop command sent")
-                
-                # Update UI state
-                self.dual_controls.before_controls.set_stopped_state(update_ui_only=True)
-                self.dual_controls.after_controls.set_stopped_state(update_ui_only=True)
+            player = getattr(self, 'after_player', None)
+            control = getattr(self.dual_controls, 'after_controls', None)
+
+            if player and player.has_video():
+                player.stop()
+                print("DEBUG: AFTER player stop command sent")
+                if control:
+                    control.set_stopped_state(update_ui_only=True)
             else:
-                print("DEBUG: ❌ Video player not available")
+                print("DEBUG: AFTER player not available")
                 
         except Exception as e:
-            print(f"DEBUG: ❌ Error in on_after_stop_clicked: {str(e)}")   
+            print(f"DEBUG: Error in on_after_stop_clicked: {str(e)}")  
     def on_after_scrubber_moved(self, position):
         """Handle after window scrubber movement"""
-        self.on_scrubber_moved(position)
+        self._seek_player(getattr(self, 'after_player', None), position, "after")
 
     def show_error_message(self, message):
         """Show error message to user"""
@@ -854,8 +863,9 @@ class IntegratedVideoEditor(QWidget):
     def cleanup(self):
         """Clean up resources"""
         try:
-            if hasattr(self, 'video_player'):
-                self.video_player.cleanup()
+            for player in (getattr(self, 'before_player', None), getattr(self, 'after_player', None)):
+                if player:
+                    player.cleanup()
         except Exception as e:
             print(f"DEBUG: Error during cleanup: {str(e)}")
 
@@ -871,20 +881,23 @@ class IntegratedVideoEditor(QWidget):
     def on_play_clicked(self):
         """Handle play button"""
         logger.info("Play clicked")
-        if hasattr(self, 'video_player') and self.video_player:
-            self.video_player.play()
+        for player in (getattr(self, 'before_player', None), getattr(self, 'after_player', None)):
+            if player and player.has_video():
+                player.play()
 
     def on_pause_clicked(self):
         """Handle pause button"""
         logger.info("Pause clicked")
-        if hasattr(self, 'video_player') and self.video_player:
-            self.video_player.pause()
+        for player in (getattr(self, 'before_player', None), getattr(self, 'after_player', None)):
+            if player and player.has_video():
+                player.pause()
 
     def on_stop_clicked(self):
         """Handle stop button"""
         logger.info("Stop clicked")
-        if hasattr(self, 'video_player') and self.video_player:
-            self.video_player.stop()
+        for player in (getattr(self, 'before_player', None), getattr(self, 'after_player', None)):
+            if player and player.has_video():
+                player.stop()
         if hasattr(self, 'control_panel'):
             self.control_panel.reset()
 

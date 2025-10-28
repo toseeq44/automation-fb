@@ -109,6 +109,8 @@ class VideoDownloaderThread(QThread):
         return normalized in self.downloaded_links
 
     def _should_skip_folder(self, folder_path: str) -> bool:
+        if not self.skip_recent_window:
+            return False
         try:
             timestamp_file = Path(folder_path) / ".last_download_time.txt"
             if timestamp_file.exists():

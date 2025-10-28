@@ -11,6 +11,7 @@ from PyQt5 import QtWidgets
 from pathlib import Path
 from datetime import datetime
 from .core import VideoDownloaderThread
+from .url_utils import extract_urls
 
 class VideoDownloaderPage(QWidget):
     def __init__(self, back_callback=None, links=None):
@@ -495,10 +496,13 @@ class VideoDownloaderPage(QWidget):
                 QMessageBox.warning(self, "Error", "Paste at least one URL or grab links first.")
                 return
 
-        urls = [u.strip() for u in raw_urls.replace(',', '\n').splitlines() if u.strip() and u.startswith(('http://', 'https://'))]
+        urls = extract_urls(raw_urls)
         if not urls:
             QMessageBox.warning(self, "Error", "No valid URLs found.")
             return
+
+        # Replace input with cleaned list so the user sees what will be downloaded
+        self.url_input.setPlainText('\n'.join(urls))
 
         save_path = self.path_input.text().strip()
         if not save_path:

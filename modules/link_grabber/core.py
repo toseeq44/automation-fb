@@ -564,13 +564,19 @@ def _method_selenium(url: str, platform_key: str) -> typing.List[dict]:
     return []
 
 
-def extract_links_all_methods(url: str, platform_key: str, cookies_dir: Path, options: dict = None, progress_callback=None) -> typing.Tuple[typing.List[dict], str]:
-    """
-    Try ALL extraction methods in sequence
-    """
+def extract_links_all_methods(
+    url: str,
+    platform_key: str,
+    cookies_dir: Path,
+    options: dict = None,
+    progress_callback=None,
+) -> typing.Tuple[typing.List[dict], str]:
+    """Try extraction methods sequentially (optionally aggregating all)."""
+
     try:
         options = options or {}
         max_videos = int(options.get('max_videos', 0) or 0)
+        force_all_methods = bool(options.get('force_all_methods', False))
         creator = _extract_creator_from_url(url, platform_key)
 
         # Find cookies
@@ -581,78 +587,112 @@ def extract_links_all_methods(url: str, platform_key: str, cookies_dir: Path, op
             temp_cookie_file = _extract_browser_cookies(platform_key)
             cookie_file = temp_cookie_file
 
-        entries = []
-        methods_tried = []
+        entries: typing.List[dict] = []
+        methods_used: typing.List[str] = []
+        seen_normalized: typing.Set[str] = set()
 
-        # METHOD 1: yt-dlp --get-url
-        if progress_callback:
-            progress_callback("🔄 Method 1: yt-dlp --get-url")
-        method_entries = _method_ytdlp_get_url(url, platform_key, cookie_file, max_videos)
-        if method_entries:
-            entries.extend(method_entries)
-            methods_tried.append("yt-dlp --get-url")
+        def merge_entries(method_name: str, method_entries: typing.List[dict]) -> bool:
+            """Merge new entries, return True if anything new was added."""
 
-        # METHOD 2: yt-dlp --dump-json
-        if not entries and progress_callback:
-            progress_callback("🔄 Method 2: yt-dlp --dump-json")
-        if not entries:
-            method_entries = _method_ytdlp_dump_json(url, platform_key, cookie_file, max_videos)
-            if method_entries:
-                entries.extend(method_entries)
-                methods_tried.append("yt-dlp --dump-json")
+            if not method_entries:
+                if progress_callback:
+                    progress_callback(f"⚠️ {method_name} produced 0 links")
+                return False
 
-        # METHOD 3: Instaloader (Instagram only)
-        if not entries and platform_key == 'instagram':
+            added = 0
+            for entry in method_entries:
+                if max_videos > 0 and len(entries) >= max_videos:
+                    break
+                url_value = entry.get('url') if isinstance(entry, dict) else None
+                if not url_value:
+                    continue
+                normalized = _normalize_url(url_value)
+                if normalized in seen_normalized:
+                    continue
+                seen_normalized.add(normalized)
+                entries.append(entry)
+                added += 1
+
+            if added:
+                methods_used.append(f"{method_name} ({added})")
+                if progress_callback:
+                    progress_callback(
+                        f"✅ {method_name} -> {added} unique link(s) (total: {len(entries)})"
+                    )
+                return True
+
             if progress_callback:
-                progress_callback("🔄 Method 3: Instaloader")
-            method_entries = _method_instaloader(url, platform_key, cookie_file)
-            if method_entries:
-                entries.extend(method_entries)
-                methods_tried.append("instaloader")
+                progress_callback(f"⚠️ {method_name} had only duplicates")
+            return False
 
-        # METHOD 4: gallery-dl
-        if not entries and platform_key in ['instagram', 'tiktok']:
-            if progress_callback:
-                progress_callback("🔄 Method 4: gallery-dl")
-            method_entries = _method_gallery_dl(url, platform_key, cookie_file)
-            if method_entries:
-                entries.extend(method_entries)
-                methods_tried.append("gallery-dl")
+        method_pipeline = [
+            (
+                "Method 1: yt-dlp --get-url",
+                lambda: _method_ytdlp_get_url(url, platform_key, cookie_file, max_videos),
+                True,
+            ),
+            (
+                "Method 2: yt-dlp --dump-json",
+                lambda: _method_ytdlp_dump_json(url, platform_key, cookie_file, max_videos),
+                True,
+            ),
+            (
+                "Method 3: Instaloader",
+                lambda: _method_instaloader(url, platform_key, cookie_file),
+                platform_key == 'instagram',
+            ),
+            (
+                "Method 4: gallery-dl",
+                lambda: _method_gallery_dl(url, platform_key, cookie_file),
+                platform_key in ['instagram', 'tiktok'],
+            ),
+            (
+                "Method 5: Playwright",
+                lambda: _method_playwright(url, platform_key),
+                platform_key in ['tiktok', 'instagram'],
+            ),
+            (
+                "Method 6: Selenium",
+                lambda: _method_selenium(url, platform_key),
+                True,
+            ),
+        ]
 
-        # METHOD 5: Playwright
-        if not entries and platform_key in ['tiktok', 'instagram']:
+        for method_name, method_func, is_allowed in method_pipeline:
+            if not is_allowed:
+                continue
+            if max_videos > 0 and len(entries) >= max_videos:
+                break
             if progress_callback:
-                progress_callback("🔄 Method 5: Playwright")
-            method_entries = _method_playwright(url, platform_key)
-            if method_entries:
-                entries.extend(method_entries)
-                methods_tried.append("playwright")
+                progress_callback(f"🔄 {method_name}")
+            try:
+                added = merge_entries(method_name, method_func())
+            except Exception as method_error:
+                if progress_callback:
+                    progress_callback(
+                        f"⚠️ {method_name} error: {str(method_error)[:120]}"
+                    )
+                added = False
 
-        # METHOD 6: Selenium
-        if not entries:
-            if progress_callback:
-                progress_callback("🔄 Method 6: Selenium")
-            method_entries = _method_selenium(url, platform_key)
-            if method_entries:
-                entries.extend(method_entries)
-                methods_tried.append("selenium")
+            if added and not force_all_methods:
+                break
 
         # Cleanup temp cookies
         if temp_cookie_file and os.path.exists(temp_cookie_file):
             try:
                 os.unlink(temp_cookie_file)
-            except:
+            except Exception:
                 pass
 
-        # Remove duplicates and apply limits
         if entries:
             entries = _remove_duplicate_entries(entries)
-            
             if max_videos > 0:
                 entries = entries[:max_videos]
-
             if progress_callback:
-                progress_callback(f"✅ Success with: {', '.join(methods_tried)} - {len(entries)} links")
+                method_summary = ', '.join(methods_used) if methods_used else 'unknown methods'
+                progress_callback(
+                    f"✅ Success with: {method_summary} - {len(entries)} links"
+                )
 
         return entries, creator
 

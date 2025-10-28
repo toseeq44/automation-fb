@@ -50,6 +50,25 @@ def _normalize_url(url: str) -> str:
     except Exception:
         return url.strip()
 
+def _coerce_bool(value, default: bool = True) -> bool:
+    """Best-effort boolean parsing that honours user intent."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        val = value.strip().lower()
+        if val in {'true', '1', 'yes', 'on', 'enable', 'enabled'}:
+            return True
+        if val in {'false', '0', 'no', 'off', 'disable', 'disabled'}:
+            return False
+    try:
+        return bool(value)
+    except Exception:
+        return default
+
 def _detect_platform(url: str) -> str:
     url = url.lower()
     if 'tiktok.com' in url: return 'tiktok'

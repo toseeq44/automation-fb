@@ -543,7 +543,8 @@ class VideoDownloaderPage(QWidget):
             'max_retries': max_retries,
             'playlist': self.playlist_check.isChecked(),
             'subtitles': self.subtitle_check.isChecked(),
-            'thumbnail': self.thumbnail_check.isChecked()
+            'thumbnail': self.thumbnail_check.isChecked(),
+            'skip_recent_window': False,
         }
 
         self.start_btn.setEnabled(False)

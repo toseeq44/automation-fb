@@ -50,6 +50,25 @@ def _normalize_url(url: str) -> str:
     except Exception:
         return url.strip()
 
+def _coerce_bool(value, default: bool = True) -> bool:
+    """Best-effort boolean parsing that honours user intent."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        val = value.strip().lower()
+        if val in {'true', '1', 'yes', 'on', 'enable', 'enabled'}:
+            return True
+        if val in {'false', '0', 'no', 'off', 'disable', 'disabled'}:
+            return False
+    try:
+        return bool(value)
+    except Exception:
+        return default
+
 def _detect_platform(url: str) -> str:
     url = url.lower()
     if 'tiktok.com' in url: return 'tiktok'
@@ -68,6 +87,9 @@ class VideoDownloaderThread(QThread):
     finished = pyqtSignal(bool, str)
     video_complete = pyqtSignal(str)
 
+    # default safeguards so attribute lookups never explode even if init fails mid-way
+    skip_recent_window = True
+
     def __init__(self, urls, save_path, options, parent=None):
         super().__init__(parent)
         # Accept string/list input for URLs
@@ -76,11 +98,34 @@ class VideoDownloaderThread(QThread):
         else:
             self.urls = [u.strip() for u in urls if u.strip()]
         self.save_path = save_path
-        self.options = options or {}
+        # Ensure options behave like a dict so feature flags don't break older callers
+        if options is None:
+            self.options = {}
+        elif isinstance(options, dict):
+            self.options = options
+        else:
+            # Some legacy callers pass QVariants/objects – fall back to empty dict but keep reference
+            try:
+                self.options = dict(options)
+            except Exception:
+                self.options = {}
         self.cancelled = False
         self.success_count = 0
         self.skipped_count = 0
         self.max_retries = self.options.get('max_retries', 3)
+        self.force_all_methods = bool(self.options.get('force_all_methods', False))
+        self.format_override = self.options.get('format') or None
+        # Default to the classic 24h guard unless the caller explicitly disables it
+        self.skip_recent_window = True
+        try:
+            opt_value = None
+            if isinstance(self.options, dict):
+                opt_value = self.options.get('skip_recent_window', None)
+            elif hasattr(self.options, 'get'):
+                opt_value = self.options.get('skip_recent_window', None)
+            self.skip_recent_window = _coerce_bool(opt_value, True)
+        except Exception:
+            self.skip_recent_window = True
         self.downloaded_links_file = Path(save_path) / ".downloaded_links.txt"
         self.downloaded_links = self._load_downloaded_links()
 
@@ -107,6 +152,8 @@ class VideoDownloaderThread(QThread):
         return normalized in self.downloaded_links
 
     def _should_skip_folder(self, folder_path: str) -> bool:
+        if not self.skip_recent_window:
+            return False
         try:
             timestamp_file = Path(folder_path) / ".last_download_time.txt"
             if timestamp_file.exists():
@@ -184,27 +231,42 @@ class VideoDownloaderThread(QThread):
     def _method1_batch_file_approach(self, url, output_path, cookie_file=None):
         try:
             self.progress.emit("🚀 Method 1: YT-DLP BATCH FILE")
-            cmd = [
-                'yt-dlp',
-                '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
-                '--rm-cache-dir', '--throttled-rate', '500K',
-                '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best',
-                '--restrict-filenames', '--no-warnings', '--retries', str(self.max_retries),
-                '--continue', '--no-check-certificate'
-            ]
-            if cookie_file:
-                cmd.extend(['--cookies', cookie_file])
-                self.progress.emit(f"🍪 Using cookies: {Path(cookie_file).name}")
-            cmd.append(url)
-            self.progress.emit("⏳ Downloading...")
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, encoding='utf-8', errors='replace')
-            if result.returncode == 0:
-                self.progress.emit("✅ Method 1 SUCCESS!")
-                return True
-            else:
+            default_format = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best'
+            format_candidates = []
+            if self.format_override:
+                format_candidates.append(self.format_override)
+            format_candidates.append(default_format)
+
+            for idx, fmt in enumerate(format_candidates, 1):
+                if idx > 1:
+                    self.progress.emit(f"🔁 Retrying Method 1 with fallback format ({fmt})")
+                cmd = [
+                    'yt-dlp',
+                    '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
+                    '--rm-cache-dir', '--throttled-rate', '500K',
+                    '-f', fmt,
+                    '--restrict-filenames', '--no-warnings', '--retries', str(self.max_retries),
+                    '--continue', '--no-check-certificate'
+                ]
+                if cookie_file:
+                    cmd.extend(['--cookies', cookie_file])
+                    self.progress.emit(f"🍪 Using cookies: {Path(cookie_file).name}")
+                cmd.append(url)
+                self.progress.emit("⏳ Downloading...")
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=1800,
+                    encoding='utf-8',
+                    errors='replace'
+                )
+                if result.returncode == 0:
+                    self.progress.emit("✅ Method 1 SUCCESS!")
+                    return True
                 error_msg = result.stderr[:200] if result.stderr else "Unknown error"
-                self.progress.emit(f"⚠️ Method 1 failed: {error_msg}")
-                return False
+                self.progress.emit(f"⚠️ Method 1 failed (format {fmt}): {error_msg}")
+            return False
         except subprocess.TimeoutExpired:
             self.progress.emit("⚠️ Method 1 timeout")
             return False
@@ -243,19 +305,31 @@ class VideoDownloaderThread(QThread):
                             self.progress.emit(f"✅ TikTok Approach {i} SUCCESS!")
                             return True
                     else:
-                        ydl_opts = {
+                        base_opts = {
                             'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
-                            'format': approach.get('format', 'best'),
                             'quiet': True, 'no_warnings': True,
                             'restrictfilenames': True, 'geo_bypass': True
                         }
-                        ydl_opts.update(approach)
-                        if cookie_file:
-                            ydl_opts['cookiefile'] = cookie_file
-                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                            ydl.download([url])
-                        self.progress.emit(f"✅ TikTok Approach {i} SUCCESS!")
-                        return True
+                        base_opts.update(approach)
+                        format_candidates = []
+                        if self.format_override:
+                            format_candidates.append(self.format_override)
+                        default_fmt = base_opts.get('format', 'best')
+                        if default_fmt not in format_candidates:
+                            format_candidates.append(default_fmt)
+                        for fmt in format_candidates:
+                            try:
+                                opts = dict(base_opts)
+                                opts['format'] = fmt
+                                if cookie_file:
+                                    opts['cookiefile'] = cookie_file
+                                with yt_dlp.YoutubeDL(opts) as ydl:
+                                    ydl.download([url])
+                                self.progress.emit(f"✅ TikTok Approach {i} SUCCESS!")
+                                return True
+                            except Exception as inner_e:
+                                self.progress.emit(f"⚠️ TikTok Approach {i} failed (format {fmt}): {str(inner_e)[:60]}")
+                                continue
                 except Exception as e:
                     self.progress.emit(f"⚠️ TikTok Approach {i} failed: {str(e)[:50]}")
                     continue
@@ -268,26 +342,44 @@ class VideoDownloaderThread(QThread):
     def _method3_optimized_ytdlp(self, url, output_path, cookie_file=None):
         try:
             self.progress.emit("🔄 Method 3: Optimized yt-dlp")
-            ydl_opts = {
-                'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
-                'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best',
-                'quiet': True, 'no_warnings': True, 'retries': self.max_retries,
-                'fragment_retries': self.max_retries, 'continuedl': True, 'nocheckcertificate': True,
-                'restrictfilenames': True, 'progress_hooks': [self._progress_hook],
-            }
-            if cookie_file: ydl_opts['cookiefile'] = cookie_file
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
-            self.progress.emit("✅ Method 3 SUCCESS")
-            return True
+            default_format = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best'
+            format_candidates = []
+            if self.format_override:
+                format_candidates.append(self.format_override)
+            format_candidates.append(default_format)
+            for idx, fmt in enumerate(format_candidates, 1):
+                try:
+                    if idx > 1:
+                        self.progress.emit(f"🔁 Method 3 retry with fallback format ({fmt})")
+                    ydl_opts = {
+                        'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
+                        'format': fmt,
+                        'quiet': True, 'no_warnings': True, 'retries': self.max_retries,
+                        'fragment_retries': self.max_retries, 'continuedl': True, 'nocheckcertificate': True,
+                        'restrictfilenames': True, 'progress_hooks': [self._progress_hook],
+                    }
+                    if cookie_file:
+                        ydl_opts['cookiefile'] = cookie_file
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        ydl.download([url])
+                    self.progress.emit("✅ Method 3 SUCCESS")
+                    return True
+                except Exception as inner_e:
+                    self.progress.emit(f"⚠️ Method 3 failed (format {fmt}): {str(inner_e)[:100]}")
+                    continue
+            return False
         except Exception as e:
-            self.progress.emit(f"⚠️ Method 3 failed: {str(e)[:100]}")
+            self.progress.emit(f"⚠️ Method 3 error: {str(e)[:100]}")
             return False
 
     def _method4_alternative_formats(self, url, output_path, cookie_file=None):
         try:
             self.progress.emit("🔄 Method 4: Alternative formats")
             format_options = ['best[ext=mp4]', 'bestvideo+bestaudio', 'best']
+            if self.format_override:
+                if self.format_override in format_options:
+                    format_options.remove(self.format_override)
+                format_options.insert(0, self.format_override)
             for fmt in format_options:
                 try:
                     ydl_opts = {
@@ -307,6 +399,43 @@ class VideoDownloaderThread(QThread):
             return False
         except Exception as e:
             self.progress.emit(f"⚠️ Method 4 error: {str(e)[:100]}")
+            return False
+
+    def _method5_force_ipv4(self, url, output_path, cookie_file=None):
+        try:
+            self.progress.emit("🔄 Method 5: Force IPv4 fallback")
+            format_string = self.format_override or 'best'
+            cmd = [
+                'yt-dlp',
+                '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
+                '-f', format_string,
+                '--force-ipv4', '--no-warnings', '--geo-bypass',
+                '--retries', str(self.max_retries), '--ignore-errors', '--continue',
+                '--restrict-filenames', '--no-check-certificate'
+            ]
+            if cookie_file:
+                cmd.extend(['--cookies', cookie_file])
+                self.progress.emit(f"🍪 Using cookies: {Path(cookie_file).name}")
+            cmd.append(url)
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=900,
+                encoding='utf-8',
+                errors='replace'
+            )
+            if result.returncode == 0:
+                self.progress.emit("✅ Method 5 SUCCESS!")
+                return True
+            error_msg = result.stderr[:200] if result.stderr else "Unknown error"
+            self.progress.emit(f"⚠️ Method 5 failed: {error_msg}")
+            return False
+        except subprocess.TimeoutExpired:
+            self.progress.emit("⚠️ Method 5 timeout")
+            return False
+        except Exception as e:
+            self.progress.emit(f"⚠️ Method 5 error: {str(e)[:100]}")
             return False
 
     def _progress_hook(self, d):
@@ -342,6 +471,8 @@ class VideoDownloaderThread(QThread):
             self.progress.emit("🧠 SMART DOWNLOADER STARTING")
             self.progress.emit(f"📊 Total links: {total}")
             self.progress.emit("="*60)
+            if self.force_all_methods:
+                self.progress.emit("🛡️ Multi-strategy fallback enabled")
             # Map URLs to their source folder by looking up all *.txt in save_path (recursive)
             url_folder_map = {}
             for root, dirs, files in os.walk(self.save_path):
@@ -380,9 +511,20 @@ class VideoDownloaderThread(QThread):
                 # Platform-wize methods
                 platform = _detect_platform(url)
                 if platform == 'tiktok':
-                    methods = [self._method2_tiktok_special, self._method1_batch_file_approach, self._method3_optimized_ytdlp, self._method4_alternative_formats]
+                    methods = [
+                        self._method2_tiktok_special,
+                        self._method1_batch_file_approach,
+                        self._method3_optimized_ytdlp,
+                        self._method4_alternative_formats,
+                    ]
                 else:
-                    methods = [self._method1_batch_file_approach, self._method3_optimized_ytdlp, self._method4_alternative_formats]
+                    methods = [
+                        self._method1_batch_file_approach,
+                        self._method3_optimized_ytdlp,
+                        self._method4_alternative_formats,
+                    ]
+                if self.force_all_methods:
+                    methods.append(self._method5_force_ipv4)
                 # Try all methods
                 success = False
                 for method in methods:

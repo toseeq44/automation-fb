@@ -11,6 +11,7 @@ from modules.video_editor.integrated_editor import IntegratedVideoEditor
 from modules.metadata_remover.gui import MetadataRemoverPage
 from modules.auto_uploader.gui import AutoUploaderPage
 from modules.api_manager.gui import APIConfigPage
+from modules.workflows.combo import CombinedWorkflowPage
 
 class MainMenuPage(QWidget):
     """Main menu with buttons for each module"""
@@ -39,6 +40,7 @@ class MainMenuPage(QWidget):
         self.modules = [
             ("🔗", "Link Grabber", "Extract video links from platforms"),
             ("⬇️", "Video Downloader", "Download videos from any platform"),
+            ("🚀", "Grab + Download", "Grab links and download automatically"),
             ("✂️", "Video Editor", "Edit and trim videos"),
             ("🔒", "Metadata Remover", "Remove metadata from videos"),
             ("☁️", "Auto Uploader", "Automate video uploads"),
@@ -100,6 +102,7 @@ class VideoToolSuiteGUI(QMainWindow):
         self.main_menu = MainMenuPage()
         self.link_grabber = LinkGrabberPage(go_back_callback=self.go_to_main_menu, shared_links=self.links)
         self.video_downloader = VideoDownloaderPage(back_callback=self.go_to_main_menu, links=self.links)
+        self.combined_workflow = CombinedWorkflowPage(go_back_callback=self.go_to_main_menu, shared_links=self.links)
         self.video_editor = IntegratedVideoEditor(self.go_to_main_menu)
         self.metadata_remover = MetadataRemoverPage(self.go_to_main_menu)
         self.auto_uploader = AutoUploaderPage(self.go_to_main_menu)
@@ -108,6 +111,7 @@ class VideoToolSuiteGUI(QMainWindow):
         self.stacked_widget.addWidget(self.main_menu)
         self.stacked_widget.addWidget(self.link_grabber)
         self.stacked_widget.addWidget(self.video_downloader)
+        self.stacked_widget.addWidget(self.combined_workflow)
         self.stacked_widget.addWidget(self.video_editor)
         self.stacked_widget.addWidget(self.metadata_remover)
         self.stacked_widget.addWidget(self.auto_uploader)
@@ -141,10 +145,11 @@ class VideoToolSuiteGUI(QMainWindow):
         module_map = {
             "Link Grabber": 1,
             "Video Downloader": 2,
-            "Video Editor": 3,
-            "Metadata Remover": 4,
-            "Auto Uploader": 5,
-            "API Config": 6
+            "Grab + Download": 3,
+            "Video Editor": 4,
+            "Metadata Remover": 5,
+            "Auto Uploader": 6,
+            "API Config": 7
         }
         self.stacked_widget.setCurrentIndex(module_map.get(module_title, 0))
 

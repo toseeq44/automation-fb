@@ -68,6 +68,9 @@ class VideoDownloaderThread(QThread):
     finished = pyqtSignal(bool, str)
     video_complete = pyqtSignal(str)
 
+    # default safeguards so attribute lookups never explode even if init fails mid-way
+    skip_recent_window = True
+
     def __init__(self, urls, save_path, options, parent=None):
         super().__init__(parent)
         # Accept string/list input for URLs

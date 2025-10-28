@@ -76,7 +76,17 @@ class VideoDownloaderThread(QThread):
         else:
             self.urls = [u.strip() for u in urls if u.strip()]
         self.save_path = save_path
-        self.options = options or {}
+        # Ensure options behave like a dict so feature flags don't break older callers
+        if options is None:
+            self.options = {}
+        elif isinstance(options, dict):
+            self.options = options
+        else:
+            # Some legacy callers pass QVariants/objects – fall back to empty dict but keep reference
+            try:
+                self.options = dict(options)
+            except Exception:
+                self.options = {}
         self.cancelled = False
         self.success_count = 0
         self.skipped_count = 0

@@ -19,9 +19,9 @@ from PyQt5.QtWidgets import (
 from modules.link_grabber.core import (
     BulkLinkGrabberThread,
     _create_creator_folder,
-    _normalize_url,
 )
 from modules.video_downloader.core import VideoDownloaderThread
+from modules.video_downloader.url_utils import normalize_url
 
 
 class CombinedWorkflowPage(QWidget):
@@ -333,12 +333,12 @@ class CombinedWorkflowPage(QWidget):
                 url = link.get("url", "")
             else:
                 url = str(link)
-            existing.add(_normalize_url(url))
+            existing.add(normalize_url(url))
         for item in new_links:
             url = item.get("url")
             if not url:
                 continue
-            normalized = _normalize_url(url)
+            normalized = normalize_url(url)
             if normalized not in existing:
                 self.links.append({"url": url})
                 existing.add(normalized)

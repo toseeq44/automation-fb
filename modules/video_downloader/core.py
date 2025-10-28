@@ -321,6 +321,60 @@ class VideoDownloaderThread(QThread):
             self.progress.emit(f"⚠️ Method 3 error: {str(e)[:100]}")
             return False
 
+    def _method_instaloader(self, url, output_path, cookie_file=None):
+        try:
+            if 'instagram.com' not in url.lower():
+                return False
+            try:
+                import instaloader
+            except ImportError:
+                self.progress.emit("⚠️ Instaloader not installed; skipping fallback")
+                return False
+
+            self.progress.emit("📸 Instaloader fallback")
+            match = re.search(r"instagram\.com/(?:p|reel|tv)/([^/?#&]+)", url, re.IGNORECASE)
+            if not match:
+                self.progress.emit("⚠️ Could not detect Instagram shortcode for Instaloader")
+                return False
+
+            shortcode = match.group(1)
+            loader = instaloader.Instaloader(
+                dirname_pattern=os.path.join(output_path, "{target}"),
+                filename_pattern="{shortcode}",
+                download_videos=True,
+                download_video_thumbnails=False,
+                download_pictures=False,
+                download_comments=False,
+                save_metadata=False,
+                quiet=True,
+                compress_json=False,
+            )
+
+            if cookie_file:
+                try:
+                    cookies_dict = {}
+                    with open(cookie_file, 'r', encoding='utf-8', errors='ignore') as handle:
+                        for line in handle:
+                            stripped = line.strip()
+                            if not stripped or stripped.startswith('#'):
+                                continue
+                            parts = stripped.split('\t')
+                            if len(parts) >= 7:
+                                cookies_dict[parts[5]] = parts[6]
+                    if cookies_dict:
+                        loader.context._session.cookies.update(cookies_dict)
+                except Exception as cookie_error:
+                    self.progress.emit(f"⚠️ Instaloader cookie load failed: {str(cookie_error)[:60]}")
+
+            post = instaloader.Post.from_shortcode(loader.context, shortcode)
+            target = post.owner_username or "instagram"
+            loader.download_post(post, target=target)
+            self.progress.emit("✅ Instaloader SUCCESS")
+            return True
+        except Exception as e:
+            self.progress.emit(f"⚠️ Instaloader error: {str(e)[:100]}")
+            return False
+
     def _method4_alternative_formats(self, url, output_path, cookie_file=None):
         try:
             self.progress.emit("🔄 Method 4: Alternative formats")
@@ -470,6 +524,13 @@ class VideoDownloaderThread(QThread):
                         self._method2_tiktok_special,
                         self._method1_batch_file_approach,
                         self._method3_optimized_ytdlp,
+                        self._method4_alternative_formats,
+                    ]
+                elif platform == 'instagram':
+                    methods = [
+                        self._method1_batch_file_approach,
+                        self._method3_optimized_ytdlp,
+                        self._method_instaloader,
                         self._method4_alternative_formats,
                     ]
                 else:

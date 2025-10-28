@@ -1,7 +1,6 @@
 """Core implementation for the smart video downloader."""
 
 import os
-import re
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -9,7 +8,6 @@ from pathlib import Path
 import yt_dlp
 from PyQt5.QtCore import QThread, pyqtSignal
 
-from .cookies_utils import ensure_netscape_cookie
 from .url_utils import (
     coerce_bool,
     extract_urls,
@@ -193,9 +191,7 @@ class VideoDownloaderThread(QThread):
             for candidate in candidates:
                 try:
                     if candidate and candidate.exists() and candidate.stat().st_size > 10:
-                        prepared = ensure_netscape_cookie(candidate, platform)
-                        if prepared:
-                            return prepared
+                        return str(candidate)
                 except Exception:
                     continue
         except Exception:

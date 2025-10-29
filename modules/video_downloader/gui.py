@@ -210,6 +210,7 @@ class VideoDownloaderPage(QWidget):
         self.start_btn = QPushButton("⬇ Start")
         self.cancel_btn = QPushButton("❌ Cancel")
         self.clear_btn = QPushButton("🗑️ Clear")
+        self.instagram_help_btn = QPushButton("📸 Instagram Help")
         button_style = """
             QPushButton { background-color: #1ABC9C; color: #F5F6F5; border: none;
                          padding: 10px 20px; border-radius: 8px; font-size: 16px; font-weight: bold; }
@@ -217,13 +218,21 @@ class VideoDownloaderPage(QWidget):
             QPushButton:pressed { background-color: #128C7E; }
             QPushButton:disabled { background-color: #4B5057; color: #888; }
         """
+        instagram_btn_style = """
+            QPushButton { background-color: #E1306C; color: #F5F6F5; border: none;
+                         padding: 10px 20px; border-radius: 8px; font-size: 16px; font-weight: bold; }
+            QPushButton:hover { background-color: #C13584; }
+            QPushButton:pressed { background-color: #A02D6F; }
+        """
         for btn in [self.back_btn, self.start_btn, self.cancel_btn, self.clear_btn]:
             btn.setStyleSheet(button_style)
+        self.instagram_help_btn.setStyleSheet(instagram_btn_style)
         self.cancel_btn.setVisible(False)
         btn_row.addWidget(self.back_btn)
         btn_row.addWidget(self.start_btn)
         btn_row.addWidget(self.cancel_btn)
         btn_row.addWidget(self.clear_btn)
+        btn_row.addWidget(self.instagram_help_btn)
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
@@ -260,6 +269,7 @@ class VideoDownloaderPage(QWidget):
         self.start_btn.clicked.connect(self.start_download)
         self.cancel_btn.clicked.connect(self.cancel_download)
         self.clear_btn.clicked.connect(self.clear_all)
+        self.instagram_help_btn.clicked.connect(self.show_instagram_help)
 
         self.log_message("✓ Video Downloader ready")
         self.log_message("💡 Supports YouTube, TikTok, Instagram, and more")
@@ -486,6 +496,68 @@ class VideoDownloaderPage(QWidget):
             self.url_input.setPlainText('\n'.join(link_texts))
             self.log_message(f"📋 Loaded {len(link_texts)} link(s) from Link Grabber → SINGLE MODE")
             self.log_message(f"💡 Links loaded in Single Mode field - will download to Desktop/Toseeq Downloads")
+
+    def show_instagram_help(self):
+        """Show detailed Instagram cookie setup instructions"""
+        from .instagram_helper import get_instagram_cookie_instructions, InstagramCookieValidator
+        from pathlib import Path
+
+        # Get instructions
+        instructions = get_instagram_cookie_instructions()
+
+        # Check current cookie status
+        cookie_locations = [
+            Path(__file__).parent.parent.parent / "cookies" / "instagram.txt",
+            Path.home() / "Desktop" / "toseeq-cookies.txt",
+        ]
+
+        status_msg = "\n📊 CURRENT COOKIE STATUS:\n" + "="*60 + "\n"
+        cookie_found = False
+
+        for cookie_path in cookie_locations:
+            if cookie_path.exists():
+                cookie_found = True
+                status_msg += f"\n📁 Found: {cookie_path}\n"
+                validator = InstagramCookieValidator()
+                result = validator.validate_cookie_file(str(cookie_path))
+
+                if result['is_valid']:
+                    status_msg += "✅ Status: VALID - Ready to use!\n"
+                else:
+                    status_msg += "❌ Status: INVALID\n"
+                    for error in result['errors'][:2]:
+                        status_msg += f"   • {error}\n"
+                    if result['is_expired']:
+                        status_msg += "   💡 Fix: Re-export cookies (expired)\n"
+                    elif not result['has_sessionid']:
+                        status_msg += "   💡 Fix: Login to Instagram before exporting\n"
+                break
+
+        if not cookie_found:
+            status_msg += "❌ No Instagram cookies found\n"
+            status_msg += "📍 Checked locations:\n"
+            for loc in cookie_locations:
+                status_msg += f"   • {loc}\n"
+
+        status_msg += "\n" + "="*60 + "\n"
+
+        # Show dialog
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("📸 Instagram Cookie Setup Guide")
+        dialog.setIcon(QMessageBox.Information)
+        dialog.setText("Instagram requires authentication to download videos.")
+        dialog.setDetailedText(instructions + "\n\n" + status_msg)
+        dialog.setStandardButtons(QMessageBox.Ok)
+        dialog.exec_()
+
+        # Also log to console
+        self.log_message("="*60)
+        self.log_message("📸 INSTAGRAM COOKIE SETUP GUIDE")
+        self.log_message("="*60)
+        for line in instructions.split('\n')[:25]:  # First 25 lines
+            self.log_message(line)
+        self.log_message("="*60)
+        self.log_message("📖 Click 'Show Details' in dialog for full guide")
 
     def browse_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Download Folder", self.path_input.text())

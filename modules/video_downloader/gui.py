@@ -12,6 +12,8 @@ from pathlib import Path
 from datetime import datetime
 from .core import VideoDownloaderThread
 from .url_utils import extract_urls
+from .bulk_preview_dialog import BulkPreviewDialog
+from .history_manager import HistoryManager
 
 class VideoDownloaderPage(QWidget):
     def __init__(self, back_callback=None, links=None):
@@ -19,6 +21,7 @@ class VideoDownloaderPage(QWidget):
         self.back_callback = back_callback
         self.downloader_thread = None
         self.links = links if links is not None else []
+        self.bulk_mode_data = None  # Stores bulk mode info
         self.init_ui()
 
     def init_ui(self):
@@ -357,10 +360,10 @@ class VideoDownloaderPage(QWidget):
             self.log_message(f"⚠️ Drop error: {str(e)[:100]}")
 
     def browse_and_load_folder_structure(self):
-        """Smart folder structure loading with creator detection"""
+        """Enhanced folder structure loading with creator detection and history"""
         folder = QFileDialog.getExistingDirectory(
             self,
-            "Select Folder Structure (with @CreatorName subfolders)",
+            "Select Folder Structure (with creator subfolders)",
             str(Path.home() / "Desktop")
         )
 
@@ -370,63 +373,97 @@ class VideoDownloaderPage(QWidget):
         try:
             folder_path = Path(folder)
 
-            # Find all .txt files in the structure
-            txt_files = []
-            creator_links = {}  # {creator: [links]}
+            # Initialize history manager
+            try:
+                history_mgr = HistoryManager(folder_path)
+            except Exception:
+                history_mgr = None
 
-            # Check for creator subfolders (@CreatorName/)
+            # Find creator folders and their links
+            creator_data = {}  # {creator_name: {'links': [], 'folder': Path, 'links_file': Path}}
+
+            # Scan for creator subfolders (any folder with *_links.txt)
             for item in folder_path.iterdir():
-                if item.is_dir() and item.name.startswith('@'):
-                    creator = item.name
-                    # Find .txt files in creator folder
-                    for txt_file in item.glob('*.txt'):
-                        txt_files.append((creator, txt_file))
-                elif item.is_file() and item.suffix == '.txt':
-                    # Direct .txt file in root
-                    txt_files.append(('root', item))
+                if not item.is_dir():
+                    continue
 
-            if not txt_files:
+                # Look for *_links.txt files in this folder
+                links_files = list(item.glob('*_links.txt'))
+                if not links_files:
+                    # Also check for any .txt file
+                    links_files = list(item.glob('*.txt'))
+                    # Filter out hidden/system files
+                    links_files = [f for f in links_files if not f.name.startswith('.')]
+
+                if not links_files:
+                    continue
+
+                creator_name = item.name
+                all_links = []
+
+                # Read all link files for this creator
+                for links_file in links_files:
+                    try:
+                        with open(links_file, 'r', encoding='utf-8', errors='ignore') as f:
+                            content = f.read()
+                            links = [
+                                line.strip()
+                                for line in content.splitlines()
+                                if line.strip() and
+                                   not line.strip().startswith('#') and
+                                   ('http://' in line or 'https://' in line)
+                            ]
+                            all_links.extend(links)
+                    except Exception as e:
+                        self.log_message(f"⚠️ Error reading {links_file.name}: {str(e)[:50]}")
+
+                if all_links:
+                    creator_data[creator_name] = {
+                        'links': all_links,
+                        'folder': item,
+                        'links_file': links_files[0]  # Primary links file
+                    }
+                    self.log_message(f"📂 {creator_name}: {len(all_links)} links")
+
+            if not creator_data:
                 QMessageBox.warning(
                     self,
-                    "No Files Found",
-                    f"No .txt files found in:\n{folder}\n\nExpected structure:\n@CreatorName/\n  creator_links.txt"
+                    "No Creators Found",
+                    f"No creator folders with *_links.txt found in:\n{folder}\n\n"
+                    f"Expected structure:\n"
+                    f"  CreatorName/\n"
+                    f"    CreatorName_links.txt"
                 )
                 return
 
-            # Read all files and organize by creator
-            total_links = 0
-            for creator, txt_file in txt_files:
-                try:
-                    with open(txt_file, 'r', encoding='utf-8', errors='ignore') as f:
-                        content = f.read()
-                        links = [line.strip() for line in content.splitlines() if line.strip() and line.strip().startswith('http')]
+            # Show enhanced bulk preview dialog
+            dialog = BulkPreviewDialog(self, creator_data, history_mgr)
 
-                        if links:
-                            if creator not in creator_links:
-                                creator_links[creator] = []
-                            creator_links[creator].extend(links)
-                            total_links += len(links)
-                            self.log_message(f"📂 {creator}: {len(links)} links from {txt_file.name}")
-                except Exception as e:
-                    self.log_message(f"⚠️ Error reading {txt_file.name}: {str(e)[:50]}")
-
-            if total_links == 0:
-                QMessageBox.warning(self, "No Links Found", "No valid HTTP(S) links found in .txt files")
-                return
-
-            # Ask user: download all or custom amount?
-            dialog = DownloadOptionsDialog(self, creator_links, total_links)
             if dialog.exec_() == QDialog.Accepted:
                 selected_links = dialog.get_selected_links()
+                selected_creators = dialog.get_selected_creators()
 
                 if selected_links:
                     # Add to link text area
                     self.link_text.setPlainText('\n'.join(selected_links))
-                    self.log_message(f"✅ Loaded {len(selected_links)} links from folder structure")
+                    self.log_message(f"✅ Loaded {len(selected_links)} links from {len(selected_creators)} creator(s)")
 
                     # Set save path to parent folder
                     self.path_input.setText(str(folder_path))
-                    self.log_message(f"📁 Save location set to: {folder_path}")
+                    self.log_message(f"📁 Save location: {folder_path}")
+
+                    # Store creator data for later use
+                    self.bulk_mode_data = {
+                        'enabled': True,
+                        'creators': selected_creators,
+                        'history_manager': history_mgr
+                    }
+                else:
+                    QMessageBox.information(
+                        self,
+                        "No Links Selected",
+                        "No links were selected for download."
+                    )
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to process folder:\n{str(e)[:200]}")
@@ -444,6 +481,7 @@ class VideoDownloaderPage(QWidget):
             self.eta_label.setText("ETA: --")
             self.link_text.clear()
             self.links = []
+            self.bulk_mode_data = None  # Clear bulk mode
             self.log_message("🗑️ Cleared everything")
 
     def update_links(self, links):
@@ -481,6 +519,11 @@ class VideoDownloaderPage(QWidget):
 
         # Check URL input first
         raw_urls = self.url_input.toPlainText().strip()
+
+        # If URL input is manually entered (not from bulk mode), clear bulk mode
+        if raw_urls and not (self.bulk_mode_data and self.bulk_mode_data.get('enabled')):
+            # User entered URLs manually - this is single mode
+            self.bulk_mode_data = None
 
         # If URL input is empty, check link text area
         if not raw_urls:
@@ -574,7 +617,13 @@ class VideoDownloaderPage(QWidget):
             self.log_message("🖼️ Thumbnails: ON")
         self.log_message("="*60)
 
-        self.downloader_thread = VideoDownloaderThread(urls, save_path, options)
+        # Pass bulk mode data if available
+        self.downloader_thread = VideoDownloaderThread(
+            urls,
+            save_path,
+            options,
+            bulk_mode_data=self.bulk_mode_data
+        )
         self.downloader_thread.progress.connect(self.log_message)
         self.downloader_thread.progress_percent.connect(self.progress_bar.setValue)
         self.downloader_thread.download_speed.connect(lambda s: self.speed_label.setText(f"Speed: {s}"))
@@ -633,133 +682,3 @@ class VideoDownloaderPage(QWidget):
                         subprocess.Popen(['xdg-open', folder])
         else:
             QMessageBox.critical(self, "❌ Download Failed", message)
-
-
-class DownloadOptionsDialog(QDialog):
-    """Dialog to ask user: download all links or custom amount per creator"""
-
-    def __init__(self, parent, creator_links, total_links):
-        super().__init__(parent)
-        self.creator_links = creator_links  # {creator: [links]}
-        self.total_links = total_links
-        self.selected_links = []
-        self.init_ui()
-
-    def init_ui(self):
-        self.setWindowTitle("Download Options")
-        self.setMinimumWidth(500)
-
-        layout = QVBoxLayout()
-        layout.setSpacing(15)
-
-        # Dark theme
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #23272A;
-                color: #F5F6F5;
-            }
-            QLabel {
-                color: #F5F6F5;
-                font-size: 14px;
-            }
-            QPushButton {
-                background-color: #1ABC9C;
-                color: #F5F6F5;
-                border: none;
-                padding: 10px 20px;
-                border-radius: 8px;
-                font-size: 14px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #16A085;
-            }
-            QSpinBox {
-                background-color: #2C2F33;
-                color: #F5F6F5;
-                border: 2px solid #4B5057;
-                padding: 8px;
-                border-radius: 8px;
-                font-size: 14px;
-            }
-            QRadioButton {
-                color: #F5F6F5;
-                font-size: 14px;
-                font-weight: bold;
-            }
-        """)
-
-        # Title
-        title = QLabel("📂 Folder Structure Detected")
-        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #1ABC9C;")
-        layout.addWidget(title)
-
-        # Summary
-        summary_text = f"Found {len(self.creator_links)} creator(s) with {self.total_links} total links:\n\n"
-        for creator, links in self.creator_links.items():
-            summary_text += f"  • {creator}: {len(links)} links\n"
-
-        summary = QLabel(summary_text)
-        summary.setStyleSheet("color: #F5F6F5; font-size: 14px;")
-        layout.addWidget(summary)
-
-        # Options
-        from PyQt5.QtWidgets import QRadioButton, QButtonGroup
-
-        options_label = QLabel("How many links to download per creator?")
-        options_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #1ABC9C; margin-top: 10px;")
-        layout.addWidget(options_label)
-
-        self.button_group = QButtonGroup(self)
-
-        self.radio_all = QRadioButton("📥 Download ALL links from each creator")
-        self.radio_all.setChecked(True)
-        self.button_group.addButton(self.radio_all)
-        layout.addWidget(self.radio_all)
-
-        custom_layout = QHBoxLayout()
-        self.radio_custom = QRadioButton("🔢 Custom amount per creator:")
-        self.button_group.addButton(self.radio_custom)
-        custom_layout.addWidget(self.radio_custom)
-
-        self.custom_spinbox = QSpinBox()
-        self.custom_spinbox.setMinimum(1)
-        self.custom_spinbox.setMaximum(10000)
-        self.custom_spinbox.setValue(10)
-        self.custom_spinbox.setSuffix(" links")
-        custom_layout.addWidget(self.custom_spinbox)
-        custom_layout.addStretch()
-        layout.addLayout(custom_layout)
-
-        # Buttons
-        button_layout = QHBoxLayout()
-        ok_btn = QPushButton("✅ Load Links")
-        cancel_btn = QPushButton("❌ Cancel")
-        ok_btn.clicked.connect(self.accept_and_process)
-        cancel_btn.clicked.connect(self.reject)
-        button_layout.addWidget(ok_btn)
-        button_layout.addWidget(cancel_btn)
-        button_layout.addStretch()
-        layout.addLayout(button_layout)
-
-        self.setLayout(layout)
-
-    def accept_and_process(self):
-        """Process links based on user selection"""
-        self.selected_links = []
-
-        if self.radio_all.isChecked():
-            # All links
-            for creator, links in self.creator_links.items():
-                self.selected_links.extend(links)
-        else:
-            # Custom amount per creator
-            max_per_creator = self.custom_spinbox.value()
-            for creator, links in self.creator_links.items():
-                self.selected_links.extend(links[:max_per_creator])
-
-        self.accept()
-
-    def get_selected_links(self):
-        """Return selected links"""
-        return self.selected_links

@@ -2,8 +2,10 @@
 
 import os
 import subprocess
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Optional
 
 import yt_dlp
 from PyQt5.QtCore import QThread, pyqtSignal
@@ -14,6 +16,7 @@ from .url_utils import (
     normalize_url,
     quality_to_format,
 )
+from .history_manager import HistoryManager
 
 # ===================== HELPERS ====================
 
@@ -38,7 +41,7 @@ class VideoDownloaderThread(QThread):
     # default safeguards so attribute lookups never explode even if init fails mid-way
     skip_recent_window = True
 
-    def __init__(self, urls, save_path, options, parent=None):
+    def __init__(self, urls, save_path, options, parent=None, bulk_mode_data=None):
         super().__init__(parent)
         # Accept flexible input for URLs (string, list, dicts from Link Grabber, etc.)
         self.urls = extract_urls(urls)
@@ -71,6 +74,15 @@ class VideoDownloaderThread(QThread):
         self.format_override = format_override
         self.downloaded_links_file = Path(save_path) / ".downloaded_links.txt"
         self.downloaded_links = self._load_downloaded_links()
+
+        # Bulk mode support
+        self.bulk_mode_data = bulk_mode_data
+        self.history_manager = None
+        if bulk_mode_data and bulk_mode_data.get('enabled'):
+            self.history_manager = bulk_mode_data.get('history_manager')
+            self.bulk_creators = bulk_mode_data.get('creators', {})
+        else:
+            self.bulk_creators = {}
 
     def _load_downloaded_links(self) -> set:
         try:
@@ -375,6 +387,96 @@ class VideoDownloaderThread(QThread):
             self.progress.emit(f"⚠️ Instaloader error: {str(e)[:100]}")
             return False
 
+    def _method_gallery_dl(self, url, output_path, cookie_file=None):
+        """gallery-dl fallback for Instagram, Twitter, etc."""
+        try:
+            self.progress.emit("🖼️ gallery-dl fallback")
+            cmd = [
+                'gallery-dl',
+                '--dest', output_path,
+                '--filename', '{title}_{id}.{extension}',
+                '--no-mtime',
+            ]
+
+            if cookie_file:
+                cmd.extend(['--cookies', cookie_file])
+                self.progress.emit(f"🍪 Using cookies: {Path(cookie_file).name}")
+
+            cmd.append(url)
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=600,
+                encoding='utf-8',
+                errors='replace'
+            )
+
+            if result.returncode == 0:
+                self.progress.emit("✅ gallery-dl SUCCESS!")
+                return True
+            else:
+                error_msg = result.stderr[:200] if result.stderr else "Unknown error"
+                self.progress.emit(f"⚠️ gallery-dl failed: {error_msg}")
+                return False
+
+        except subprocess.TimeoutExpired:
+            self.progress.emit("⚠️ gallery-dl timeout")
+            return False
+        except FileNotFoundError:
+            self.progress.emit("⚠️ gallery-dl not installed")
+            return False
+        except Exception as e:
+            self.progress.emit(f"⚠️ gallery-dl error: {str(e)[:100]}")
+            return False
+
+    def _method6_youtube_dl_fallback(self, url, output_path, cookie_file=None):
+        """youtube-dl as final fallback (older but sometimes works)"""
+        try:
+            self.progress.emit("🔄 youtube-dl fallback (legacy)")
+            format_string = self.format_override or 'best'
+            cmd = [
+                'youtube-dl',
+                '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
+                '-f', format_string,
+                '--no-warnings',
+                '--retries', str(self.max_retries),
+                '--continue',
+                '--no-check-certificate'
+            ]
+
+            if cookie_file:
+                cmd.extend(['--cookies', cookie_file])
+
+            cmd.append(url)
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=900,
+                encoding='utf-8',
+                errors='replace'
+            )
+
+            if result.returncode == 0:
+                self.progress.emit("✅ youtube-dl SUCCESS!")
+                return True
+            else:
+                self.progress.emit("⚠️ youtube-dl failed")
+                return False
+
+        except subprocess.TimeoutExpired:
+            self.progress.emit("⚠️ youtube-dl timeout")
+            return False
+        except FileNotFoundError:
+            self.progress.emit("⚠️ youtube-dl not installed")
+            return False
+        except Exception as e:
+            self.progress.emit(f"⚠️ youtube-dl error: {str(e)[:100]}")
+            return False
+
     def _method4_alternative_formats(self, url, output_path, cookie_file=None):
         try:
             self.progress.emit("🔄 Method 4: Alternative formats")
@@ -517,7 +619,7 @@ class VideoDownloaderThread(QThread):
                     continue
                 self.progress.emit(f"\n📥 [{processed}/{total}] {url[:80]}...")
                 cookie_file = self.get_cookie_file(url, folder)
-                # Platform-wize methods
+                # Platform-wise methods with enhanced fallbacks
                 platform = _detect_platform(url)
                 if platform == 'tiktok':
                     methods = [
@@ -525,22 +627,39 @@ class VideoDownloaderThread(QThread):
                         self._method1_batch_file_approach,
                         self._method3_optimized_ytdlp,
                         self._method4_alternative_formats,
+                        self._method5_force_ipv4,
+                        self._method6_youtube_dl_fallback,
                     ]
                 elif platform == 'instagram':
                     methods = [
                         self._method1_batch_file_approach,
                         self._method3_optimized_ytdlp,
                         self._method_instaloader,
+                        self._method_gallery_dl,
                         self._method4_alternative_formats,
+                        self._method5_force_ipv4,
+                    ]
+                elif platform == 'twitter':
+                    methods = [
+                        self._method1_batch_file_approach,
+                        self._method3_optimized_ytdlp,
+                        self._method_gallery_dl,
+                        self._method4_alternative_formats,
+                        self._method5_force_ipv4,
                     ]
                 else:
                     methods = [
                         self._method1_batch_file_approach,
                         self._method3_optimized_ytdlp,
                         self._method4_alternative_formats,
+                        self._method5_force_ipv4,
+                        self._method6_youtube_dl_fallback,
                     ]
-                if self.force_all_methods:
-                    methods.append(self._method5_force_ipv4)
+
+                # Force all methods adds extras
+                if not self.force_all_methods:
+                    # Limit to first 3-4 methods for speed
+                    methods = methods[:4]
                 # Try all methods
                 success = False
                 for method in methods:
@@ -568,6 +687,79 @@ class VideoDownloaderThread(QThread):
             self.progress.emit(f"⏭️ Skipped (already done): {self.skipped_count}")
             self.progress.emit(f"❌ Failed: {total - self.success_count - self.skipped_count}")
             self.progress.emit("="*60)
+
+            # Update history.json for bulk mode
+            if self.history_manager and self.bulk_creators:
+                self.progress.emit("\n📝 Updating download history...")
+                try:
+                    # Track downloads per creator
+                    creator_stats = {}  # {creator: {'success': 0, 'failed': 0}}
+
+                    # Count successes/failures per creator
+                    for creator, creator_info in self.bulk_creators.items():
+                        creator_links = set(creator_info.get('links', []))
+                        success = 0
+                        failed = 0
+
+                        for url in self.urls:
+                            if url in creator_links:
+                                if url in self.downloaded_links:
+                                    success += 1
+                                else:
+                                    failed += 1
+
+                        creator_stats[creator] = {'success': success, 'failed': failed}
+
+                    # Update history for each creator
+                    for creator, stats in creator_stats.items():
+                        status = 'success' if stats['failed'] == 0 else ('partial' if stats['success'] > 0 else 'failed')
+                        self.history_manager.update_creator(
+                            creator,
+                            downloaded_count=stats['success'],
+                            failed_count=stats['failed'],
+                            status=status
+                        )
+                        self.progress.emit(f"  ✓ {creator}: {stats['success']} downloaded, {stats['failed']} failed")
+
+                        # Remove successfully downloaded URLs from links file
+                        if stats['success'] > 0:
+                            links_file = self.bulk_creators[creator].get('links_file')
+                            if links_file and Path(links_file).exists():
+                                try:
+                                    # Read current content
+                                    with open(links_file, 'r', encoding='utf-8', errors='ignore') as f:
+                                        lines = f.readlines()
+
+                                    # Filter out downloaded links
+                                    new_lines = []
+                                    for line in lines:
+                                        url_in_line = line.strip()
+                                        if not url_in_line or url_in_line.startswith('#'):
+                                            new_lines.append(line)
+                                            continue
+
+                                        # Check if this URL was downloaded
+                                        is_downloaded = False
+                                        for dl_url in self.downloaded_links:
+                                            if url_in_line in dl_url or dl_url in url_in_line:
+                                                is_downloaded = True
+                                                break
+
+                                        if not is_downloaded:
+                                            new_lines.append(line)
+
+                                    # Write back
+                                    with open(links_file, 'w', encoding='utf-8') as f:
+                                        f.writelines(new_lines)
+
+                                    self.progress.emit(f"  🗑️ Updated {Path(links_file).name}")
+                                except Exception as e:
+                                    self.progress.emit(f"  ⚠️ Failed to update {Path(links_file).name}: {str(e)[:50]}")
+
+                    self.progress.emit("✅ History updated!")
+                except Exception as e:
+                    self.progress.emit(f"⚠️ History update failed: {str(e)[:100]}")
+
             if self.cancelled:
                 self.finished.emit(False, f"⚠️ Cancelled - {self.success_count} downloaded")
             elif self.success_count + self.skipped_count == total:

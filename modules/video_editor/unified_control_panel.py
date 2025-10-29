@@ -180,6 +180,9 @@ class UnifiedControlPanel(QWidget):
 
         control_row.addSpacing(15)
 
+
+        control_row.addSpacing(12)
+
         # Volume control
         volume_btn = QPushButton("🔊")
         volume_btn.setStyleSheet("""

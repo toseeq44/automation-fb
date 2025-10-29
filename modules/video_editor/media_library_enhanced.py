@@ -186,8 +186,8 @@ class MediaCard(QFrame):
         self.setup_ui()
         
     def setup_ui(self):
-        # Card size: 140x180
-        self.setFixedSize(140, 180)
+        # Compact card footprint (width unchanged, height reduced)
+        self.setFixedSize(140, 150)
         self.setStyleSheet("""
             MediaCard {
                 background: #1e1e1e;
@@ -203,7 +203,7 @@ class MediaCard(QFrame):
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
-        layout.setSpacing(4)
+        layout.setSpacing(3)
         
         # Thumbnail container (with relative positioning for plus button)
         thumbnail_container = QWidget()
@@ -260,13 +260,14 @@ class MediaCard(QFrame):
                 background: #0097a7;
             }
         """)
+        self.plus_button.setCursor(Qt.PointingHandCursor)
         self.plus_button.clicked.connect(lambda: self.load_requested.emit(self.media_item))
         
         # Add to thumbnail container
         thumbnail_layout.addWidget(self.thumbnail_label)
         
         # Add plus button to main layout but position it over thumbnail
-        layout.addWidget(thumbnail_container)
+        layout.addWidget(thumbnail_container, alignment=Qt.AlignCenter)
         
         # Duration badge
         duration_badge = QLabel(self.format_duration(self.media_item.duration))
@@ -284,23 +285,40 @@ class MediaCard(QFrame):
         duration_badge.setFixedHeight(14)
         
         # File info
-        file_name = QLabel(self.media_item.file_name)
-        file_name.setStyleSheet("color: #e0e0e0; font-weight: bold; font-size: 9px;")
-        file_name.setWordWrap(True)
-        file_name.setMaximumHeight(24)
+        display_title = self._get_display_title(self.media_item.file_name)
+        title_label = QLabel(display_title)
+        title_label.setStyleSheet("color: #e0e0e0; font-weight: bold; font-size: 9px;")
+        title_label.setWordWrap(False)
+        title_label.setFixedHeight(16)
+        title_label.setToolTip(self.media_item.file_name)
+        title_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         
-        file_info = QLabel(f"{self.media_item.file_type.upper()} • {self.format_file_size(self.media_item.file_size)}")
+        file_info = QLabel(f"{self.media_item.file_type.upper()} - {self.format_file_size(self.media_item.file_size)}")
         file_info.setStyleSheet("color: #888; font-size: 8px;")
+        file_info.setFixedHeight(14)
+        file_info.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         
         # Add to main layout
         layout.addWidget(duration_badge)
-        layout.addWidget(file_name)
+        layout.addWidget(title_label)
         layout.addWidget(file_info)
         layout.addStretch()
         
         # Position plus button over thumbnail
-        self.plus_button.setParent(self)
-        self.plus_button.move(102, 52)  # Position in bottom-right of thumbnail
+        self.plus_button.setParent(thumbnail_container)
+        self.plus_button.move(6, 6)  # Position in top-left of thumbnail
+        self.plus_button.raise_()
+
+    def _get_display_title(self, file_name: str) -> str:
+        """Return a short, two-word title for compact display."""
+        base_name, _ = os.path.splitext(file_name or "")
+        sanitized = base_name.replace("_", " ").replace("-", " ")
+        words = [word for word in sanitized.split() if word]
+        if not words:
+            return file_name
+        if len(words) <= 2:
+            return " ".join(words)
+        return " ".join(words[:2]) + "..."
         
     def format_duration(self, seconds):
         """Format duration as MM:SS"""
@@ -336,6 +354,7 @@ class EnhancedMediaLibrary(QWidget):
     media_selected = pyqtSignal(object)
     media_double_clicked = pyqtSignal(object)
     import_requested = pyqtSignal()
+    effect_requested = pyqtSignal(dict)
     
     def __init__(self):
         super().__init__()
@@ -546,6 +565,7 @@ class EnhancedMediaLibrary(QWidget):
             new_payload = {"value": new_value, "display": display}
             self.zoom_button.set_custom_selection(display, new_payload)
             self.zoom_filter_state = new_value
+            payload = new_payload
         else:
             display = payload.get("display")
             if mode == "all":
@@ -556,6 +576,39 @@ class EnhancedMediaLibrary(QWidget):
                 self.zoom_button.set_custom_selection(display, payload)
 
         self.refresh_display()
+        self._emit_speed_effect_change(payload)
+        self._emit_zoom_effect_change(payload)
+
+    def _emit_zoom_effect_change(self, payload) -> None:
+        """Notify listeners when zoom preset changes so effects can be applied."""
+        try:
+            state = self.zoom_filter_state or {}
+            mode = state.get("mode")
+            display = payload.get("display") if payload else None
+
+            if mode in {"preset", "custom_value"}:
+                percent = state.get("percent")
+                if percent is None:
+                    return
+                effect_payload = {
+                    "type": "zoom",
+                    "mode": mode,
+                    "percent": float(percent),
+                    "display": display or f"{percent:.0f}%",
+                }
+            elif mode in {"all", None}:
+                effect_payload = {
+                    "type": "zoom",
+                    "mode": "reset",
+                    "percent": 100.0,
+                    "display": display or "100%",
+                }
+            else:
+                return
+
+            self.effect_requested.emit(effect_payload)
+        except Exception as exc:
+            print(f"DEBUG: Failed to emit zoom effect change: {exc}")
 
     def on_blur_filter_changed(self, payload) -> None:
         payload = payload or {}
@@ -586,6 +639,7 @@ class EnhancedMediaLibrary(QWidget):
             new_payload = {"value": new_value, "display": display}
             self.blur_button.set_custom_selection(display, new_payload)
             self.blur_filter_state = new_value
+            payload = new_payload
         else:
             display = payload.get("display")
             if mode == "all":
@@ -596,6 +650,71 @@ class EnhancedMediaLibrary(QWidget):
                 self.blur_button.set_custom_selection(display, payload)
 
         self.refresh_display()
+        self._emit_blur_effect_change(payload)
+
+    def _emit_blur_effect_change(self, payload) -> None:
+        """Notify listeners when blur presets change."""
+        try:
+            state = self.blur_filter_state or {}
+            mode = state.get("mode")
+            display = payload.get("display") if payload else None
+
+            if mode in {"preset", "custom_value"}:
+                percent = state.get("percent")
+                if percent is None:
+                    return
+                effect_payload = {
+                    "type": "blur",
+                    "mode": mode,
+                    "intensity": float(percent),
+                    "target": state.get("target"),
+                    "display": display or f"Blur {percent:.0f}%",
+                }
+            elif mode in {"all", None}:
+                effect_payload = {
+                    "type": "blur",
+                    "mode": "reset",
+                    "intensity": 0.0,
+                    "target": state.get("target"),
+                    "display": display or "Blur Off",
+                }
+            else:
+                return
+
+            self.effect_requested.emit(effect_payload)
+        except Exception as exc:
+            print(f"DEBUG: Failed to emit blur effect change: {exc}")
+
+    def _emit_speed_effect_change(self, payload) -> None:
+        """Notify listeners when speed presets change."""
+        try:
+            state = self.speed_filter_state or {}
+            mode = state.get("mode")
+            display = payload.get("display") if payload else None
+
+            if mode in {"preset", "custom_value"}:
+                factor = state.get("factor")
+                if factor is None:
+                    return
+                effect_payload = {
+                    "type": "speed",
+                    "mode": mode,
+                    "factor": float(factor),
+                    "display": display or self._format_speed_label(factor),
+                }
+            elif mode in {"all", None}:
+                effect_payload = {
+                    "type": "speed",
+                    "mode": "reset",
+                    "factor": 1.0,
+                    "display": self._format_speed_label(1.0),
+                }
+            else:
+                return
+
+            self.effect_requested.emit(effect_payload)
+        except Exception as exc:
+            print(f"DEBUG: Failed to emit speed effect change: {exc}")
 
     def on_ai_filter_changed(self, payload) -> None:
         payload = payload or {}
@@ -644,6 +763,7 @@ class EnhancedMediaLibrary(QWidget):
                 self.speed_button.set_custom_selection(display, payload)
 
         self.refresh_display()
+        self._emit_speed_effect_change(payload)
         
     def get_button_style(self):
         return """

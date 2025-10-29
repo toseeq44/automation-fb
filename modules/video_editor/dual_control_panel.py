@@ -3,8 +3,15 @@ modules/video_editor/dual_control_panel.py
 Dual Independent Control Panels for Before/After Windows
 """
 
-from PyQt5.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QPushButton, 
-                             QSlider, QLabel, QFrame)
+from PyQt5.QtWidgets import (
+    QWidget,
+    QHBoxLayout,
+    QVBoxLayout,
+    QPushButton,
+    QSlider,
+    QLabel,
+    QFrame,
+)
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont
 
@@ -86,6 +93,7 @@ class SingleControlPanel(QFrame):
         controls_layout.addWidget(self.play_btn)
         controls_layout.addSpacing(12)
         controls_layout.addWidget(self.time_label)
+
         controls_layout.addStretch()
         
         layout.addLayout(controls_layout)

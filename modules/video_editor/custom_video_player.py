@@ -4,6 +4,7 @@ Threaded video playback for dual preview integration.
 """
 
 import os
+import time
 from threading import RLock
 from typing import Optional
 
@@ -32,10 +33,13 @@ class VideoPlaybackThread(QThread):
         self.position: float = 0.0
         self.duration: float = 0.0
         self.fps: float = 30.0
+        self.speed_factor: float = 1.0
         self.state: str = "stopped"
         self._running: bool = True
         self.is_before: bool = is_before
         self._capture_lock = RLock()
+        self._frame_interval: float = 1.0 / 30.0
+        self._next_frame_time: float | None = None
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -68,6 +72,8 @@ class VideoPlaybackThread(QThread):
                 self.video_path = video_path
                 self.playing = False
                 self.position = 0.0
+                self._frame_interval = 1.0 / max(self.fps or 0.0, 1e-6)
+                self._next_frame_time = None
 
             self._update_state("stopped")
 
@@ -93,6 +99,7 @@ class VideoPlaybackThread(QThread):
                 self.position = 0.0
 
             self.playing = True
+            self._next_frame_time = time.perf_counter()
 
         self._update_state("playing")
         logger.debug("Playback started")
@@ -103,6 +110,7 @@ class VideoPlaybackThread(QThread):
             if not self.playing:
                 return
             self.playing = False
+            self._next_frame_time = None
 
         self._update_state("paused")
         logger.debug("Playback paused")
@@ -117,6 +125,7 @@ class VideoPlaybackThread(QThread):
             if self.cap and self.cap.isOpened():
                 self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 should_emit = True
+            self._next_frame_time = None
 
         if should_emit:
             self._emit_current_frame()
@@ -140,9 +149,25 @@ class VideoPlaybackThread(QThread):
                 return
 
             self.position = target
+            if self.playing:
+                self._next_frame_time = time.perf_counter()
 
         self._emit_frame(frame, emit_position=True)
         logger.debug(f"Seeked to {target:.3f}s")
+
+    def set_speed(self, factor: float) -> None:
+        """Update playback speed factor (0.1x - 8.0x)."""
+        sanitized = max(0.1, min(float(factor), 8.0))
+        now = time.perf_counter()
+        with self._capture_lock:
+            self.speed_factor = sanitized
+            if self.playing:
+                self._next_frame_time = now
+
+    def get_speed(self) -> float:
+        """Return current playback speed factor."""
+        with self._capture_lock:
+            return self.speed_factor
 
     def get_state(self) -> str:
         """Return the current playback state."""
@@ -164,34 +189,59 @@ class VideoPlaybackThread(QThread):
                 with self._capture_lock:
                     cap = self.cap
                     is_playing = self.playing and cap and cap.isOpened()
+                    speed = self.speed_factor
+                    next_frame_time = self._next_frame_time
+                    frame_interval = self._frame_interval
 
-                if is_playing:
-                    frame = None
-                    with self._capture_lock:
-                        if cap and cap.isOpened():
-                            ret, frame = cap.read()
-                            if ret:
-                                self.position = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
-                            else:
-                                frame = None
-                        else:
-                            ret = False
-
-                    if frame is not None:
-                        self._emit_frame(frame, emit_position=True)
-                        QThread.msleep(self._frame_delay_ms())
-                        continue
-
-                    with self._capture_lock:
-                        self.playing = False
-                        self.position = 0.0
-                        if self.cap and self.cap.isOpened():
-                            self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-
-                    self._update_state("stopped")
-                    self._emit_current_frame()
-                else:
+                if not is_playing or not cap:
                     QThread.msleep(20)
+                    continue
+
+                if frame_interval <= 0:
+                    frame_interval = 1.0 / 30.0
+
+                if next_frame_time is None:
+                    with self._capture_lock:
+                        self._next_frame_time = time.perf_counter()
+                    QThread.msleep(1)
+                    continue
+
+                now = time.perf_counter()
+                if now < next_frame_time:
+                    sleep_seconds = next_frame_time - now
+                    QThread.msleep(max(1, int(sleep_seconds * 1000)))
+                    continue
+
+                frame = None
+                with self._capture_lock:
+                    if cap and cap.isOpened():
+                        ret, frame = cap.read()
+                        if ret:
+                            self.position = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+                        else:
+                            frame = None
+                    else:
+                        ret = False
+                        frame = None
+
+                if frame is not None:
+                    self._emit_frame(frame, emit_position=True)
+
+                if ret:
+                    interval = frame_interval / max(speed, 1e-6)
+                    with self._capture_lock:
+                        self._next_frame_time = next_frame_time + interval
+                    continue
+
+                with self._capture_lock:
+                    self.playing = False
+                    self.position = 0.0
+                    if self.cap and self.cap.isOpened():
+                        self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    self._next_frame_time = None
+
+                self._update_state("stopped")
+                self._emit_current_frame()
 
             except Exception as exc:  # pragma: no cover - defensive logging
                 logger.exception(f"Error in playback loop: {exc}")
@@ -203,6 +253,7 @@ class VideoPlaybackThread(QThread):
         """Stop the thread and release resources."""
         with self._capture_lock:
             self.playing = False
+            self._next_frame_time = None
         self._running = False
         self._update_state("stopped")
 
@@ -249,12 +300,6 @@ class VideoPlaybackThread(QThread):
         self.frame_ready.emit(frame_rgb, self.is_before)
         if emit_position:
             self.position_changed.emit(self.position)
-
-    def _frame_delay_ms(self) -> int:
-        """Return the delay between frames in milliseconds."""
-        if self.fps <= 0:
-            return 33
-        return max(1, int(1000 / self.fps))
 
     def _update_state(self, new_state: str) -> None:
         if self.state == new_state:
@@ -317,6 +362,12 @@ class IntegratedVideoPlayer(QObject):
 
     def seek(self, position_seconds: float) -> None:
         self.thread.seek(position_seconds)
+
+    def set_speed(self, factor: float) -> None:
+        self.thread.set_speed(factor)
+
+    def get_speed(self) -> float:
+        return self.thread.get_speed()
 
     def get_duration(self) -> float:
         return self.thread.duration

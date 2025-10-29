@@ -121,28 +121,7 @@ class VideoDownloaderThread(QThread):
         normalized = normalize_url(url)
         return normalized in self.downloaded_links
 
-    def _should_skip_folder(self, folder_path: str) -> bool:
-        if not self.skip_recent_window:
-            return False
-        try:
-            timestamp_file = Path(folder_path) / ".last_download_time.txt"
-            if timestamp_file.exists():
-                with open(timestamp_file, 'r') as f:
-                    last_time_str = f.read().strip()
-                    last_time = datetime.fromisoformat(last_time_str)
-                    if datetime.now() - last_time < timedelta(hours=24):
-                        return True
-        except Exception:
-            pass
-        return False
-
-    def _update_folder_timestamp(self, folder_path: str):
-        try:
-            timestamp_file = Path(folder_path) / ".last_download_time.txt"
-            with open(timestamp_file, 'w') as f:
-                f.write(datetime.now().isoformat())
-        except Exception:
-            pass
+    # Removed old timestamp logic - now using history.json only
 
     def _remove_from_source_txt(self, url: str, source_folder: str):
         """Remove URL from source txt file (bulk mode only)"""
@@ -730,11 +709,7 @@ class VideoDownloaderThread(QThread):
                 if self.cancelled: break
                 folder = url_folder_map.get(normalize_url(url), self.save_path)
                 os.makedirs(folder, exist_ok=True)
-                if self._should_skip_folder(folder):
-                    self.progress.emit(f"\n⏭️ SKIPPING (in 24h): [{folder}] {url[:60]}")
-                    self.skipped_count += 1
-                    processed += 1
-                    continue
+                # Skip logic handled by history.json in bulk mode
                 processed += 1
                 if self._is_already_downloaded(url):
                     self.progress.emit(f"⏭️ [{processed}/{total}] Already downloaded, skipping...")
@@ -798,7 +773,7 @@ class VideoDownloaderThread(QThread):
                     self.progress.emit(f"✅ [{processed}/{total}] Downloaded!")
                     self._mark_as_downloaded(url)
                     self._remove_from_source_txt(url, folder)
-                    self._update_folder_timestamp(folder)
+                    # Timestamp tracking handled by history.json
                     self.video_complete.emit(url)
                 else:
                     self.progress.emit(f"❌ [{processed}/{total}] ALL METHODS FAILED")

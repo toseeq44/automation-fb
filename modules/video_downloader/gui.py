@@ -42,8 +42,13 @@ class VideoDownloaderPage(QWidget):
         self.title.setStyleSheet("font-size: 24px; font-weight: bold; color: #1ABC9C; margin-bottom: 15px;")
         layout.addWidget(self.title)
 
+        # ========== SINGLE MODE INPUT ==========
+        single_mode_label = QLabel("🔸 SINGLE MODE - Manual URLs (for Link Grabber & direct paste)")
+        single_mode_label.setStyleSheet("color: #1ABC9C; font-size: 14px; font-weight: bold; margin-top: 10px;")
+        layout.addWidget(single_mode_label)
+
         self.url_input = QTextEdit()
-        self.url_input.setPlaceholderText("Paste video URL(s) (multiple lines or comma-separated)")
+        self.url_input.setPlaceholderText("Paste video URLs here (one per line or comma-separated)\n\nThis field is for SINGLE MODE:\n• Direct URL paste\n• Link Grabber integration\n• Simple downloads to Desktop/Toseeq Downloads\n• No tracking, no extra files")
         self.url_input.setStyleSheet("""
             QTextEdit {
                 background-color: #2C2F33; color: #F5F6F5; border: 2px solid #4B5057;
@@ -51,44 +56,39 @@ class VideoDownloaderPage(QWidget):
             }
             QTextEdit:focus { border: 2px solid #1ABC9C; }
         """)
-        self.url_input.setMinimumHeight(80)
+        self.url_input.setMinimumHeight(100)
         layout.addWidget(self.url_input)
 
-        # Editable link text area with drag-and-drop support + Load buttons
-        link_label = QLabel("📋 Links (editable - cut/paste/drag-drop .txt files here):")
-        link_label.setStyleSheet("color: #1ABC9C; font-size: 14px; font-weight: bold; margin-top: 10px;")
-        layout.addWidget(link_label)
+        # Separator
+        separator = QLabel("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        separator.setStyleSheet("color: #4B5057; margin: 10px 0px;")
+        layout.addWidget(separator)
 
-        # Buttons for loading links
-        load_buttons_layout = QHBoxLayout()
-        load_txt_btn = QPushButton("📄 Load .txt File")
-        load_folder_btn = QPushButton("📂 Load Folder Structure")
-        load_btn_style = """
-            QPushButton { background-color: #1ABC9C; color: #F5F6F5; border: none;
-                         padding: 8px 15px; border-radius: 6px; font-size: 13px; font-weight: bold; }
-            QPushButton:hover { background-color: #16A085; }
-            QPushButton:pressed { background-color: #128C7E; }
-        """
-        load_txt_btn.setStyleSheet(load_btn_style)
-        load_folder_btn.setStyleSheet(load_btn_style)
-        load_txt_btn.clicked.connect(self.load_txt_file)
+        # ========== BULK MODE INPUT ==========
+        bulk_mode_label = QLabel("🔹 BULK MODE - Creator Folders (load folder structure below)")
+        bulk_mode_label.setStyleSheet("color: #1ABC9C; font-size: 14px; font-weight: bold; margin-top: 10px;")
+        layout.addWidget(bulk_mode_label)
+
+        # Folder structure button
+        load_folder_btn = QPushButton("📂 Load Folder Structure (Bulk Mode)")
+        load_folder_btn.setStyleSheet("""
+            QPushButton { background-color: #E67E22; color: #F5F6F5; border: none;
+                         padding: 10px 20px; border-radius: 6px; font-size: 14px; font-weight: bold; }
+            QPushButton:hover { background-color: #D35400; }
+            QPushButton:pressed { background-color: #BA4A00; }
+        """)
         load_folder_btn.clicked.connect(self.browse_and_load_folder_structure)
-        load_buttons_layout.addWidget(load_txt_btn)
-        load_buttons_layout.addWidget(load_folder_btn)
-        load_buttons_layout.addStretch()
-        layout.addLayout(load_buttons_layout)
+        layout.addWidget(load_folder_btn)
 
         self.link_text = QTextEdit()
-        self.link_text.setPlaceholderText("Links will appear here (editable - you can cut/paste/drag-drop)\n\nQuick Actions:\n• Click '📄 Load .txt File' to select a single .txt file\n• Click '📂 Load Folder Structure' to load creator folders")
-        self.link_text.setAcceptDrops(True)
-        self.link_text.dragEnterEvent = self.link_text_drag_enter
-        self.link_text.dropEvent = self.link_text_drop
+        self.link_text.setPlaceholderText("Creator links will appear here after loading folder structure\n\nThis field is for BULK MODE:\n• Load creator folders with *_links.txt files\n• Automatic history tracking (history.json)\n• Smart 24h skip\n• Per-creator downloads\n\n⚠️ Do NOT manually paste URLs here - use Single Mode field above")
+        self.link_text.setReadOnly(True)  # Make read-only to prevent confusion
         self.link_text.setStyleSheet("""
             QTextEdit {
-                background-color: #2C2F33; color: #F5F6F5; border: 2px solid #4B5057;
+                background-color: #34495E; color: #F5F6F5; border: 2px solid #4B5057;
                 border-radius: 8px; padding: 10px; font-size: 14px;
             }
-            QTextEdit:focus { border: 2px solid #1ABC9C; }
+            QTextEdit:focus { border: 2px solid #E67E22; }
         """)
         self.link_text.setMinimumHeight(120)
         layout.addWidget(self.link_text)
@@ -265,99 +265,9 @@ class VideoDownloaderPage(QWidget):
         self.log_message("💡 Supports YouTube, TikTok, Instagram, and more")
         self.update_links(self.links)
 
-    def load_txt_file(self):
-        """Load links from a single .txt file"""
-        try:
-            file_path, _ = QFileDialog.getOpenFileName(
-                self,
-                "Select .txt File with Links",
-                str(Path.home() / "Desktop"),
-                "Text Files (*.txt);;All Files (*.*)"
-            )
-
-            if not file_path:
-                return
-
-            try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-                    links = [line.strip() for line in content.splitlines() if line.strip() and line.strip().startswith('http')]
-
-                    if links:
-                        # Replace or append?
-                        current_text = self.link_text.toPlainText().strip()
-                        if current_text:
-                            reply = QMessageBox.question(
-                                self,
-                                "Add or Replace?",
-                                f"Found {len(links)} links.\n\nAdd to existing links or replace all?",
-                                QMessageBox.Yes | QMessageBox.No,
-                                QMessageBox.Yes
-                            )
-                            if reply == QMessageBox.Yes:
-                                # Append
-                                self.link_text.setPlainText(current_text + '\n' + '\n'.join(links))
-                            else:
-                                # Replace
-                                self.link_text.setPlainText('\n'.join(links))
-                        else:
-                            # No existing text, just set
-                            self.link_text.setPlainText('\n'.join(links))
-
-                        self.log_message(f"✅ Loaded {len(links)} links from: {Path(file_path).name}")
-                    else:
-                        QMessageBox.warning(self, "No Links Found", f"No valid HTTP(S) links found in:\n{Path(file_path).name}")
-
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Could not read file:\n{str(e)[:200]}")
-                self.log_message(f"⚠️ Error reading file: {str(e)[:100]}")
-
-        except Exception as e:
-            self.log_message(f"⚠️ Error: {str(e)[:100]}")
-
-    def link_text_drag_enter(self, event: QDragEnterEvent):
-        """Handle drag enter for file drops"""
-        if event.mimeData().hasUrls() or event.mimeData().hasText():
-            event.acceptProposedAction()
-
-    def link_text_drop(self, event: QDropEvent):
-        """Handle file drops - read .txt files and add links"""
-        try:
-            if event.mimeData().hasUrls():
-                urls = event.mimeData().urls()
-                links_added = 0
-
-                for url in urls:
-                    file_path = url.toLocalFile()
-                    if file_path.endswith('.txt'):
-                        try:
-                            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                                content = f.read()
-                                # Add to existing text
-                                current_text = self.link_text.toPlainText()
-                                if current_text:
-                                    self.link_text.setPlainText(current_text + '\n' + content)
-                                else:
-                                    self.link_text.setPlainText(content)
-                                links_added += 1
-                                self.log_message(f"📂 Loaded links from: {Path(file_path).name}")
-                        except Exception as e:
-                            self.log_message(f"⚠️ Could not read {Path(file_path).name}: {str(e)[:50]}")
-
-                if links_added > 0:
-                    self.log_message(f"✅ Loaded {links_added} file(s)")
-                    event.acceptProposedAction()
-            elif event.mimeData().hasText():
-                # Handle text drops
-                text = event.mimeData().text()
-                current_text = self.link_text.toPlainText()
-                if current_text:
-                    self.link_text.setPlainText(current_text + '\n' + text)
-                else:
-                    self.link_text.setPlainText(text)
-                event.acceptProposedAction()
-        except Exception as e:
-            self.log_message(f"⚠️ Drop error: {str(e)[:100]}")
+    # Removed old load_txt_file and drag/drop methods
+    # Single Mode: Users paste URLs directly in url_input
+    # Bulk Mode: Users load folder structure which populates link_text (read-only)
 
     def browse_and_load_folder_structure(self):
         """Enhanced folder structure loading with creator detection and history"""
@@ -511,8 +421,10 @@ class VideoDownloaderPage(QWidget):
                 selected_creators = dialog.get_selected_creators()
 
                 if selected_links:
-                    # Add to link text area
+                    # Add to BULK MODE link text area (read-only but we can set programmatically)
+                    self.link_text.setReadOnly(False)  # Temporarily allow changes
                     self.link_text.setPlainText('\n'.join(selected_links))
+                    self.link_text.setReadOnly(True)  # Re-lock
                     self.log_message(f"✅ Loaded {len(selected_links)} links from {len(selected_creators)} creator(s)")
 
                     # Set save path to parent folder
@@ -552,7 +464,7 @@ class VideoDownloaderPage(QWidget):
             self.log_message("🗑️ Cleared everything")
 
     def update_links(self, links):
-        """Update link text area with links from link grabber"""
+        """Update URL input with links from Link Grabber (SINGLE MODE)"""
         self.links = links if links else []
 
         # Convert links to text
@@ -570,8 +482,10 @@ class VideoDownloaderPage(QWidget):
                 link_texts.append(url)
 
         if link_texts:
-            self.link_text.setPlainText('\n'.join(link_texts))
-            self.log_message(f"📋 Loaded {len(link_texts)} link(s) from Link Grabber")
+            # Send to SINGLE MODE field (url_input)
+            self.url_input.setPlainText('\n'.join(link_texts))
+            self.log_message(f"📋 Loaded {len(link_texts)} link(s) from Link Grabber → SINGLE MODE")
+            self.log_message(f"💡 Links loaded in Single Mode field - will download to Desktop/Toseeq Downloads")
 
     def browse_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Download Folder", self.path_input.text())
@@ -584,40 +498,59 @@ class VideoDownloaderPage(QWidget):
             QMessageBox.warning(self, "Busy", "Download in progress. Wait or cancel.")
             return
 
-        # Check URL input first
-        raw_urls = self.url_input.toPlainText().strip()
+        # ========== CLEAN MODE DETECTION ==========
+        url_input_text = self.url_input.toPlainText().strip()
+        link_text_text = self.link_text.toPlainText().strip()
 
-        # If URL input is manually entered (not from bulk mode), clear bulk mode
-        if raw_urls and not (self.bulk_mode_data and self.bulk_mode_data.get('enabled')):
-            # User entered URLs manually - this is single mode
-            self.bulk_mode_data = None
+        # Determine mode based on which field has content
+        raw_urls = None
+        detected_mode = None
 
-        # If URL input is empty, check link text area
-        if not raw_urls:
-            link_text = self.link_text.toPlainText().strip()
-            if link_text:
-                raw_urls = link_text
-                self.url_input.setPlainText(raw_urls)
-            elif self.links:
-                # Fallback to self.links
-                raw_urls = '\n'.join([link.get('url', str(link)) if isinstance(link, dict) else str(link) for link in self.links])
-                self.url_input.setPlainText(raw_urls)
-            else:
-                QMessageBox.warning(self, "Error", "Paste at least one URL or grab links first.")
-                return
+        if url_input_text:
+            # SINGLE MODE: url_input has content
+            raw_urls = url_input_text
+            detected_mode = "single"
+            self.bulk_mode_data = None  # Clear bulk mode data
+            self.log_message("🔸 Detected: SINGLE MODE (using URL input field)")
 
+        elif link_text_text and self.bulk_mode_data and self.bulk_mode_data.get('enabled'):
+            # BULK MODE: link_text has content AND bulk_mode_data exists
+            raw_urls = link_text_text
+            detected_mode = "bulk"
+            self.log_message("🔹 Detected: BULK MODE (using folder structure)")
+
+        else:
+            # No valid input
+            QMessageBox.warning(
+                self,
+                "No Input",
+                "Please either:\n\n"
+                "🔸 Paste URLs in Single Mode field (top), OR\n"
+                "🔹 Load folder structure for Bulk Mode (bottom)"
+            )
+            return
+
+        # Extract URLs
         urls = extract_urls(raw_urls)
         if not urls:
             QMessageBox.warning(self, "Error", "No valid URLs found.")
             return
 
-        # Replace input with cleaned list so the user sees what will be downloaded
-        self.url_input.setPlainText('\n'.join(urls))
+        self.log_message(f"📊 Found {len(urls)} valid URL(s)")
 
-        save_path = self.path_input.text().strip()
-        if not save_path:
-            QMessageBox.warning(self, "Error", "Select save folder.")
-            return
+        # ========== SAVE PATH LOGIC ==========
+        if detected_mode == "single":
+            # SINGLE MODE: Force Desktop/Toseeq Downloads
+            save_path = str(Path.home() / "Desktop" / "Toseeq Downloads")
+            self.log_message(f"📁 Single Mode → Saving to: {save_path}")
+
+        else:
+            # BULK MODE: Use selected folder path
+            save_path = self.path_input.text().strip()
+            if not save_path:
+                QMessageBox.warning(self, "Error", "Bulk mode requires save folder path.")
+                return
+            self.log_message(f"📁 Bulk Mode → Saving to: {save_path}")
 
         if not os.path.exists(save_path):
             reply = QMessageBox.question(self, "Create?", f"Folder not found:\n{save_path}\n\nCreate it?",

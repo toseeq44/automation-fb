@@ -91,6 +91,10 @@ class VideoDownloaderThread(QThread):
             self.downloaded_links = set()
 
     def _load_downloaded_links(self) -> set:
+        """Load downloaded links (bulk mode only)"""
+        if not self.is_bulk_mode or not self.downloaded_links_file:
+            return set()  # Single mode: never load files
+
         try:
             if self.downloaded_links_file.exists():
                 with open(self.downloaded_links_file, 'r', encoding='utf-8') as f:
@@ -101,15 +105,20 @@ class VideoDownloaderThread(QThread):
 
     def _mark_as_downloaded(self, url: str):
         """Mark URL as downloaded (bulk mode only)"""
+        # TRIPLE SAFETY CHECK: Never create files in single mode!
         if not self.is_bulk_mode:
-            return  # Skip in single mode
+            return  # Single mode: NO file operations
+
+        if not self.downloaded_links_file:
+            return  # Extra safety: no file path set
 
         try:
             normalized = normalize_url(url)
             self.downloaded_links.add(normalized)
-            if self.downloaded_links_file:
-                with open(self.downloaded_links_file, 'a', encoding='utf-8') as f:
-                    f.write(f"{normalized}\n")
+
+            # Write to file (only in bulk mode)
+            with open(self.downloaded_links_file, 'a', encoding='utf-8') as f:
+                f.write(f"{normalized}\n")
         except Exception as e:
             self.progress.emit(f"⚠️ Could not save download record: {str(e)[:50]}")
 
@@ -122,6 +131,33 @@ class VideoDownloaderThread(QThread):
         return normalized in self.downloaded_links
 
     # Removed old timestamp logic - now using history.json only
+
+    def _cleanup_tracking_files(self, folder_path: str):
+        """Remove any leftover tracking files (for single mode cleanup)"""
+        if self.is_bulk_mode:
+            return  # Don't cleanup in bulk mode
+
+        try:
+            folder = Path(folder_path)
+            if not folder.exists():
+                return
+
+            # Remove old tracking files if they exist
+            tracking_files = [
+                '.downloaded_links.txt',
+                '.last_download_time.txt',
+                '.download_history.txt',  # Any other variants
+            ]
+
+            for filename in tracking_files:
+                file_path = folder / filename
+                if file_path.exists():
+                    file_path.unlink()
+                    self.progress.emit(f"🧹 Removed leftover file: {filename}")
+
+        except Exception as e:
+            # Silent fail - not critical
+            pass
 
     def _remove_from_source_txt(self, url: str, source_folder: str):
         """Remove URL from source txt file (bulk mode only)"""
@@ -675,9 +711,13 @@ class VideoDownloaderThread(QThread):
                 self.progress.emit(f"📂 Creators: {len(self.bulk_creators)}")
                 self.progress.emit("✅ History tracking: ON")
                 self.progress.emit("✅ Auto URL cleanup: ON")
+                self.progress.emit(f"📝 Track file: {self.downloaded_links_file.name}")
             else:
                 self.progress.emit("📁 Save: Desktop/Toseeq Downloads")
-                self.progress.emit("⚡ Simple mode: No tracking")
+                self.progress.emit("⚡ Simple mode: No tracking, no extra files")
+                self.progress.emit("🚫 File creation: DISABLED")
+                # Clean up any leftover tracking files from old runs
+                self._cleanup_tracking_files(self.save_path)
 
             self.progress.emit("="*60)
             if self.force_all_methods:

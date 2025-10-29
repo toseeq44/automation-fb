@@ -17,6 +17,11 @@ from .url_utils import (
     quality_to_format,
 )
 from .history_manager import HistoryManager
+from .instagram_helper import (
+    InstagramCookieValidator,
+    get_instagram_cookie_instructions,
+    test_instagram_cookies,
+)
 
 # ===================== HELPERS ====================
 
@@ -391,7 +396,7 @@ class VideoDownloaderThread(QThread):
             return False
 
     def _method_instagram_enhanced(self, url, output_path, cookie_file=None):
-        """Enhanced Instagram downloader with multiple fallbacks"""
+        """Enhanced Instagram downloader with cookie validation and multiple fallbacks"""
         try:
             if 'instagram.com' not in url.lower():
                 return False
@@ -400,9 +405,32 @@ class VideoDownloaderThread(QThread):
             start_time = datetime.now()
             self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] 📸 Instagram Enhanced Method")
 
-            # Try 1: With cookie file if available
+            # VALIDATE COOKIES FIRST (if cookie file provided)
+            cookie_is_valid = False
             if cookie_file and Path(cookie_file).exists():
-                self.progress.emit(f"   🍪 Attempt 1: Using cookie file")
+                self.progress.emit(f"   🔍 Validating Instagram cookies...")
+                validator = InstagramCookieValidator()
+                validation = validator.validate_cookie_file(cookie_file)
+
+                if validation['is_valid']:
+                    self.progress.emit(f"   🔑 Valid Instagram cookies detected!")
+                    cookie_is_valid = True
+                else:
+                    self.progress.emit(f"   ⚠️ Cookie validation FAILED:")
+                    for error in validation['errors'][:2]:  # Show first 2 errors
+                        self.progress.emit(f"      • {error}")
+
+                    # Show quick fix suggestion
+                    if validation['is_expired']:
+                        self.progress.emit(f"   💡 Quick Fix: Re-export cookies (they expired)")
+                    elif not validation['has_sessionid']:
+                        self.progress.emit(f"   💡 Quick Fix: Make sure you're LOGGED IN when exporting")
+
+                    self.progress.emit(f"   📖 Type '/instagram-cookies' for detailed instructions")
+
+            # Try 1: With validated cookie file
+            if cookie_is_valid and cookie_file:
+                self.progress.emit(f"   🍪 Attempt 1: Using validated cookie file")
                 cmd = [
                     'yt-dlp',
                     '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
@@ -413,13 +441,14 @@ class VideoDownloaderThread(QThread):
                     '--no-warnings',
                     url
                 ]
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, encoding='utf-8', errors='replace')
                 if result.returncode == 0:
                     elapsed = (datetime.now() - start_time).total_seconds()
                     self.progress.emit(f"   ✅ SUCCESS with cookies ({elapsed:.1f}s)")
                     return True
                 else:
-                    self.progress.emit(f"   ❌ Cookie method failed")
+                    error_snippet = result.stderr[:150] if result.stderr else "Unknown"
+                    self.progress.emit(f"   ❌ Cookie method failed: {error_snippet}")
 
             # Try 2: Browser cookies (Chrome)
             self.progress.emit(f"   🌐 Attempt 2: Trying browser cookies (Chrome)")
@@ -452,7 +481,29 @@ class VideoDownloaderThread(QThread):
 
             elapsed = (datetime.now() - start_time).total_seconds()
             self.progress.emit(f"   ❌ All Instagram attempts failed ({elapsed:.1f}s)")
-            self.progress.emit(f"   💡 Tip: Login to Instagram in your browser first")
+            self.progress.emit(f"   ")
+            self.progress.emit(f"   ╔══════════════════════════════════════════╗")
+            self.progress.emit(f"   ║  📸 INSTAGRAM AUTHENTICATION REQUIRED    ║")
+            self.progress.emit(f"   ╚══════════════════════════════════════════╝")
+            self.progress.emit(f"   ")
+            self.progress.emit(f"   🔧 TO FIX THIS ISSUE:")
+            self.progress.emit(f"   ")
+            self.progress.emit(f"   1️⃣ Install browser extension:")
+            self.progress.emit(f"      'Get cookies.txt LOCALLY' (Chrome/Firefox)")
+            self.progress.emit(f"   ")
+            self.progress.emit(f"   2️⃣ Login to Instagram in browser")
+            self.progress.emit(f"      • Open instagram.com")
+            self.progress.emit(f"      • Login with username/password")
+            self.progress.emit(f"      • Wait for feed to load")
+            self.progress.emit(f"   ")
+            self.progress.emit(f"   3️⃣ Export cookies:")
+            self.progress.emit(f"      • Click extension icon")
+            self.progress.emit(f"      • Save as: cookies/instagram.txt")
+            self.progress.emit(f"   ")
+            self.progress.emit(f"   4️⃣ Try download again")
+            self.progress.emit(f"   ")
+            self.progress.emit(f"   📖 Full guide: https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp")
+            self.progress.emit(f"   ")
             return False
 
         except Exception as e:

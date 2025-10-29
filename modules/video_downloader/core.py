@@ -72,17 +72,23 @@ class VideoDownloaderThread(QThread):
             quality_pref = self.options.get('quality')
             format_override = quality_to_format(quality_pref)
         self.format_override = format_override
-        self.downloaded_links_file = Path(save_path) / ".downloaded_links.txt"
-        self.downloaded_links = self._load_downloaded_links()
 
         # Bulk mode support
         self.bulk_mode_data = bulk_mode_data
         self.history_manager = None
-        if bulk_mode_data and bulk_mode_data.get('enabled'):
+        self.is_bulk_mode = bulk_mode_data and bulk_mode_data.get('enabled')
+
+        if self.is_bulk_mode:
             self.history_manager = bulk_mode_data.get('history_manager')
             self.bulk_creators = bulk_mode_data.get('creators', {})
+            # Only create tracking files in bulk mode
+            self.downloaded_links_file = Path(save_path) / ".downloaded_links.txt"
+            self.downloaded_links = self._load_downloaded_links()
         else:
+            # Single mode: NO tracking files
             self.bulk_creators = {}
+            self.downloaded_links_file = None
+            self.downloaded_links = set()
 
     def _load_downloaded_links(self) -> set:
         try:
@@ -94,15 +100,24 @@ class VideoDownloaderThread(QThread):
         return set()
 
     def _mark_as_downloaded(self, url: str):
+        """Mark URL as downloaded (bulk mode only)"""
+        if not self.is_bulk_mode:
+            return  # Skip in single mode
+
         try:
             normalized = normalize_url(url)
             self.downloaded_links.add(normalized)
-            with open(self.downloaded_links_file, 'a', encoding='utf-8') as f:
-                f.write(f"{normalized}\n")
+            if self.downloaded_links_file:
+                with open(self.downloaded_links_file, 'a', encoding='utf-8') as f:
+                    f.write(f"{normalized}\n")
         except Exception as e:
             self.progress.emit(f"⚠️ Could not save download record: {str(e)[:50]}")
 
     def _is_already_downloaded(self, url: str) -> bool:
+        """Check if already downloaded (bulk mode only)"""
+        if not self.is_bulk_mode:
+            return False  # Never skip in single mode
+
         normalized = normalize_url(url)
         return normalized in self.downloaded_links
 
@@ -130,6 +145,10 @@ class VideoDownloaderThread(QThread):
             pass
 
     def _remove_from_source_txt(self, url: str, source_folder: str):
+        """Remove URL from source txt file (bulk mode only)"""
+        if not self.is_bulk_mode:
+            return  # Skip in single mode
+
         try:
             source_path = Path(source_folder)
             if not source_path.exists(): return
@@ -215,122 +234,214 @@ class VideoDownloaderThread(QThread):
 
     def _method1_batch_file_approach(self, url, output_path, cookie_file=None):
         try:
-            self.progress.emit("🚀 Method 1: YT-DLP BATCH FILE")
-            format_string = self.format_override or 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best'
+            from datetime import datetime
+            start_time = datetime.now()
+            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] 🚀 Method 1: YT-DLP Standard")
+
+            format_string = self.format_override or 'best'
             cmd = [
                 'yt-dlp',
                 '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
-                '--rm-cache-dir', '--throttled-rate', '500K',
+                '--rm-cache-dir',
                 '-f', format_string,
                 '--restrict-filenames', '--no-warnings', '--retries', str(self.max_retries),
-                '--continue', '--no-check-certificate'
+                '--continue', '--no-check-certificate',
+                '--no-playlist',  # Don't download playlists
             ]
             if cookie_file:
                 cmd.extend(['--cookies', cookie_file])
-                self.progress.emit(f"🍪 Using cookies: {Path(cookie_file).name}")
+                self.progress.emit(f"   🍪 Using cookies: {Path(cookie_file).name}")
             cmd.append(url)
-            self.progress.emit("⏳ Downloading...")
+
+            self.progress.emit(f"   ⏳ Starting download...")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, encoding='utf-8', errors='replace')
+
+            elapsed = (datetime.now() - start_time).total_seconds()
+
             if result.returncode == 0:
-                self.progress.emit("✅ Method 1 SUCCESS!")
+                self.progress.emit(f"   ✅ SUCCESS in {elapsed:.1f}s")
                 return True
             else:
-                error_msg = result.stderr[:200] if result.stderr else "Unknown error"
-                self.progress.emit(
-                    f"⚠️ Method 1 failed (format {self.format_override or 'best'}): {error_msg}"
-                )
+                error_msg = result.stderr[:300] if result.stderr else "Unknown error"
+                self.progress.emit(f"   ❌ FAILED ({elapsed:.1f}s)")
+                self.progress.emit(f"   📝 Error: {error_msg}")
             return False
         except subprocess.TimeoutExpired:
-            self.progress.emit("⚠️ Method 1 timeout")
+            self.progress.emit(f"   ⏱️ TIMEOUT (30min limit)")
             return False
         except Exception as e:
-            self.progress.emit(f"⚠️ Method 1 error: {str(e)[:100]}")
+            self.progress.emit(f"   ❌ Exception: {str(e)[:100]}")
             return False
 
     def _method2_tiktok_special(self, url, output_path, cookie_file=None):
         try:
             if 'tiktok.com' not in url.lower():
                 return False
-            self.progress.emit("🎵 TikTok SPECIAL (multi approach)")
-            tiktok_approaches = [
-                {
-                    'http_headers': {'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36'},
-                    'extractor_args': {'tiktok': {'webpage_download': True}}
-                },
-                {'format': 'best', 'http_headers': {'User-Agent': 'okhttp'}},
-                None
-            ]
-            for i, approach in enumerate(tiktok_approaches, 1):
+
+            from datetime import datetime
+            start_time = datetime.now()
+            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] 🎵 Method 2: TikTok Special")
+
+            # Try simple format first (avoids format selection errors)
+            tiktok_formats = ['best', 'worst', 'bestvideo+bestaudio/best']
+
+            for i, fmt in enumerate(tiktok_formats, 1):
                 try:
-                    self.progress.emit(f"🔄 TikTok Approach {i}/3...")
-                    if approach is None:
-                        # Subprocess with geobypass etc
-                        cmd = [
-                            'yt-dlp',
-                            '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
-                            '--geo-bypass', '--user-agent', 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36',
-                            '--restrict-filenames', '--no-warnings', url
-                        ]
-                        if cookie_file:
-                            cmd.extend(['--cookies', cookie_file])
-                        result = subprocess.run(cmd, capture_output=True, timeout=300)
-                        if result.returncode == 0:
-                            self.progress.emit(f"✅ TikTok Approach {i} SUCCESS!")
-                            return True
+                    self.progress.emit(f"   🔄 Attempt {i}/{len(tiktok_formats)} (format: {fmt})")
+
+                    cmd = [
+                        'yt-dlp',
+                        '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
+                        '-f', fmt,
+                        '--no-playlist',
+                        '--geo-bypass',
+                        '--user-agent', 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36',
+                        '--restrict-filenames',
+                        '--no-warnings',
+                        '--retries', str(self.max_retries),
+                    ]
+
+                    if cookie_file:
+                        cmd.extend(['--cookies', cookie_file])
+
+                    cmd.append(url)
+
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, encoding='utf-8', errors='replace')
+
+                    if result.returncode == 0:
+                        elapsed = (datetime.now() - start_time).total_seconds()
+                        self.progress.emit(f"   ✅ SUCCESS in {elapsed:.1f}s")
+                        return True
                     else:
-                        base_opts = {
-                            'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
-                            'format': self.format_override or approach.get('format', 'best'),
-                            'quiet': True, 'no_warnings': True,
-                            'restrictfilenames': True, 'geo_bypass': True
-                        }
-                        base_opts.update(approach)
-                        format_candidates = []
-                        if self.format_override:
-                            format_candidates.append(self.format_override)
-                        default_fmt = base_opts.get('format', 'best')
-                        if default_fmt not in format_candidates:
-                            format_candidates.append(default_fmt)
-                        for fmt in format_candidates:
-                            try:
-                                opts = dict(base_opts)
-                                opts['format'] = fmt
-                                if cookie_file:
-                                    opts['cookiefile'] = cookie_file
-                                with yt_dlp.YoutubeDL(opts) as ydl:
-                                    ydl.download([url])
-                                self.progress.emit(f"✅ TikTok Approach {i} SUCCESS!")
-                                return True
-                            except Exception as inner_e:
-                                self.progress.emit(f"⚠️ TikTok Approach {i} failed (format {fmt}): {str(inner_e)[:60]}")
-                                continue
+                        error_snippet = result.stderr[:150] if result.stderr else "Unknown"
+                        self.progress.emit(f"   ❌ Failed: {error_snippet}")
+
                 except Exception as e:
-                    self.progress.emit(f"⚠️ TikTok Approach {i} failed: {str(e)[:50]}")
+                    self.progress.emit(f"   ❌ Attempt {i} error: {str(e)[:50]}")
                     continue
-            self.progress.emit("⚠️ All TikTok approaches failed")
+
+            elapsed = (datetime.now() - start_time).total_seconds()
+            self.progress.emit(f"   ⚠️ All attempts failed ({elapsed:.1f}s)")
             return False
+
         except Exception as e:
-            self.progress.emit(f"⚠️ TikTok special error: {str(e)[:100]}")
+            self.progress.emit(f"   ❌ TikTok special error: {str(e)[:100]}")
             return False
 
     def _method3_optimized_ytdlp(self, url, output_path, cookie_file=None):
         try:
-            self.progress.emit("🔄 Method 3: Optimized yt-dlp")
-            format_string = self.format_override or 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best'
+            from datetime import datetime
+            start_time = datetime.now()
+            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] 🔄 Method 3: yt-dlp with Cookies")
+
+            format_string = self.format_override or 'best'
             ydl_opts = {
                 'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
                 'format': format_string,
-                'quiet': True, 'no_warnings': True, 'retries': self.max_retries,
-                'fragment_retries': self.max_retries, 'continuedl': True, 'nocheckcertificate': True,
-                'restrictfilenames': True, 'progress_hooks': [self._progress_hook],
+                'quiet': True,
+                'no_warnings': True,
+                'retries': self.max_retries,
+                'fragment_retries': self.max_retries,
+                'continuedl': True,
+                'nocheckcertificate': True,
+                'restrictfilenames': True,
+                'progress_hooks': [self._progress_hook],
             }
-            if cookie_file: ydl_opts['cookiefile'] = cookie_file
+
+            if cookie_file:
+                ydl_opts['cookiefile'] = cookie_file
+                self.progress.emit(f"   🍪 Using: {Path(cookie_file).name}")
+            else:
+                self.progress.emit(f"   ⚠️ No cookies (may fail for private content)")
+
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
-            self.progress.emit("✅ Method 3 SUCCESS")
+
+            elapsed = (datetime.now() - start_time).total_seconds()
+            self.progress.emit(f"   ✅ SUCCESS in {elapsed:.1f}s")
             return True
+
         except Exception as e:
-            self.progress.emit(f"⚠️ Method 3 error: {str(e)[:100]}")
+            elapsed = (datetime.now() - start_time).total_seconds() if 'start_time' in locals() else 0
+            error_msg = str(e)
+            self.progress.emit(f"   ❌ FAILED ({elapsed:.1f}s)")
+
+            # Give specific hints based on error
+            if 'login required' in error_msg.lower() or 'rate' in error_msg.lower():
+                self.progress.emit(f"   💡 Hint: Need cookies for this content")
+            elif 'private' in error_msg.lower():
+                self.progress.emit(f"   💡 Hint: Content is private")
+
+            self.progress.emit(f"   📝 Error: {error_msg[:200]}")
+            return False
+
+    def _method_instagram_enhanced(self, url, output_path, cookie_file=None):
+        """Enhanced Instagram downloader with multiple fallbacks"""
+        try:
+            if 'instagram.com' not in url.lower():
+                return False
+
+            from datetime import datetime
+            start_time = datetime.now()
+            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] 📸 Instagram Enhanced Method")
+
+            # Try 1: With cookie file if available
+            if cookie_file and Path(cookie_file).exists():
+                self.progress.emit(f"   🍪 Attempt 1: Using cookie file")
+                cmd = [
+                    'yt-dlp',
+                    '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
+                    '--cookies', cookie_file,
+                    '-f', 'best',
+                    '--no-playlist',
+                    '--restrict-filenames',
+                    '--no-warnings',
+                    url
+                ]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                if result.returncode == 0:
+                    elapsed = (datetime.now() - start_time).total_seconds()
+                    self.progress.emit(f"   ✅ SUCCESS with cookies ({elapsed:.1f}s)")
+                    return True
+                else:
+                    self.progress.emit(f"   ❌ Cookie method failed")
+
+            # Try 2: Browser cookies (Chrome)
+            self.progress.emit(f"   🌐 Attempt 2: Trying browser cookies (Chrome)")
+            cmd = [
+                'yt-dlp',
+                '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
+                '--cookies-from-browser', 'chrome',
+                '-f', 'best',
+                '--no-playlist',
+                '--restrict-filenames',
+                '--no-warnings',
+                url
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if result.returncode == 0:
+                elapsed = (datetime.now() - start_time).total_seconds()
+                self.progress.emit(f"   ✅ SUCCESS with browser cookies ({elapsed:.1f}s)")
+                return True
+            else:
+                self.progress.emit(f"   ❌ Browser cookie method failed")
+
+            # Try 3: Firefox cookies
+            self.progress.emit(f"   🦊 Attempt 3: Trying Firefox cookies")
+            cmd[3] = 'firefox'  # Replace 'chrome' with 'firefox'
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if result.returncode == 0:
+                elapsed = (datetime.now() - start_time).total_seconds()
+                self.progress.emit(f"   ✅ SUCCESS with Firefox cookies ({elapsed:.1f}s)")
+                return True
+
+            elapsed = (datetime.now() - start_time).total_seconds()
+            self.progress.emit(f"   ❌ All Instagram attempts failed ({elapsed:.1f}s)")
+            self.progress.emit(f"   💡 Tip: Login to Instagram in your browser first")
+            return False
+
+        except Exception as e:
+            self.progress.emit(f"   ❌ Instagram enhanced error: {str(e)[:100]}")
             return False
 
     def _method_instaloader(self, url, output_path, cookie_file=None):
@@ -574,9 +685,21 @@ class VideoDownloaderThread(QThread):
                 self.finished.emit(False, "❌ No URLs provided")
                 return
             total = len(self.urls)
+
+            # Show mode clearly
+            mode_name = "🔹 BULK MODE" if self.is_bulk_mode else "🔸 SINGLE MODE"
             self.progress.emit("="*60)
-            self.progress.emit("🧠 SMART DOWNLOADER STARTING")
+            self.progress.emit(f"🚀 SMART DOWNLOADER STARTING - {mode_name}")
             self.progress.emit(f"📊 Total links: {total}")
+
+            if self.is_bulk_mode:
+                self.progress.emit(f"📂 Creators: {len(self.bulk_creators)}")
+                self.progress.emit("✅ History tracking: ON")
+                self.progress.emit("✅ Auto URL cleanup: ON")
+            else:
+                self.progress.emit("📁 Save: Desktop/Toseeq Downloads")
+                self.progress.emit("⚡ Simple mode: No tracking")
+
             self.progress.emit("="*60)
             if self.force_all_methods:
                 self.progress.emit("🛡️ Multi-strategy fallback enabled")
@@ -632,12 +755,12 @@ class VideoDownloaderThread(QThread):
                     ]
                 elif platform == 'instagram':
                     methods = [
+                        self._method_instagram_enhanced,  # NEW: Try browser cookies first
                         self._method1_batch_file_approach,
                         self._method3_optimized_ytdlp,
-                        self._method_instaloader,
                         self._method_gallery_dl,
+                        self._method_instaloader,
                         self._method4_alternative_formats,
-                        self._method5_force_ipv4,
                     ]
                 elif platform == 'twitter':
                     methods = [

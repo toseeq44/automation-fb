@@ -373,14 +373,58 @@ class VideoDownloaderPage(QWidget):
         try:
             folder_path = Path(folder)
 
-            # Initialize history manager
+            # Initialize history manager FIRST (will create history.json if not exists)
+            self.log_message("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            self.log_message("📊 Checking download history...")
+
+            history_mgr = None
             try:
                 history_mgr = HistoryManager(folder_path)
-            except Exception:
+                history_file = folder_path / "history.json"
+
+                # Ensure history.json exists (create if needed)
+                history_mgr.ensure_exists()
+
+                if history_file.exists():
+                    all_history = history_mgr.get_all_creators()
+
+                    if all_history:
+                        # Has existing history data
+                        self.log_message(f"✅ Found history.json with {len(all_history)} creator(s)")
+
+                        # Show recent downloads
+                        recent_creators = []
+                        for creator, info in all_history.items():
+                            if history_mgr.should_skip_creator(creator, window_hours=24):
+                                last_time = info.get('last_download', 'Unknown')
+                                try:
+                                    from datetime import datetime
+                                    dt = datetime.fromisoformat(last_time)
+                                    last_time = dt.strftime('%Y-%m-%d %H:%M')
+                                except:
+                                    pass
+                                recent_creators.append(f"{creator} ({last_time})")
+
+                        if recent_creators:
+                            self.log_message(f"⏸️ Recently downloaded (will skip by default):")
+                            for rc in recent_creators[:5]:  # Show first 5
+                                self.log_message(f"   • {rc}")
+                            if len(recent_creators) > 5:
+                                self.log_message(f"   ... and {len(recent_creators) - 5} more")
+                    else:
+                        # New history.json (just created)
+                        self.log_message(f"📝 Created new history.json for tracking")
+
+            except Exception as e:
+                self.log_message(f"⚠️ History tracking unavailable: {str(e)[:50]}")
                 history_mgr = None
+
+            self.log_message("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            self.log_message("🔍 Scanning creator folders...")
 
             # Find creator folders and their links
             creator_data = {}  # {creator_name: {'links': [], 'folder': Path, 'links_file': Path}}
+            skipped_creators = []  # Track which will be skipped
 
             # Scan for creator subfolders (any folder with *_links.txt)
             for item in folder_path.iterdir():
@@ -418,12 +462,22 @@ class VideoDownloaderPage(QWidget):
                         self.log_message(f"⚠️ Error reading {links_file.name}: {str(e)[:50]}")
 
                 if all_links:
+                    # Check if this creator should be skipped (24h window)
+                    will_skip = False
+                    if history_mgr and history_mgr.should_skip_creator(creator_name, window_hours=24):
+                        will_skip = True
+                        skipped_creators.append(creator_name)
+
                     creator_data[creator_name] = {
                         'links': all_links,
                         'folder': item,
-                        'links_file': links_files[0]  # Primary links file
+                        'links_file': links_files[0],  # Primary links file
+                        'will_skip_24h': will_skip  # Mark for UI
                     }
-                    self.log_message(f"📂 {creator_name}: {len(all_links)} links")
+
+                    # Log with skip indicator
+                    skip_marker = "⏸️ [WILL SKIP]" if will_skip else "✅"
+                    self.log_message(f"{skip_marker} {creator_name}: {len(all_links)} links")
 
             if not creator_data:
                 QMessageBox.warning(
@@ -435,6 +489,19 @@ class VideoDownloaderPage(QWidget):
                     f"    CreatorName_links.txt"
                 )
                 return
+
+            # Summary
+            total_creators = len(creator_data)
+            active_creators = total_creators - len(skipped_creators)
+            total_links = sum(len(d['links']) for d in creator_data.values())
+
+            self.log_message("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            self.log_message(f"📊 Summary:")
+            self.log_message(f"   Total creators: {total_creators}")
+            self.log_message(f"   Will process: {active_creators}")
+            self.log_message(f"   Will skip (24h): {len(skipped_creators)}")
+            self.log_message(f"   Total links: {total_links}")
+            self.log_message("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
             # Show enhanced bulk preview dialog
             dialog = BulkPreviewDialog(self, creator_data, history_mgr)

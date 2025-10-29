@@ -34,13 +34,23 @@ class HistoryManager:
     def _save_history(self):
         """Save history.json atomically"""
         try:
+            # Ensure root folder exists
             self.root_folder.mkdir(parents=True, exist_ok=True)
+
+            # Write atomically using temp file
             temp_file = self.history_file.with_suffix('.tmp')
             with open(temp_file, 'w', encoding='utf-8') as f:
                 json.dump(self.history_data, f, indent=2, ensure_ascii=False)
+
+            # Atomic replace
             temp_file.replace(self.history_file)
         except Exception as e:
             print(f"⚠️ Failed to save history: {e}")
+
+    def ensure_exists(self):
+        """Ensure history.json exists (create empty if needed)"""
+        if not self.history_file.exists():
+            self._save_history()
 
     def should_skip_creator(self, creator_name: str, window_hours: int = 24) -> bool:
         """

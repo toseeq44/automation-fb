@@ -138,12 +138,20 @@ class BulkPreviewDialog(QDialog):
         # Summary stats
         total_creators = len(self.creator_data)
         total_links = sum(len(data['links']) for data in self.creator_data.values())
+        skip_count = sum(1 for data in self.creator_data.values() if data.get('will_skip_24h', False))
 
-        summary = QLabel(
-            f"Found {total_creators} creator folder(s) with {total_links} total link(s)"
-        )
+        summary_text = f"Found {total_creators} creator folder(s) with {total_links} total link(s)"
+        if skip_count > 0:
+            summary_text += f"\n🔴 {skip_count} creator(s) marked for skip (downloaded in last 24h)"
+
+        summary = QLabel(summary_text)
         summary.setStyleSheet("font-size: 14px; color: #F5F6F5; margin-bottom: 10px;")
         layout.addWidget(summary)
+
+        # Legend
+        legend = QLabel("🔴 Red = Will skip (24h window) | ⏸️ = Recently downloaded")
+        legend.setStyleSheet("font-size: 12px; color: #95A5A6; margin-bottom: 5px; font-style: italic;")
+        layout.addWidget(legend)
 
         # Creator table
         self.create_creator_table(layout)
@@ -176,9 +184,15 @@ class BulkPreviewDialog(QDialog):
         options_layout.addLayout(custom_layout)
 
         # 24h skip option
-        self.skip_recent_checkbox = QCheckBox("⏸️ Skip creators downloaded in last 24 hours")
+        self.skip_recent_checkbox = QCheckBox("⏸️ Skip creators downloaded in last 24 hours (RECOMMENDED)")
         if self.history_manager:
-            self.skip_recent_checkbox.setChecked(True)
+            self.skip_recent_checkbox.setChecked(True)  # Checked by default!
+            skip_count = sum(1 for data in self.creator_data.values() if data.get('will_skip_24h', False))
+            if skip_count > 0:
+                tooltip = f"Currently {skip_count} creator(s) will be skipped. Uncheck to re-download them."
+            else:
+                tooltip = "No recently downloaded creators found. All will be processed."
+            self.skip_recent_checkbox.setToolTip(tooltip)
         else:
             self.skip_recent_checkbox.setEnabled(False)
             self.skip_recent_checkbox.setToolTip("History tracking not available")
@@ -227,7 +241,7 @@ class BulkPreviewDialog(QDialog):
         self.setLayout(layout)
 
     def create_creator_table(self, parent_layout):
-        """Create table showing creator details"""
+        """Create table showing creator details with skip indicators"""
         self.table = QTableWidget()
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels([
@@ -241,15 +255,31 @@ class BulkPreviewDialog(QDialog):
 
         # Populate table
         for row, (creator, data) in enumerate(sorted(self.creator_data.items())):
-            # Creator name
-            creator_item = QTableWidgetItem(creator)
-            creator_item.setFont(QFont("Arial", 12, QFont.Bold))
+            will_skip = data.get('will_skip_24h', False)
+
+            # Creator name with skip indicator
+            creator_text = creator
+            if will_skip:
+                creator_text = f"⏸️ {creator} [WILL SKIP]"
+
+            creator_item = QTableWidgetItem(creator_text)
+            creator_font = QFont("Arial", 12, QFont.Bold)
+            creator_item.setFont(creator_font)
+
+            # Color code skipped creators
+            if will_skip:
+                from PyQt5.QtGui import QColor
+                creator_item.setForeground(QColor("#E74C3C"))  # Red for skipped
+
             self.table.setItem(row, 0, creator_item)
 
             # Link count
             link_count = len(data['links'])
             count_item = QTableWidgetItem(str(link_count))
             count_item.setTextAlignment(Qt.AlignCenter)
+            if will_skip:
+                from PyQt5.QtGui import QColor
+                count_item.setForeground(QColor("#E74C3C"))
             self.table.setItem(row, 1, count_item)
 
             # History info (if available)
@@ -268,18 +298,27 @@ class BulkPreviewDialog(QDialog):
 
                 last_item = QTableWidgetItem(last_download)
                 last_item.setTextAlignment(Qt.AlignCenter)
+                if will_skip:
+                    from PyQt5.QtGui import QColor
+                    last_item.setForeground(QColor("#E74C3C"))
                 self.table.setItem(row, 2, last_item)
 
                 # Status
                 total_downloaded = creator_info.get('total_downloaded', 0)
                 last_status = creator_info.get('last_status', 'never')
 
-                status_text = f"{last_status}"
-                if total_downloaded > 0:
-                    status_text = f"✅ {total_downloaded} videos"
+                if will_skip:
+                    status_text = "⏸️ SKIP (24h)"
+                else:
+                    status_text = f"{last_status}"
+                    if total_downloaded > 0:
+                        status_text = f"✅ {total_downloaded} videos"
 
                 status_item = QTableWidgetItem(status_text)
                 status_item.setTextAlignment(Qt.AlignCenter)
+                if will_skip:
+                    from PyQt5.QtGui import QColor
+                    status_item.setForeground(QColor("#E74C3C"))
                 self.table.setItem(row, 3, status_item)
             else:
                 self.table.setItem(row, 2, QTableWidgetItem("N/A"))
@@ -299,11 +338,18 @@ class BulkPreviewDialog(QDialog):
         skip_recent = self.skip_recent_checkbox.isChecked() and self.history_manager
 
         creators_to_process = []
+        skipped_count = 0
         total_links_to_download = 0
 
         for creator, data in self.creator_data.items():
-            # Check if should skip
-            if skip_recent and self.history_manager.should_skip_creator(creator):
+            # Check if should skip (use pre-computed flag or checkbox)
+            should_skip = False
+            if skip_recent:
+                # Use the will_skip_24h flag that was computed at scan time
+                should_skip = data.get('will_skip_24h', False)
+
+            if should_skip:
+                skipped_count += 1
                 continue
 
             links = data['links']
@@ -319,9 +365,19 @@ class BulkPreviewDialog(QDialog):
 
         # Format preview
         if not creators_to_process:
-            preview = "⚠️ No creators to process (all recently downloaded or no links)"
+            preview = "⚠️ No creators to process\n\n"
+            if skipped_count > 0:
+                preview += f"All {skipped_count} creator(s) were downloaded in last 24 hours.\n"
+                preview += "Uncheck '24h skip' option to re-download them."
+            else:
+                preview += "No links available."
         else:
-            preview = f"Will download {total_links_to_download} video(s) from {len(creators_to_process)} creator(s):\n\n"
+            preview = f"📥 Will download {total_links_to_download} video(s) from {len(creators_to_process)} creator(s)\n\n"
+
+            if skipped_count > 0:
+                preview += f"⏸️ Skipping {skipped_count} recently downloaded creator(s)\n\n"
+
+            preview += "Details:\n"
             for creator, count in creators_to_process[:10]:  # Show first 10
                 preview += f"  • {creator}: {count} link(s)\n"
 
@@ -338,8 +394,8 @@ class BulkPreviewDialog(QDialog):
         self.selected_creators = {}
 
         for creator, data in self.creator_data.items():
-            # Skip if recently downloaded
-            if skip_recent and self.history_manager.should_skip_creator(creator):
+            # Skip if recently downloaded (use pre-computed flag)
+            if skip_recent and data.get('will_skip_24h', False):
                 continue
 
             links = data['links']

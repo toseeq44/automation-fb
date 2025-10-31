@@ -5,6 +5,8 @@ Configuration, JSON tracking, and helper functions
 
 import json
 import logging
+import os
+from copy import deepcopy
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -20,23 +22,47 @@ def load_config(config_path: Path) -> Dict:
     Returns:
         Configuration dictionary
     """
+    default_config = get_default_config(base_dir=config_path.parent.parent)
+
     if not config_path.exists():
         logging.warning(f"Config not found: {config_path}")
-        return get_default_config()
+        return default_config
 
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
             config = json.load(f)
         logging.info(f"Configuration loaded from {config_path}")
-        return config
+        return merge_dicts(default_config, config)
     except Exception as e:
         logging.error(f"Failed to load config: {e}")
-        return get_default_config()
+        return default_config
 
 
-def get_default_config() -> Dict:
+def get_default_config(base_dir: Optional[Path] = None) -> Dict:
     """Get default configuration"""
+    if base_dir is None:
+        base_dir = Path(__file__).parent
+
+    creators_root = (base_dir / 'creators').resolve()
+    shortcuts_root = (base_dir / 'creator_shortcuts').resolve()
+    history_file = (base_dir / 'data' / 'history.json').resolve()
+
     return {
+        'automation': {
+            'mode': 'free_automation',
+            'setup_completed': False,
+            'paths': {
+                'creators_root': str(creators_root),
+                'shortcuts_root': str(shortcuts_root),
+                'history_file': str(history_file)
+            },
+            'credentials': {
+                'gologin': {},
+                'ix': {},
+                'vpn': {},
+                'free_automation': {}
+            }
+        },
         'browsers': {
             'gologin': {
                 'exe_path': 'C:\\Users\\{user}\\AppData\\Local\\Programs\\GoLogin\\GoLogin.exe',
@@ -60,7 +86,7 @@ def get_default_config() -> Dict:
             'wait_between_videos': 120,
             'retry_attempts': 3,
             'retry_delay': 60,
-            'delete_after_upload': False,
+            'delete_after_upload': True,
             'skip_uploaded': True,
             'upload_timeout': 600
         },
@@ -71,6 +97,30 @@ def get_default_config() -> Dict:
             'wait_for_video_processing': 30
         }
     }
+
+
+def save_config(config_path: Path, config: Dict):
+    """Persist configuration to disk"""
+    try:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(config_path, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        logging.debug(f"Configuration saved to {config_path}")
+    except Exception as exc:
+        logging.error(f"Failed to save config: {exc}")
+
+
+def merge_dicts(base: Dict, override: Dict) -> Dict:
+    """Deep merge two dictionaries"""
+    result = deepcopy(base)
+
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = merge_dicts(result[key], value)
+        else:
+            result[key] = value
+
+    return result
 
 
 def load_tracking_data(tracking_path: Path) -> Dict:
@@ -212,7 +262,7 @@ def parse_login_data(file_path: Path) -> List[Dict[str, str]]:
                 # Parse line
                 parts = line.split('|')
 
-                if len(parts) != 5:
+                if len(parts) not in (5, 6):
                     logging.warning(f"Invalid format at line {line_num}: {line}")
                     continue
 
@@ -221,7 +271,8 @@ def parse_login_data(file_path: Path) -> List[Dict[str, str]]:
                     'facebook_email': parts[1].strip(),
                     'facebook_password': parts[2].strip(),
                     'page_name': parts[3].strip(),
-                    'page_id': parts[4].strip()
+                    'page_id': parts[4].strip(),
+                    'browser_type': parts[5].strip().lower() if len(parts) == 6 else ''
                 })
 
         logging.info(f"Loaded {len(login_entries)} login entries")
@@ -256,6 +307,14 @@ def get_video_files(directory: Path, extensions: List[str] = None) -> List[Path]
         video_files.extend(directory.glob(f'*{ext.upper()}'))
 
     return sorted(video_files, key=lambda x: x.name)
+
+
+def expand_path(path_value: Optional[str], fallback: Optional[Path] = None) -> Path:
+    """Resolve a user provided path string to absolute Path"""
+    if path_value:
+        expanded = Path(os.path.expandvars(os.path.expanduser(path_value))).resolve()
+        return expanded
+    return fallback.resolve() if fallback else Path.cwd()
 
 
 def load_video_metadata(creator_path: Path, video_name: str) -> Dict:

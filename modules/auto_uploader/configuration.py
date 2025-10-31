@@ -49,15 +49,9 @@ class AutomationPaths:
 class SettingsManager:
     """Central access point for automation configuration."""
 
-    def __init__(
-        self,
-        settings_path: Path,
-        base_dir: Path,
-        interactive_collector=None,
-    ):
+    def __init__(self, settings_path: Path, base_dir: Path):
         self.settings_path = settings_path
         self.base_dir = base_dir
-        self._interactive_collector = interactive_collector
         self._config = load_config(settings_path)
         self._ensure_structure()
 
@@ -117,15 +111,13 @@ class SettingsManager:
         return AutomationPaths(creators_root=creators_root, shortcuts_root=shortcuts_root, history_file=history_file)
 
     def _run_initial_setup(self):
-        if self._interactive_collector is not None:
-            updated = self._interactive_collector(self._config)
-        elif sys.stdin and sys.stdin.isatty():
-            ui = InitialSetupUI(self.base_dir)
-            updated = ui.collect(self._config)
-        else:
+        if not sys.stdin or not sys.stdin.isatty():
             logging.info("Non-interactive environment detected; using default automation settings")
             self._config.setdefault("automation", {}).update({"setup_completed": False})
             return
+
+        ui = InitialSetupUI(self.base_dir)
+        updated = ui.collect(self._config)
         credentials = updated.get("automation", {}).get("credentials", {})
         if credentials:
             auth = AuthHandler()

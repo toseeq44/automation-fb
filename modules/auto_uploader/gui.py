@@ -11,7 +11,7 @@ from pathlib import Path
 import inspect
 import logging
 
-try:
+try:  # pragma: no cover - import side effects exercised at runtime
     from .core import FacebookAutoUploader
     from .configuration import SettingsManager
     from .ui_configurator import InitialSetupUI
@@ -19,6 +19,23 @@ except ImportError:
     FacebookAutoUploader = None
     SettingsManager = None
     InitialSetupUI = None
+
+try:  # pragma: no cover - import side effects exercised at runtime
+    from .configuration import SettingsManager
+except ImportError:  # pragma: no cover - compatibility guard
+    SettingsManager = None
+
+try:  # pragma: no cover - import side effects exercised at runtime
+    from .ui_configurator import InitialSetupUI
+except ImportError:  # pragma: no cover - compatibility guard
+    InitialSetupUI = None
+
+try:  # pragma: no cover - import side effects exercised at runtime
+    from .utils import load_config, merge_dicts, save_config
+except ImportError:  # pragma: no cover - compatibility guard
+    load_config = None
+    merge_dicts = None
+    save_config = None
 
 
 class UploaderThread(QThread):

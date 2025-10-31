@@ -1,4 +1,19 @@
 {
+  "automation": {
+    "mode": "free_automation",
+    "setup_completed": false,
+    "paths": {
+      "creators_root": "",
+      "shortcuts_root": "",
+      "history_file": ""
+    },
+    "credentials": {
+      "gologin": {},
+      "ix": {},
+      "vpn": {},
+      "free_automation": {}
+    }
+  },
   "browsers": {
     "gologin": {
       "exe_path": "C:\\Users\\{user}\\AppData\\Local\\Programs\\GoLogin\\GoLogin.exe",
@@ -22,7 +37,7 @@
     "wait_between_videos": 120,
     "retry_attempts": 3,
     "retry_delay": 60,
-    "delete_after_upload": false,
+    "delete_after_upload": true,
     "skip_uploaded": true,
     "upload_timeout": 600
   },

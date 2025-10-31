@@ -30,6 +30,28 @@ modules/auto_uploader/
 └── gui.py                     # GUI interface
 ```
 
+## 📦 Installation
+
+### 1. Install Dependencies
+
+**Option A: Automatic Installation**
+```bash
+cd modules/auto_uploader
+python install_dependencies.py
+```
+
+**Option B: Manual Installation**
+```bash
+pip install -r modules/auto_uploader/requirements.txt
+```
+
+**Required Packages:**
+- selenium (browser automation)
+- webdriver-manager (ChromeDriver management)
+- pyautogui (Windows GUI automation)
+- pygetwindow (Windows window management)
+- pillow (image processing)
+
 ## 🚀 Quick Setup
 
 ### 1. Add Your Videos
@@ -146,20 +168,63 @@ Uses JSON-based tracking (`data/upload_tracking.json`):
 
 ## 🐛 Troubleshooting
 
+### "DEPENDENCY ERROR" or "No module named 'selenium'"
+
+**Solution:**
+```bash
+cd modules/auto_uploader
+python install_dependencies.py
+```
+
+Or manually:
+```bash
+pip install selenium webdriver-manager pyautogui pygetwindow pillow
+```
+
+### "SettingsManager" or "interactive_collector" Error
+
+**Solution:**
+1. Clear Python cache:
+   ```bash
+   find . -type d -name "__pycache__" -exec rm -rf {} +
+   find . -name "*.pyc" -delete
+   ```
+
+2. Reinstall dependencies:
+   ```bash
+   cd modules/auto_uploader
+   python install_dependencies.py
+   ```
+
+3. Restart the application
+
 ### "Failed to launch browser"
-- Check browser is installed
-- Verify `exe_path` in settings
-- Try using desktop shortcut
+- Check browser (GoLogin/Incogniton) is installed
+- Verify `exe_path` in `data/settings.json`
+- Try using desktop shortcut path instead
 
 ### "Failed to connect Selenium"
 - Ensure browser is running
-- Check debug port (9222/9223)
-- Verify ChromeDriver installed
+- Check debug port (9222 for GoLogin, 9223 for Incogniton)
+- Verify ChromeDriver is installed
+- Try: `pip install webdriver-manager`
 
 ### "No login data found"
-- Check `login_data.txt` exists
-- Verify file format (pipe-separated)
-- Ensure profile name matches creator folder
+- Check `login_data.txt` exists in correct folder
+- Verify file format (pipe-separated: `profile|email|password|page|id`)
+- Ensure profile name matches creator folder name
+
+### "Import Error" when starting
+
+**Clear cache and reinstall:**
+```bash
+# Clear Python cache
+python -c "import subprocess; subprocess.run(['find', '.', '-type', 'd', '-name', '__pycache__', '-exec', 'rm', '-rf', '{}', '+'])"
+
+# Reinstall dependencies
+cd modules/auto_uploader
+pip install -r requirements.txt
+```
 
 ## 📝 Notes
 

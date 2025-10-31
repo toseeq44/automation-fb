@@ -1,0 +1,24 @@
+# Facebook Upload Bot - Requirements
+# Python 3.8+ required
+
+# Core Dependencies
+selenium>=4.15.0
+webdriver-manager>=4.0.1
+
+# Windows Automation (for GUI control)
+pyautogui>=0.9.54
+pygetwindow>=0.0.9
+pillow>=10.1.0
+
+# Optional: Enhanced Windows automation
+# pywin32>=306  # Uncomment for advanced Windows shortcuts parsing
+
+# Utilities
+pathlib2>=2.3.7; python_version < '3.4'
+
+# Database (built-in sqlite3 is used, no extra package needed)
+
+# Note: ChromeDriver/WebDriver
+# - Install using webdriver-manager (automatic)
+# - OR download manually from: https://chromedriver.chromium.org/
+# - Make sure ChromeDriver version matches your Chrome version

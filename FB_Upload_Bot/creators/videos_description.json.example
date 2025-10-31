@@ -1,0 +1,20 @@
+{
+  "_instructions": "This is a template for video metadata. Copy this file to each creator folder and rename to 'videos_description.json'",
+  "_format": "Each key should be a video filename in the same folder",
+
+  "example_video.mp4": {
+    "title": "Your Video Title Here",
+    "description": "Your video description here.\n\nYou can add multiple lines.\n\n#hashtag #tags #here",
+    "tags": ["tag1", "tag2", "tag3"],
+    "thumbnail": null,
+    "schedule": null
+  },
+
+  "another_video.mp4": {
+    "title": "Another Video Title",
+    "description": "Another description with emojis 🎮🎬\n\n#gaming #content",
+    "tags": ["gaming", "entertainment"],
+    "thumbnail": "thumbnail.jpg",
+    "schedule": "2024-12-01 18:00:00"
+  }
+}

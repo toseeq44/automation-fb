@@ -3,7 +3,6 @@ Facebook Auto Uploader - Upload Manager
 Handles video upload logic, metadata, and Facebook interaction
 """
 
-import json
 import time
 import logging
 from pathlib import Path
@@ -15,6 +14,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
+from .history_manager import HistoryManager
 from .utils import (
     get_video_files,
     load_video_metadata,
@@ -27,7 +27,14 @@ from .utils import (
 class UploadManager:
     """Manages Facebook video uploads"""
 
-    def __init__(self, config: Dict, tracking_data: Dict, save_callback: Callable):
+    def __init__(
+        self,
+        config: Dict,
+        tracking_data: Dict,
+        save_callback: Callable,
+        creators_root: Path,
+        history_manager: Optional[HistoryManager] = None,
+    ):
         """
         Initialize upload manager
 
@@ -39,6 +46,8 @@ class UploadManager:
         self.config = config
         self.tracking = tracking_data
         self.save_tracking = save_callback
+        self.creators_root = creators_root
+        self.history = history_manager
 
     def upload_creator_videos(self, driver: webdriver.Chrome, creator_data: Dict):
         """
@@ -52,7 +61,7 @@ class UploadManager:
         logging.info(f"Processing videos for: {creator_name}")
 
         # Get video files
-        creator_path = Path(__file__).parent / 'creators' / creator_name
+        creator_path = self.creators_root / creator_name
         videos = get_video_files(creator_path)
 
         if not videos:
@@ -68,13 +77,23 @@ class UploadManager:
             logging.info(f"All videos already uploaded for {creator_name}")
             return
 
+        upload_mode = creator_data.get('upload_mode', 'auto')
+        if upload_mode == 'bulk':
+            videos = videos[:5]
+        elif upload_mode == 'single':
+            videos = videos[:1]
+
         logging.info(f"Found {len(videos)} video(s) to upload")
+
+        success_count = 0
+        failure_count = 0
 
         # Upload each video
         for idx, video in enumerate(videos, 1):
             try:
                 logging.info(f"[{idx}/{len(videos)}] Uploading: {video.name}")
                 self.single_upload(driver, creator_data, video, creator_path)
+                success_count += 1
 
                 # Wait between videos
                 if idx < len(videos):
@@ -93,7 +112,11 @@ class UploadManager:
                     str(e)
                 )
                 self.save_tracking()
+                failure_count += 1
                 continue
+
+        if (success_count + failure_count) > 0 and self.history:
+            self.history.record_batch(creator_name, success_count + failure_count, success_count, failure_count)
 
     def single_upload(self, driver: webdriver.Chrome, creator_data: Dict,
                      video_path: Path, creator_path: Path):

@@ -23,6 +23,8 @@ except ImportError:
     webdriver = None
     logging.warning("Selenium not installed. Install with: pip install selenium")
 
+from .configuration import SettingsManager
+
 # Try to import Windows-specific automation tools
 try:
     import pyautogui
@@ -38,19 +40,8 @@ except ImportError:
 class BrowserController:
     """Controls anti-detect browser launching and profile management"""
 
-    def __init__(self, config):
-        """
-        Initialize browser controller
-
-        Args:
-            config: ConfigLoader instance
-        """
-        if not SELENIUM_AVAILABLE:
-            raise ImportError(
-                "Selenium is required for browser automation.\n"
-                "Install it with: pip install selenium webdriver-manager"
-            )
-
+    def __init__(self, config: SettingsManager):
+        """Initialize browser controller."""
         self.config = config
         self.active_browsers = {}
         self.active_drivers = {}

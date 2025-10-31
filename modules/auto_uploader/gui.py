@@ -38,7 +38,27 @@ class UploaderThread(QThread):
                     self.signal.emit(msg)
 
             # Initialize uploader
-            self.uploader = FacebookAutoUploader()
+            self.log_signal.emit("Initializing Facebook Auto Uploader...")
+
+            try:
+                self.uploader = FacebookAutoUploader()
+            except ImportError as e:
+                self.log_signal.emit(f"\n❌ DEPENDENCY ERROR:\n{str(e)}\n")
+                self.log_signal.emit("\nRequired packages:")
+                self.log_signal.emit("  • selenium")
+                self.log_signal.emit("  • webdriver-manager")
+                self.log_signal.emit("  • pyautogui (Windows)")
+                self.log_signal.emit("  • pygetwindow (Windows)")
+                self.log_signal.emit("\nInstall with:")
+                self.log_signal.emit("  pip install selenium webdriver-manager pyautogui pygetwindow")
+                self.finished_signal.emit(False)
+                return
+            except Exception as e:
+                self.log_signal.emit(f"\n❌ INITIALIZATION ERROR:\n{str(e)}\n")
+                import traceback
+                self.log_signal.emit(traceback.format_exc())
+                self.finished_signal.emit(False)
+                return
 
             # Add GUI logging handler
             gui_handler = GUIHandler(self.log_signal)
@@ -50,7 +70,9 @@ class UploaderThread(QThread):
             self.finished_signal.emit(success)
 
         except Exception as e:
-            self.log_signal.emit(f"ERROR: {str(e)}")
+            self.log_signal.emit(f"\n❌ RUNTIME ERROR:\n{str(e)}\n")
+            import traceback
+            self.log_signal.emit(traceback.format_exc())
             self.finished_signal.emit(False)
 
 

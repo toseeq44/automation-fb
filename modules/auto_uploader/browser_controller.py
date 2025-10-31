@@ -15,6 +15,8 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.common.exceptions import WebDriverException
 
+from .configuration import SettingsManager
+
 # Try to import Windows-specific automation tools
 try:
     import pyautogui
@@ -28,13 +30,8 @@ except ImportError:
 class BrowserController:
     """Controls anti-detect browser launching and profile management"""
 
-    def __init__(self, config):
-        """
-        Initialize browser controller
-
-        Args:
-            config: ConfigLoader instance
-        """
+    def __init__(self, config: SettingsManager):
+        """Initialize browser controller."""
         self.config = config
         self.active_browsers = {}
         self.active_drivers = {}

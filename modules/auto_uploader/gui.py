@@ -241,44 +241,12 @@ class AutoUploaderPage(QWidget):
         base_dir = Path(__file__).resolve().parent
         settings_path = base_dir / 'data' / 'settings.json'
 
-        collector = lambda cfg: InitialSetupUI(base_dir, parent=self).collect(cfg)
-
         try:
-            settings_kwargs = {}
-            try:
-                signature = inspect.signature(SettingsManager)
-            except (TypeError, ValueError):  # pragma: no cover - defensive guard
-                signature = None
-
-            if signature and "interactive_collector" in signature.parameters:
-                settings_kwargs["interactive_collector"] = collector
-
-            try:
-                settings_manager = SettingsManager(settings_path, base_dir, **settings_kwargs)
-            except TypeError as type_error:
-                # Some legacy builds may still raise even after the signature probe
-                if "interactive_collector" not in str(type_error):
-                    raise
-
-                logging.debug(
-                    "SettingsManager rejected 'interactive_collector' despite signature probe: %s",
-                    type_error,
-                )
-
-                settings_manager = SettingsManager(settings_path, base_dir)
-                settings_kwargs.pop("interactive_collector", None)
-
-            ensure_setup = getattr(settings_manager, "ensure_setup", None)
-            if callable(ensure_setup):
-                ensure_setup(interactive_collector=collector)
-            elif settings_kwargs:
-                # We expected to supply the collector via the constructor but fell back to a
-                # legacy SettingsManager without setup hooks.
-                raise RuntimeError(
-                    "The installed SettingsManager version does not expose GUI setup hooks."
-                )
-
-            self.settings_manager = settings_manager
+            SettingsManager(
+                settings_path,
+                base_dir,
+                interactive_collector=lambda cfg: InitialSetupUI(base_dir, parent=self).collect(cfg),
+            )
         except RuntimeError as exc:
             message = str(exc) or "Initial setup was cancelled."
             self.log_output.append(f"[!] {message}")

@@ -10,10 +10,27 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from pathlib import Path
 import logging
 
-try:
+try:  # pragma: no cover - import side effects exercised at runtime
     from .core import FacebookAutoUploader
-except ImportError:
+except ImportError:  # pragma: no cover - compatibility guard
     FacebookAutoUploader = None
+
+try:  # pragma: no cover - import side effects exercised at runtime
+    from .configuration import SettingsManager
+except ImportError:  # pragma: no cover - compatibility guard
+    SettingsManager = None
+
+try:  # pragma: no cover - import side effects exercised at runtime
+    from .ui_configurator import InitialSetupUI
+except ImportError:  # pragma: no cover - compatibility guard
+    InitialSetupUI = None
+
+try:  # pragma: no cover - import side effects exercised at runtime
+    from .utils import load_config, merge_dicts, save_config
+except ImportError:  # pragma: no cover - compatibility guard
+    load_config = None
+    merge_dicts = None
+    save_config = None
 
 
 class UploaderThread(QThread):
@@ -225,11 +242,43 @@ class AutoUploaderPage(QWidget):
 
     def start_upload(self):
         """Start upload process"""
-        if FacebookAutoUploader is None:
+        if FacebookAutoUploader is None or SettingsManager is None or InitialSetupUI is None:
             QMessageBox.warning(
                 self,
                 "Module Not Available",
                 "The auto uploader module could not be loaded."
+            )
+            return
+
+        base_dir = Path(__file__).resolve().parent
+        settings_path = base_dir / 'data' / 'settings.json'
+
+        collector = lambda cfg: InitialSetupUI(base_dir, parent=self).collect(cfg)
+
+        try:
+            settings_manager = self._initialise_settings_manager(
+                SettingsManager,
+                settings_path,
+                base_dir,
+                collector,
+            )
+            self._ensure_settings_setup(
+                settings_manager,
+                collector,
+                settings_path,
+            )
+            self.settings_manager = settings_manager
+        except RuntimeError as exc:
+            message = str(exc) or "Initial setup was cancelled."
+            self.log_output.append(f"[!] {message}")
+            QMessageBox.information(self, "Setup Cancelled", message)
+            return
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logging.exception("Failed to complete initial setup", exc_info=True)
+            QMessageBox.critical(
+                self,
+                "Setup Failed",
+                f"Could not complete the initial setup: {exc}",
             )
             return
 
@@ -284,3 +333,185 @@ class AutoUploaderPage(QWidget):
             self.log_output.append("\n" + "="*60)
             self.log_output.append("✗ Upload process failed or was stopped")
             self.log_output.append("="*60)
+
+    # ------------------------------------------------------------------
+    # settings helpers
+    # ------------------------------------------------------------------
+    def _initialise_settings_manager(
+        self,
+        manager_cls,
+        settings_path: Path,
+        base_dir: Path,
+        collector,
+    ):
+        """Create a SettingsManager instance with broad compatibility."""
+
+        if manager_cls is None:
+            raise RuntimeError("Settings manager module is unavailable")
+
+        call_attempts = []
+        call_attempts.append(lambda: manager_cls(settings_path, base_dir))
+        call_attempts.append(lambda: manager_cls(settings_path))
+        call_attempts.append(lambda: manager_cls())
+
+        errors = []
+        for attempt in call_attempts:
+            try:
+                return attempt()
+            except TypeError as exc:
+                errors.append(exc)
+                logging.debug("SettingsManager init attempt failed: %s", exc)
+                continue
+
+        raise TypeError("Unable to construct SettingsManager with available signatures", errors)
+
+    def _ensure_settings_setup(
+        self,
+        settings_manager,
+        collector,
+        settings_path: Path,
+    ):
+        """Make sure the configuration wizard has completed."""
+
+        ensure_setup = getattr(settings_manager, "ensure_setup", None)
+        if callable(ensure_setup):
+            try:
+                ensure_setup(interactive_collector=collector)
+                return
+            except TypeError as exc:
+                logging.debug(
+                    "ensure_setup rejected 'interactive_collector'; retrying without kwargs: %s",
+                    exc,
+                )
+                try:
+                    ensure_setup()
+                    # Fall through to manual collector application so GUI data is still captured.
+                except Exception as inner_exc:  # pragma: no cover - defensive guard
+                    logging.debug("ensure_setup() call without kwargs failed: %s", inner_exc)
+
+        self._apply_collector_payload(settings_manager, collector, settings_path)
+
+    def _apply_collector_payload(self, settings_manager, collector, settings_path: Path):
+        """Fallback path that applies the GUI payload manually for legacy managers."""
+
+        if collector is None:
+            return
+
+        self._ensure_config_helpers()
+
+        if load_config is None or merge_dicts is None or save_config is None:
+            raise RuntimeError(
+                "The setup wizard is unavailable because configuration utilities could not be loaded."
+            )
+
+        current_config = {}
+
+        # Try common attributes exposed by historical SettingsManager implementations.
+        for attr in ("config", "_config"):
+            try:
+                candidate = getattr(settings_manager, attr)
+                if callable(candidate):  # pragma: no cover - defensive guard
+                    candidate = candidate()
+                if isinstance(candidate, dict):
+                    current_config = candidate
+                    break
+            except Exception:  # pragma: no cover - defensive guard
+                continue
+        else:
+            current_config = load_config(settings_path)
+
+        payload = collector(current_config)
+        if not payload:
+            raise RuntimeError("Initial setup wizard was cancelled by the user")
+
+        merged = merge_dicts(current_config, payload)
+
+        if hasattr(settings_manager, "_config"):
+            try:
+                settings_manager._config = merged
+            except Exception:  # pragma: no cover - defensive guard
+                pass
+
+        saved = False
+        saver = getattr(settings_manager, "save", None)
+        if callable(saver):
+            try:
+                saver()
+                saved = True
+            except TypeError:
+                try:
+                    saver(merged)
+                    saved = True
+                except Exception:  # pragma: no cover - defensive guard
+                    pass
+
+        if not saved:
+            save_config(settings_path, merged)
+
+        # Attempt to rebuild derived attributes if helpers are present.
+        builder = getattr(settings_manager, "_build_paths", None)
+        if callable(builder):
+            try:
+                settings_manager.paths = builder()
+            except Exception:  # pragma: no cover - defensive guard
+                pass
+
+    def _ensure_config_helpers(self):
+        """Attempt to resolve configuration helper functions on demand."""
+
+        global load_config, merge_dicts, save_config
+
+        if load_config and merge_dicts and save_config:
+            return
+
+        try:  # pragma: no cover - import exercised at runtime
+            from . import utils as utils_module
+        except Exception:  # pragma: no cover - compatibility guard
+            utils_module = None
+
+        if utils_module is not None:
+            load_config = getattr(utils_module, "load_config", load_config)
+            merge_dicts = getattr(utils_module, "merge_dicts", merge_dicts)
+            save_config = getattr(utils_module, "save_config", save_config)
+
+        # Provide basic JSON implementations if utilities remain unavailable.
+        if load_config is None:
+            def _basic_load(path: Path):
+                if not path.exists():
+                    return {}
+                try:
+                    import json  # local import keeps optional dependency scoped
+                    with open(path, "r", encoding="utf-8") as handle:
+                        return json.load(handle)
+                except Exception:  # pragma: no cover - defensive guard
+                    return {}
+
+            load_config = _basic_load
+
+        if merge_dicts is None:
+            def _basic_merge(base: dict, override: dict) -> dict:
+                result = dict(base or {})
+                for key, value in (override or {}).items():
+                    if (
+                        isinstance(result.get(key), dict)
+                        and isinstance(value, dict)
+                    ):
+                        result[key] = _basic_merge(result[key], value)
+                    else:
+                        result[key] = value
+                return result
+
+            merge_dicts = _basic_merge
+
+        if save_config is None:
+            def _basic_save(path: Path, payload: dict):
+                try:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    import json  # local import keeps optional dependency scoped
+                    with open(path, "w", encoding="utf-8") as handle:
+                        json.dump(payload or {}, handle, indent=2, ensure_ascii=False)
+                except Exception:  # pragma: no cover - defensive guard
+                    pass
+
+            save_config = _basic_save
+

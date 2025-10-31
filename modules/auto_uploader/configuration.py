@@ -7,7 +7,7 @@ import sys
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Dict, Optional, Any, Callable
+from typing import Dict, Optional, Any
 
 from .auth_handler import AuthHandler
 from .utils import (
@@ -49,20 +49,16 @@ class AutomationPaths:
 class SettingsManager:
     """Central access point for automation configuration."""
 
-    def __init__(
-        self,
-        settings_path: Path,
-        base_dir: Path,
-        interactive_collector=None,
-    ):
+    def __init__(self, settings_path: Path, base_dir: Path):
         self.settings_path = settings_path
         self.base_dir = base_dir
-        self._interactive_collector = interactive_collector
         self._config = load_config(settings_path)
-        self.paths: Optional[AutomationPaths] = None
         self._ensure_structure()
 
-        self.ensure_setup(interactive_collector)
+        if not self._config.get("automation", {}).get("setup_completed"):
+            self._run_initial_setup()
+
+        self.paths = self._build_paths()
 
     # ------------------------------------------------------------------
     # public helpers
@@ -81,22 +77,6 @@ class SettingsManager:
 
     def save(self):
         save_config(self.settings_path, self._config)
-
-    def ensure_setup(
-        self,
-        interactive_collector: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
-    ) -> "SettingsManager":
-        """Make sure the initial setup is completed and paths are resolved."""
-
-        if interactive_collector is not None:
-            self._interactive_collector = interactive_collector
-
-        if not self._config.get("automation", {}).get("setup_completed"):
-            self._run_initial_setup()
-
-        # Always rebuild paths to reflect the latest configuration
-        self.paths = self._build_paths()
-        return self
 
     # ------------------------------------------------------------------
     # internal helpers
@@ -131,15 +111,13 @@ class SettingsManager:
         return AutomationPaths(creators_root=creators_root, shortcuts_root=shortcuts_root, history_file=history_file)
 
     def _run_initial_setup(self):
-        if self._interactive_collector is not None:
-            updated = self._interactive_collector(self._config)
-        elif sys.stdin and sys.stdin.isatty():
-            ui = InitialSetupUI(self.base_dir)
-            updated = ui.collect(self._config)
-        else:
+        if not sys.stdin or not sys.stdin.isatty():
             logging.info("Non-interactive environment detected; using default automation settings")
             self._config.setdefault("automation", {}).update({"setup_completed": False})
             return
+
+        ui = InitialSetupUI(self.base_dir)
+        updated = ui.collect(self._config)
         credentials = updated.get("automation", {}).get("credentials", {})
         if credentials:
             auth = AuthHandler()

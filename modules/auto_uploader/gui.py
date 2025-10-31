@@ -15,14 +15,10 @@ try:
     from .core import FacebookAutoUploader
     from .configuration import SettingsManager
     from .ui_configurator import InitialSetupUI
-    from .utils import load_config, merge_dicts, save_config
 except ImportError:
     FacebookAutoUploader = None
     SettingsManager = None
     InitialSetupUI = None
-    load_config = None
-    merge_dicts = None
-    save_config = None
 
 
 class UploaderThread(QThread):
@@ -47,7 +43,27 @@ class UploaderThread(QThread):
                     self.signal.emit(msg)
 
             # Initialize uploader
-            self.uploader = FacebookAutoUploader()
+            self.log_signal.emit("Initializing Facebook Auto Uploader...")
+
+            try:
+                self.uploader = FacebookAutoUploader()
+            except ImportError as e:
+                self.log_signal.emit(f"\n❌ DEPENDENCY ERROR:\n{str(e)}\n")
+                self.log_signal.emit("\nRequired packages:")
+                self.log_signal.emit("  • selenium")
+                self.log_signal.emit("  • webdriver-manager")
+                self.log_signal.emit("  • pyautogui (Windows)")
+                self.log_signal.emit("  • pygetwindow (Windows)")
+                self.log_signal.emit("\nInstall with:")
+                self.log_signal.emit("  pip install selenium webdriver-manager pyautogui pygetwindow")
+                self.finished_signal.emit(False)
+                return
+            except Exception as e:
+                self.log_signal.emit(f"\n❌ INITIALIZATION ERROR:\n{str(e)}\n")
+                import traceback
+                self.log_signal.emit(traceback.format_exc())
+                self.finished_signal.emit(False)
+                return
 
             # Add GUI logging handler
             gui_handler = GUIHandler(self.log_signal)
@@ -59,7 +75,9 @@ class UploaderThread(QThread):
             self.finished_signal.emit(success)
 
         except Exception as e:
-            self.log_signal.emit(f"ERROR: {str(e)}")
+            self.log_signal.emit(f"\n❌ RUNTIME ERROR:\n{str(e)}\n")
+            import traceback
+            self.log_signal.emit(traceback.format_exc())
             self.finished_signal.emit(False)
 
 
@@ -245,21 +263,12 @@ class AutoUploaderPage(QWidget):
         base_dir = Path(__file__).resolve().parent
         settings_path = base_dir / 'data' / 'settings.json'
 
-        collector = lambda cfg: InitialSetupUI(base_dir, parent=self).collect(cfg)
-
         try:
-            settings_manager = self._initialise_settings_manager(
-                SettingsManager,
+            SettingsManager(
                 settings_path,
                 base_dir,
-                collector,
+                interactive_collector=lambda cfg: InitialSetupUI(base_dir, parent=self).collect(cfg),
             )
-            self._ensure_settings_setup(
-                settings_manager,
-                collector,
-                settings_path,
-            )
-            self.settings_manager = settings_manager
         except RuntimeError as exc:
             message = str(exc) or "Initial setup was cancelled."
             self.log_output.append(f"[!] {message}")

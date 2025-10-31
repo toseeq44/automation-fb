@@ -1,0 +1,13 @@
+# Facebook Auto Uploader - Required Dependencies
+
+# Core automation
+selenium>=4.15.0
+webdriver-manager>=4.0.1
+
+# Windows GUI automation (for GoLogin/Incogniton profile management)
+pyautogui>=0.9.54
+pygetwindow>=0.0.9
+pillow>=10.1.0
+
+# Note: These dependencies are for Windows-based automation
+# For Linux/Mac, pyautogui and pygetwindow may not work as expected

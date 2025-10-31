@@ -334,3 +334,122 @@ class AutoUploaderPage(QWidget):
             self.log_output.append("\n" + "="*60)
             self.log_output.append("✗ Upload process failed or was stopped")
             self.log_output.append("="*60)
+
+    # ------------------------------------------------------------------
+    # settings helpers
+    # ------------------------------------------------------------------
+    def _initialise_settings_manager(
+        self,
+        manager_cls,
+        settings_path: Path,
+        base_dir: Path,
+        collector,
+    ):
+        """Create a SettingsManager instance with broad compatibility."""
+
+        try:
+            return manager_cls(settings_path, base_dir)
+        except TypeError as exc:
+            logging.debug("SettingsManager two-argument init failed: %s", exc)
+
+            signature = None
+            try:
+                signature = inspect.signature(manager_cls.__init__)
+            except (TypeError, ValueError):  # pragma: no cover - defensive guard
+                pass
+
+            if signature and "interactive_collector" in signature.parameters:
+                logging.debug("Retrying SettingsManager init with interactive collector")
+                return manager_cls(settings_path, base_dir, collector)
+
+            raise
+
+    def _ensure_settings_setup(
+        self,
+        settings_manager,
+        collector,
+        settings_path: Path,
+    ):
+        """Make sure the configuration wizard has completed."""
+
+        ensure_setup = getattr(settings_manager, "ensure_setup", None)
+        if callable(ensure_setup):
+            try:
+                ensure_setup(interactive_collector=collector)
+                return
+            except TypeError as exc:
+                logging.debug(
+                    "ensure_setup rejected 'interactive_collector'; retrying without kwargs: %s",
+                    exc,
+                )
+                try:
+                    ensure_setup()
+                    # Fall through to manual collector application so GUI data is still captured.
+                except Exception as inner_exc:  # pragma: no cover - defensive guard
+                    logging.debug("ensure_setup() call without kwargs failed: %s", inner_exc)
+
+        self._apply_collector_payload(settings_manager, collector, settings_path)
+
+    def _apply_collector_payload(self, settings_manager, collector, settings_path: Path):
+        """Fallback path that applies the GUI payload manually for legacy managers."""
+
+        if collector is None:
+            return
+
+        if load_config is None or merge_dicts is None or save_config is None:
+            raise RuntimeError(
+                "The setup wizard is unavailable because configuration utilities could not be loaded."
+            )
+
+        current_config = {}
+
+        # Try common attributes exposed by historical SettingsManager implementations.
+        for attr in ("config", "_config"):
+            try:
+                candidate = getattr(settings_manager, attr)
+                if callable(candidate):  # pragma: no cover - defensive guard
+                    candidate = candidate()
+                if isinstance(candidate, dict):
+                    current_config = candidate
+                    break
+            except Exception:  # pragma: no cover - defensive guard
+                continue
+        else:
+            current_config = load_config(settings_path)
+
+        payload = collector(current_config)
+        if not payload:
+            raise RuntimeError("Initial setup wizard was cancelled by the user")
+
+        merged = merge_dicts(current_config, payload)
+
+        if hasattr(settings_manager, "_config"):
+            try:
+                settings_manager._config = merged
+            except Exception:  # pragma: no cover - defensive guard
+                pass
+
+        saved = False
+        saver = getattr(settings_manager, "save", None)
+        if callable(saver):
+            try:
+                saver()
+                saved = True
+            except TypeError:
+                try:
+                    saver(merged)
+                    saved = True
+                except Exception:  # pragma: no cover - defensive guard
+                    pass
+
+        if not saved:
+            save_config(settings_path, merged)
+
+        # Attempt to rebuild derived attributes if helpers are present.
+        builder = getattr(settings_manager, "_build_paths", None)
+        if callable(builder):
+            try:
+                settings_manager.paths = builder()
+            except Exception:  # pragma: no cover - defensive guard
+                pass
+

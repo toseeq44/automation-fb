@@ -25,6 +25,8 @@ except ImportError:
 
 from .configuration import SettingsManager
 
+from .configuration import SettingsManager
+
 # Try to import Windows-specific automation tools
 try:
     import pyautogui

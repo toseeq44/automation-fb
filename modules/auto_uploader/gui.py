@@ -13,8 +13,46 @@ import logging
 
 try:  # pragma: no cover - import side effects exercised at runtime
     from .core import FacebookAutoUploader
-except ImportError:  # pragma: no cover - compatibility guard
+    from .configuration import SettingsManager
+    from .ui_configurator import InitialSetupUI
+except ImportError:
     FacebookAutoUploader = None
+    SettingsManager = None
+    InitialSetupUI = None
+
+try:  # pragma: no cover - import side effects exercised at runtime
+    from .configuration import SettingsManager
+except ImportError:  # pragma: no cover - compatibility guard
+    SettingsManager = None
+
+try:  # pragma: no cover - import side effects exercised at runtime
+    from .ui_configurator import InitialSetupUI
+except ImportError:  # pragma: no cover - compatibility guard
+    InitialSetupUI = None
+
+try:  # pragma: no cover - import side effects exercised at runtime
+    from .utils import load_config, merge_dicts, save_config
+except ImportError:  # pragma: no cover - compatibility guard
+    load_config = None
+    merge_dicts = None
+    save_config = None
+
+try:  # pragma: no cover - import side effects exercised at runtime
+    from .configuration import SettingsManager
+except ImportError:  # pragma: no cover - compatibility guard
+    SettingsManager = None
+
+try:  # pragma: no cover - import side effects exercised at runtime
+    from .ui_configurator import InitialSetupUI
+except ImportError:  # pragma: no cover - compatibility guard
+    InitialSetupUI = None
+
+try:  # pragma: no cover - import side effects exercised at runtime
+    from .utils import load_config, merge_dicts, save_config
+except ImportError:  # pragma: no cover - compatibility guard
+    load_config = None
+    merge_dicts = None
+    save_config = None
 
 try:  # pragma: no cover - import side effects exercised at runtime
     from .configuration import SettingsManager
@@ -56,7 +94,27 @@ class UploaderThread(QThread):
                     self.signal.emit(msg)
 
             # Initialize uploader
-            self.uploader = FacebookAutoUploader()
+            self.log_signal.emit("Initializing Facebook Auto Uploader...")
+
+            try:
+                self.uploader = FacebookAutoUploader()
+            except ImportError as e:
+                self.log_signal.emit(f"\n❌ DEPENDENCY ERROR:\n{str(e)}\n")
+                self.log_signal.emit("\nRequired packages:")
+                self.log_signal.emit("  • selenium")
+                self.log_signal.emit("  • webdriver-manager")
+                self.log_signal.emit("  • pyautogui (Windows)")
+                self.log_signal.emit("  • pygetwindow (Windows)")
+                self.log_signal.emit("\nInstall with:")
+                self.log_signal.emit("  pip install selenium webdriver-manager pyautogui pygetwindow")
+                self.finished_signal.emit(False)
+                return
+            except Exception as e:
+                self.log_signal.emit(f"\n❌ INITIALIZATION ERROR:\n{str(e)}\n")
+                import traceback
+                self.log_signal.emit(traceback.format_exc())
+                self.finished_signal.emit(False)
+                return
 
             # Add GUI logging handler
             gui_handler = GUIHandler(self.log_signal)
@@ -68,7 +126,9 @@ class UploaderThread(QThread):
             self.finished_signal.emit(success)
 
         except Exception as e:
-            self.log_signal.emit(f"ERROR: {str(e)}")
+            self.log_signal.emit(f"\n❌ RUNTIME ERROR:\n{str(e)}\n")
+            import traceback
+            self.log_signal.emit(traceback.format_exc())
             self.finished_signal.emit(False)
 
 
@@ -254,21 +314,12 @@ class AutoUploaderPage(QWidget):
         base_dir = Path(__file__).resolve().parent
         settings_path = base_dir / 'data' / 'settings.json'
 
-        collector = lambda cfg: InitialSetupUI(base_dir, parent=self).collect(cfg)
-
         try:
-            settings_manager = self._initialise_settings_manager(
-                SettingsManager,
+            SettingsManager(
                 settings_path,
                 base_dir,
-                collector,
+                interactive_collector=lambda cfg: InitialSetupUI(base_dir, parent=self).collect(cfg),
             )
-            self._ensure_settings_setup(
-                settings_manager,
-                collector,
-                settings_path,
-            )
-            self.settings_manager = settings_manager
         except RuntimeError as exc:
             message = str(exc) or "Initial setup was cancelled."
             self.log_output.append(f"[!] {message}")
@@ -347,49 +398,22 @@ class AutoUploaderPage(QWidget):
     ):
         """Create a SettingsManager instance with broad compatibility."""
 
-        if manager_cls is None:
-            raise RuntimeError("Settings manager module is unavailable")
-
-        init_callable = getattr(manager_cls, "__init__", None)
-        accepts_kwargs = False
-        accepts_interactive_kw = False
-
         try:
-            signature = inspect.signature(init_callable)
-        except (TypeError, ValueError):  # pragma: no cover - defensive guard
+            return manager_cls(settings_path, base_dir)
+        except TypeError as exc:
+            logging.debug("SettingsManager two-argument init failed: %s", exc)
+
             signature = None
-
-        if signature is not None:
-            params = list(signature.parameters.values())[1:]  # Skip ``self``
-            for param in params:
-                if param.kind == inspect.Parameter.VAR_KEYWORD:
-                    accepts_kwargs = True
-                if param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY):
-                    if param.name == "interactive_collector":
-                        accepts_interactive_kw = True
-
-        call_attempts = []
-
-        if accepts_kwargs or accepts_interactive_kw:
-            call_attempts.append(lambda: manager_cls(
-                settings_path,
-                base_dir,
-                interactive_collector=collector,
-            ))
-
-        call_attempts.append(lambda: manager_cls(settings_path, base_dir))
-        call_attempts.append(lambda: manager_cls(settings_path))
-
-        errors = []
-        for attempt in call_attempts:
             try:
-                return attempt()
-            except TypeError as exc:
-                errors.append(exc)
-                logging.debug("SettingsManager init attempt failed: %s", exc)
-                continue
+                signature = inspect.signature(manager_cls.__init__)
+            except (TypeError, ValueError):  # pragma: no cover - defensive guard
+                pass
 
-        raise TypeError("Unable to construct SettingsManager with available signatures", errors)
+            if signature and "interactive_collector" in signature.parameters:
+                logging.debug("Retrying SettingsManager init with interactive collector")
+                return manager_cls(settings_path, base_dir, collector)
+
+            raise
 
     def _ensure_settings_setup(
         self,
@@ -422,8 +446,6 @@ class AutoUploaderPage(QWidget):
 
         if collector is None:
             return
-
-        self._ensure_config_helpers()
 
         if load_config is None or merge_dicts is None or save_config is None:
             raise RuntimeError(
@@ -481,63 +503,4 @@ class AutoUploaderPage(QWidget):
                 settings_manager.paths = builder()
             except Exception:  # pragma: no cover - defensive guard
                 pass
-
-    def _ensure_config_helpers(self):
-        """Attempt to resolve configuration helper functions on demand."""
-
-        global load_config, merge_dicts, save_config
-
-        if load_config and merge_dicts and save_config:
-            return
-
-        try:  # pragma: no cover - import exercised at runtime
-            from . import utils as utils_module
-        except Exception:  # pragma: no cover - compatibility guard
-            utils_module = None
-
-        if utils_module is not None:
-            load_config = getattr(utils_module, "load_config", load_config)
-            merge_dicts = getattr(utils_module, "merge_dicts", merge_dicts)
-            save_config = getattr(utils_module, "save_config", save_config)
-
-        # Provide basic JSON implementations if utilities remain unavailable.
-        if load_config is None:
-            def _basic_load(path: Path):
-                if not path.exists():
-                    return {}
-                try:
-                    import json  # local import keeps optional dependency scoped
-                    with open(path, "r", encoding="utf-8") as handle:
-                        return json.load(handle)
-                except Exception:  # pragma: no cover - defensive guard
-                    return {}
-
-            load_config = _basic_load
-
-        if merge_dicts is None:
-            def _basic_merge(base: dict, override: dict) -> dict:
-                result = dict(base or {})
-                for key, value in (override or {}).items():
-                    if (
-                        isinstance(result.get(key), dict)
-                        and isinstance(value, dict)
-                    ):
-                        result[key] = _basic_merge(result[key], value)
-                    else:
-                        result[key] = value
-                return result
-
-            merge_dicts = _basic_merge
-
-        if save_config is None:
-            def _basic_save(path: Path, payload: dict):
-                try:
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    import json  # local import keeps optional dependency scoped
-                    with open(path, "w", encoding="utf-8") as handle:
-                        json.dump(payload or {}, handle, indent=2, ensure_ascii=False)
-                except Exception:  # pragma: no cover - defensive guard
-                    pass
-
-            save_config = _basic_save
 

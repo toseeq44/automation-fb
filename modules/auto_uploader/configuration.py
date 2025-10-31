@@ -49,13 +49,25 @@ class AutomationPaths:
 class SettingsManager:
     """Central access point for automation configuration."""
 
-    def __init__(self, settings_path: Path, base_dir: Path):
+    def __init__(self, settings_path: Path, base_dir: Path, skip_setup: bool = False):
+        """
+        Initialize settings manager.
+
+        Args:
+            settings_path: Path to settings.json
+            base_dir: Base directory for module
+            skip_setup: If True, skip initial setup wizard (useful for GUI)
+        """
         self.settings_path = settings_path
         self.base_dir = base_dir
         self._config = load_config(settings_path)
         self._ensure_structure()
 
-        if not self._config.get("automation", {}).get("setup_completed"):
+        # Run initial setup only if:
+        # 1. Setup not completed yet
+        # 2. skip_setup is False (not running from GUI)
+        # 3. Interactive terminal available
+        if not skip_setup and not self._config.get("automation", {}).get("setup_completed"):
             self._run_initial_setup()
 
         self.paths = self._build_paths()

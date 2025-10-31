@@ -264,10 +264,12 @@ class AutoUploaderPage(QWidget):
         settings_path = base_dir / 'data' / 'settings.json'
 
         try:
-            SettingsManager(
+            # Initialize settings manager
+            # Skip CLI-based setup wizard when running from GUI
+            settings_manager = SettingsManager(
                 settings_path,
                 base_dir,
-                interactive_collector=lambda cfg: InitialSetupUI(base_dir, parent=self).collect(cfg),
+                skip_setup=True  # GUI environment - skip interactive terminal setup
             )
         except RuntimeError as exc:
             message = str(exc) or "Initial setup was cancelled."

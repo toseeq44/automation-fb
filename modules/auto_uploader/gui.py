@@ -240,35 +240,12 @@ class AutoUploaderPage(QWidget):
         base_dir = Path(__file__).resolve().parent
         settings_path = base_dir / 'data' / 'settings.json'
 
-        collector = lambda cfg: InitialSetupUI(base_dir, parent=self).collect(cfg)
-
         try:
-            try:
-                settings_manager = SettingsManager(
-                    settings_path,
-                    base_dir,
-                    interactive_collector=collector,
-                )
-            except TypeError as type_error:
-                if "interactive_collector" not in str(type_error):
-                    raise
-
-                logging.debug(
-                    "SettingsManager constructor does not support 'interactive_collector': %s",
-                    type_error,
-                )
-
-                settings_manager = SettingsManager(settings_path, base_dir)
-                ensure_setup = getattr(settings_manager, "ensure_setup", None)
-
-                if callable(ensure_setup):
-                    ensure_setup(interactive_collector=collector)
-                else:
-                    raise RuntimeError(
-                        "The installed SettingsManager version does not expose GUI setup hooks."
-                    ) from type_error
-
-            self.settings_manager = settings_manager
+            SettingsManager(
+                settings_path,
+                base_dir,
+                interactive_collector=lambda cfg: InitialSetupUI(base_dir, parent=self).collect(cfg),
+            )
         except RuntimeError as exc:
             message = str(exc) or "Initial setup was cancelled."
             self.log_output.append(f"[!] {message}")

@@ -10,10 +10,24 @@ import subprocess
 import platform
 from pathlib import Path
 from typing import Optional, Dict, Any
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import WebDriverException
+
+# Try to import Selenium
+try:
+    from selenium import webdriver
+    from selenium.webdriver.chrome.service import Service
+    from selenium.webdriver.chrome.options import Options
+    from selenium.common.exceptions import WebDriverException
+    SELENIUM_AVAILABLE = True
+except ImportError:
+    SELENIUM_AVAILABLE = False
+    webdriver = None
+    logging.warning("Selenium not installed. Install with: pip install selenium")
+
+from .configuration import SettingsManager
+
+from .configuration import SettingsManager
+
+from .configuration import SettingsManager
 
 from .configuration import SettingsManager
 
@@ -24,7 +38,9 @@ try:
     WINDOWS_AUTOMATION_AVAILABLE = True
 except ImportError:
     WINDOWS_AUTOMATION_AVAILABLE = False
-    logging.warning("Windows automation tools not available (pyautogui/pygetwindow)")
+    pyautogui = None
+    gw = None
+    logging.warning("Windows automation tools not available. Install with: pip install pyautogui pygetwindow")
 
 
 class BrowserController:

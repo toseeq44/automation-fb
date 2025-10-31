@@ -12,8 +12,12 @@ import logging
 
 try:
     from .core import FacebookAutoUploader
+    from .configuration import SettingsManager
+    from .ui_configurator import InitialSetupUI
 except ImportError:
     FacebookAutoUploader = None
+    SettingsManager = None
+    InitialSetupUI = None
 
 
 class UploaderThread(QThread):
@@ -225,11 +229,34 @@ class AutoUploaderPage(QWidget):
 
     def start_upload(self):
         """Start upload process"""
-        if FacebookAutoUploader is None:
+        if FacebookAutoUploader is None or SettingsManager is None or InitialSetupUI is None:
             QMessageBox.warning(
                 self,
                 "Module Not Available",
                 "The auto uploader module could not be loaded."
+            )
+            return
+
+        base_dir = Path(__file__).resolve().parent
+        settings_path = base_dir / 'data' / 'settings.json'
+
+        try:
+            SettingsManager(
+                settings_path,
+                base_dir,
+                interactive_collector=lambda cfg: InitialSetupUI(base_dir, parent=self).collect(cfg),
+            )
+        except RuntimeError as exc:
+            message = str(exc) or "Initial setup was cancelled."
+            self.log_output.append(f"[!] {message}")
+            QMessageBox.information(self, "Setup Cancelled", message)
+            return
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logging.exception("Failed to complete initial setup", exc_info=True)
+            QMessageBox.critical(
+                self,
+                "Setup Failed",
+                f"Could not complete the initial setup: {exc}",
             )
             return
 

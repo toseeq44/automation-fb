@@ -1,0 +1,19 @@
+{
+  "_note": "Copy this file to each creator folder and rename to: videos_description.json",
+
+  "example_video.mp4": {
+    "title": "Your Video Title",
+    "description": "Your video description\n\nAdd multiple lines\n\n#hashtags #tags",
+    "tags": ["tag1", "tag2", "tag3"],
+    "thumbnail": null,
+    "schedule": null
+  },
+
+  "another_video.mp4": {
+    "title": "Another Video",
+    "description": "Description with emojis 🎬\n\n#content",
+    "tags": ["entertainment"],
+    "thumbnail": "thumbnail.jpg",
+    "schedule": "2024-12-01 18:00:00"
+  }
+}

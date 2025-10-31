@@ -1,0 +1,35 @@
+{
+  "browsers": {
+    "gologin": {
+      "exe_path": "C:\\Users\\{user}\\AppData\\Local\\Programs\\GoLogin\\GoLogin.exe",
+      "desktop_shortcut": "~/Desktop/GoLogin.lnk",
+      "debug_port": 9222,
+      "startup_wait": 15,
+      "profile_startup_wait": 10,
+      "enabled": true
+    },
+    "ix": {
+      "exe_path": "C:\\Users\\{user}\\AppData\\Local\\Programs\\Incogniton\\Incogniton.exe",
+      "desktop_shortcut": "~/Desktop/Incogniton.lnk",
+      "debug_port": 9223,
+      "startup_wait": 15,
+      "profile_startup_wait": 10,
+      "enabled": true
+    }
+  },
+  "upload_settings": {
+    "wait_after_upload": 30,
+    "wait_between_videos": 120,
+    "retry_attempts": 3,
+    "retry_delay": 60,
+    "delete_after_upload": false,
+    "skip_uploaded": true,
+    "upload_timeout": 600
+  },
+  "facebook": {
+    "upload_url": "https://www.facebook.com/",
+    "video_upload_url": "https://www.facebook.com/video/upload",
+    "wait_for_login": 20,
+    "wait_for_video_processing": 30
+  }
+}

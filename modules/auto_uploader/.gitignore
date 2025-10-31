@@ -1,0 +1,25 @@
+# Sensitive data
+**/login_data.txt
+data/upload_tracking.json
+data/logs/
+
+# Video files
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+*.flv
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+
+# Temporary
+*.tmp
+*.bak

@@ -7,7 +7,7 @@ import sys
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, Callable
 
 from .auth_handler import AuthHandler
 from .utils import (
@@ -49,9 +49,10 @@ class AutomationPaths:
 class SettingsManager:
     """Central access point for automation configuration."""
 
-    def __init__(self, settings_path: Path, base_dir: Path):
+    def __init__(self, settings_path: Path, base_dir: Path, interactive_collector: Optional[Callable] = None):
         self.settings_path = settings_path
         self.base_dir = base_dir
+        self.interactive_collector = interactive_collector
         self._config = load_config(settings_path)
         self._ensure_structure()
 
@@ -111,6 +112,25 @@ class SettingsManager:
         return AutomationPaths(creators_root=creators_root, shortcuts_root=shortcuts_root, history_file=history_file)
 
     def _run_initial_setup(self):
+        # Use interactive collector if provided (for GUI)
+        if self.interactive_collector:
+            try:
+                updated = self.interactive_collector(self._config)
+                credentials = updated.get("automation", {}).get("credentials", {})
+                if credentials:
+                    auth = AuthHandler()
+                    secured_credentials = {}
+                    for key, payload in credentials.items():
+                        secured_credentials[key] = auth.save_credentials(f"setup:{key}", payload)
+                    updated["automation"]["credentials"] = secured_credentials
+                self._config = merge_dicts(self._config, updated)
+                self._config.setdefault("automation", {})["setup_completed"] = True
+                self.save()
+                return
+            except Exception as e:
+                logging.error(f"Interactive setup failed: {e}")
+
+        # Fallback to CLI setup
         if not sys.stdin or not sys.stdin.isatty():
             logging.info("Non-interactive environment detected; using default automation settings")
             self._config.setdefault("automation", {}).update({"setup_completed": False})
@@ -128,4 +148,3 @@ class SettingsManager:
         self._config = merge_dicts(self._config, updated)
         self._config.setdefault("automation", {})["setup_completed"] = True
         self.save()
-

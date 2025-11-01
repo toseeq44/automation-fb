@@ -1,11 +1,11 @@
 {
   "automation": {
     "mode": "free_automation",
-    "setup_completed": false,
+    "setup_completed": true,
     "paths": {
-      "creators_root": "",
-      "shortcuts_root": "",
-      "history_file": ""
+      "creators_root": "C:\\Users\\Fast Computers\\Desktop\\Toseeq Links Grabber",
+      "shortcuts_root": "C:\\Users\\Fast Computers\\Desktop\\creator_shortcuts",
+      "history_file": "C:\\Users\\Fast Computers\\automation\\modules\\auto_uploader\\data\\history.json"
     },
     "credentials": {
       "gologin": {},

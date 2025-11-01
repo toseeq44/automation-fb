@@ -88,14 +88,49 @@ class BrowserController:
 
         # Method 1: Desktop shortcut
         desktop_shortcut = os.path.expanduser(browser_config.get('desktop_shortcut', ''))
+
+        # Also try alternative shortcut names
+        desktop_path = os.path.expanduser('~/Desktop')
+        alternative_shortcuts = []
+
+        if browser_type == 'ix':
+            # Try multiple possible shortcut names for IX browser
+            alternative_shortcuts = [
+                os.path.join(desktop_path, 'ixBrowser.lnk'),
+                os.path.join(desktop_path, 'IX Browser.lnk'),
+                os.path.join(desktop_path, 'Incogniton.lnk'),
+                os.path.join(desktop_path, 'IX.lnk')
+            ]
+        elif browser_type == 'gologin':
+            alternative_shortcuts = [
+                os.path.join(desktop_path, 'GoLogin.lnk'),
+                os.path.join(desktop_path, 'Orbita.lnk')
+            ]
+
+        # Try main shortcut first
         if desktop_shortcut and os.path.exists(desktop_shortcut):
             try:
                 if self.platform == 'Windows':
+                    logging.info(f"Launching from: {desktop_shortcut}")
                     os.startfile(desktop_shortcut)
                     launched = True
-                    logging.info(f"Launched {browser_type} from desktop shortcut")
+                    logging.info(f"✓ Launched {browser_type} from desktop shortcut")
             except Exception as e:
                 logging.warning(f"Failed to launch from shortcut: {e}")
+
+        # Try alternative shortcuts
+        if not launched:
+            for alt_shortcut in alternative_shortcuts:
+                if os.path.exists(alt_shortcut):
+                    try:
+                        if self.platform == 'Windows':
+                            logging.info(f"Trying alternative shortcut: {alt_shortcut}")
+                            os.startfile(alt_shortcut)
+                            launched = True
+                            logging.info(f"✓ Launched {browser_type} from {os.path.basename(alt_shortcut)}")
+                            break
+                    except Exception as e:
+                        logging.warning(f"Failed to launch from {alt_shortcut}: {e}")
 
         # Method 2: Executable path
         if not launched:
@@ -110,30 +145,43 @@ class BrowserController:
                     logging.error(f"Failed to launch from exe: {e}")
 
         if not launched:
-            logging.error(f"Could not launch {browser_type}")
+            logging.error(f"✗ Could not launch {browser_type}")
+            logging.error(f"Make sure browser shortcut exists on Desktop")
             return None
 
         # Wait for browser to start
         startup_wait = browser_config.get('startup_wait', 15)
-        logging.info(f"Waiting {startup_wait} seconds for browser to start...")
-        time.sleep(startup_wait)
+        logging.info(f"⏳ Waiting {startup_wait} seconds for browser to start...")
+
+        # Show progress during wait
+        for i in range(startup_wait):
+            time.sleep(1)
+            if (i + 1) % 5 == 0:
+                logging.debug(f"  ... {i + 1}/{startup_wait} seconds elapsed")
 
         # Find browser window (if Windows automation available)
         browser_window = None
         if WINDOWS_AUTOMATION_AVAILABLE and self.platform == 'Windows':
+            logging.info("🔍 Looking for browser window...")
             browser_window = self.find_browser_window(browser_type)
             if browser_window:
                 self.active_browsers[browser_type] = browser_window
-                logging.info(f"Found {browser_type} window")
+                logging.info(f"✓ Found and activated {browser_type} window")
+                time.sleep(2)  # Extra delay after window activation
+            else:
+                logging.warning(f"⚠ Could not find {browser_type} window (browser may still be running)")
+        else:
+            logging.info(f"✓ Browser launched (window detection not available)")
 
         return browser_window if browser_window else True
 
-    def find_browser_window(self, browser_type: str) -> Optional[Any]:
+    def find_browser_window(self, browser_type: str, max_retries: int = 3) -> Optional[Any]:
         """
-        Find browser window by title
+        Find browser window by title with retry logic
 
         Args:
             browser_type: Browser type
+            max_retries: Maximum number of retry attempts
 
         Returns:
             Window object or None
@@ -143,24 +191,34 @@ class BrowserController:
 
         # Possible window titles for each browser
         title_patterns = {
-            'gologin': ['GoLogin', 'Orbita'],
-            'ix': ['Incogniton', 'IX Browser']
+            'gologin': ['GoLogin', 'Orbita', 'gologin'],
+            'ix': ['ixBrowser', 'IX Browser', 'Incogniton', 'IX', 'incogniton']
         }
 
         patterns = title_patterns.get(browser_type, [browser_type])
 
-        for pattern in patterns:
-            try:
-                windows = gw.getWindowsWithTitle(pattern)
-                if windows:
-                    window = windows[0]
-                    window.activate()  # Bring to front
-                    time.sleep(1)
-                    return window
-            except Exception as e:
-                logging.debug(f"Error finding window with title '{pattern}': {e}")
+        # Try multiple times with delays
+        for retry in range(max_retries):
+            if retry > 0:
+                logging.debug(f"  Retry {retry + 1}/{max_retries}...")
+                time.sleep(2)
 
-        logging.warning(f"Could not find window for {browser_type}")
+            for pattern in patterns:
+                try:
+                    logging.debug(f"  Searching for window with title: '{pattern}'")
+                    windows = gw.getWindowsWithTitle(pattern)
+                    if windows:
+                        window = windows[0]
+                        logging.info(f"  Found window: {window.title}")
+                        window.activate()  # Bring to front
+                        time.sleep(1)
+                        logging.info(f"  ✓ Window activated successfully")
+                        return window
+                except Exception as e:
+                    logging.debug(f"  Error finding window with title '{pattern}': {e}")
+
+        logging.warning(f"⚠ Could not find window for {browser_type} after {max_retries} retries")
+        logging.info(f"  Searched for patterns: {patterns}")
         return None
 
     def open_profile_via_shortcut(self, browser_type: str, shortcut_path: Path) -> bool:
@@ -332,12 +390,12 @@ class BrowserController:
 
     def close_browser(self, browser_type: str):
         """
-        Close browser and cleanup
+        Close browser and cleanup with proper delays
 
         Args:
             browser_type: Browser type to close
         """
-        logging.info(f"Closing {browser_type} browser...")
+        logging.info(f"⏳ Closing {browser_type} browser...")
 
         # Close Selenium drivers
         drivers_to_close = [key for key in self.active_drivers.keys() if key.startswith(browser_type)]
@@ -346,9 +404,10 @@ class BrowserController:
             try:
                 self.active_drivers[key].quit()
                 del self.active_drivers[key]
-                logging.info(f"Closed driver: {key}")
+                logging.info(f"  ✓ Closed driver: {key}")
+                time.sleep(1)  # Delay after closing driver
             except Exception as e:
-                logging.warning(f"Error closing driver {key}: {e}")
+                logging.warning(f"  ⚠ Error closing driver {key}: {e}")
 
         # Close browser window
         if browser_type in self.active_browsers:
@@ -356,10 +415,15 @@ class BrowserController:
                 if WINDOWS_AUTOMATION_AVAILABLE:
                     window = self.active_browsers[browser_type]
                     if hasattr(window, 'close'):
+                        logging.info(f"  Closing {browser_type} window...")
                         window.close()
+                        time.sleep(2)  # Delay after closing window
+                        logging.info(f"  ✓ Window closed")
                 del self.active_browsers[browser_type]
             except Exception as e:
-                logging.warning(f"Error closing browser window: {e}")
+                logging.warning(f"  ⚠ Error closing browser window: {e}")
+
+        logging.info(f"✓ {browser_type} cleanup completed")
 
     def close_all(self):
         """Close all active browsers and drivers"""

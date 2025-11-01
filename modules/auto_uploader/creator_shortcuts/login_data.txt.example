@@ -1,0 +1,10 @@
+# Facebook Login Data Template
+#
+# Copy this file to each browser account folder and rename to: login_data.txt
+# Format: profile_name|facebook_email|facebook_password|page_name|page_id
+#
+# Example:
+# Creator1|myemail@gmail.com|mypassword123|My Page Name|123456789012345
+
+Creator1|your_email@gmail.com|your_password|Your Page Name|123456789012345
+Creator2|your_email2@gmail.com|your_password2|Your Page 2|987654321098765

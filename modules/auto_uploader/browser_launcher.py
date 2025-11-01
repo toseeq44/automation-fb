@@ -119,7 +119,23 @@ class BrowserLauncher:
     def connect(self, browser_type: str, profile_name: Optional[str] = None):
         return self.controller.connect_selenium(browser_type, profile_name)
 
-    def close(self, browser_type: str):
+    def close(self, browser_type: str, handle_exit_popup: bool = True):
+        """
+        Close browser with optional Exit Safely popup handling
+
+        Args:
+            browser_type: Browser type to close
+            handle_exit_popup: Handle Exit Safely popup if it appears
+        """
+        if handle_exit_popup:
+            logging.info("⏳ Closing browser (may show Exit Safely popup)...")
+            analyzer = ScreenAnalyzer()
+
+            # Try to close Exit Safely popup if it appears
+            logging.info("Looking for Exit Safely popup...")
+            analyzer.close_exit_safely_popup()
+            time.sleep(1)
+
         self.controller.close_browser(browser_type)
 
     def close_all(self):
@@ -233,6 +249,14 @@ class BrowserLauncher:
             pyautogui.click(login_coords[0], login_coords[1])
             time.sleep(wait_time)
 
+            # Step 2.5: Clear any existing data
+            logging.info("\n2️⃣ᐩ Clearing existing login data...")
+            # Select all text in email field (Ctrl+A) and delete
+            pyautogui.hotkey('ctrl', 'a')
+            time.sleep(0.3)
+            pyautogui.press('delete')
+            time.sleep(0.5)
+
             # Step 3: Enter email
             logging.info(f"\n3️⃣  Entering email: {email}")
             pyautogui.typewrite(email, interval=0.03)
@@ -242,6 +266,13 @@ class BrowserLauncher:
             logging.info("\n4️⃣  Moving to password field...")
             pyautogui.press('tab')
             time.sleep(wait_time)
+
+            # Step 4.5: Clear existing password if any
+            logging.info("\n4️⃣ᐩ Clearing existing password...")
+            pyautogui.hotkey('ctrl', 'a')
+            time.sleep(0.3)
+            pyautogui.press('delete')
+            time.sleep(0.5)
 
             # Step 5: Enter password
             logging.info("\n5️⃣  Entering password...")

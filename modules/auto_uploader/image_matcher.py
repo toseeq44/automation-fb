@@ -30,12 +30,22 @@ class ImageMatcher:
             template_dir: Directory containing template images
         """
         if template_dir is None:
-            template_dir = Path(__file__).parent / "data" / "templates"
+            # Check both locations for backward compatibility
+            helper_dir = Path(__file__).parent / "helper_images"
+            templates_dir = Path(__file__).parent / "data" / "templates"
+
+            # Prefer helper_images if it exists
+            if helper_dir.exists():
+                template_dir = helper_dir
+            else:
+                template_dir = templates_dir
 
         self.template_dir = Path(template_dir)
         self.template_dir.mkdir(parents=True, exist_ok=True)
         self.threshold = 0.85  # SSIM threshold for match (0-1)
         self.templates = {}
+
+        logging.debug(f"ImageMatcher using template directory: {self.template_dir}")
 
     def load_template(self, template_name: str) -> Optional[np.ndarray]:
         """

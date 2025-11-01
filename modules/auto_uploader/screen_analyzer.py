@@ -254,6 +254,48 @@ class ScreenAnalyzer:
             logging.warning(f"⚠ Could not close ad popups: {e}")
             return False
 
+    def close_exit_safely_popup(self) -> bool:
+        """
+        Close 'Exit Safely' popup (ixBrowser exit confirmation)
+
+        Returns:
+            True if closed, False otherwise
+        """
+        try:
+            logging.info("🚪 Handling Exit Safely popup...")
+
+            # Try clicking "Exit Safely" button
+            # Usually in the center-right of popup
+            screen_width, screen_height = pyautogui.size()
+
+            # Common button positions for exit popup
+            click_positions = [
+                (screen_width // 2 + 150, screen_height // 2),    # Right side
+                (screen_width // 2 + 100, screen_height // 2 + 50),  # Right-bottom
+                (screen_width - 200, screen_height - 100),        # Bottom-right area
+            ]
+
+            for x, y in click_positions:
+                try:
+                    pyautogui.click(x, y)
+                    time.sleep(1)
+                    logging.info("  ✓ Exit Safely popup closed")
+                    return True
+                except Exception:
+                    continue
+
+            # Fallback: Try keyboard shortcut
+            logging.debug("Trying keyboard shortcut for exit...")
+            pyautogui.hotkey('alt', 'f4')  # Alt+F4 to close window
+            time.sleep(1)
+
+            logging.info("  ✓ Exit Safely popup closed (keyboard)")
+            return True
+
+        except Exception as e:
+            logging.warning(f"⚠ Could not close Exit Safely popup: {e}")
+            return False
+
     def handle_all_popups(self) -> bool:
         """
         Handle all common popups in sequence with visual feedback

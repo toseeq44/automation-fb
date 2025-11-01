@@ -1,22 +1,10 @@
 """
-Facebook Auto Uploader Module
+Facebook Auto Uploader Module - SIMPLIFIED VERSION
 Automates video uploads to Facebook pages using anti-detect browsers
 """
 
-from .auth_handler import AuthHandler
-from .browser_launcher import BrowserLauncher
-from .configuration import AutomationMode, SettingsManager
 from .core import FacebookAutoUploader
 from .gui import AutoUploaderPage
-from .history_manager import HistoryManager
 
-__all__ = [
-    'AuthHandler',
-    'AutomationMode',
-    'BrowserLauncher',
-    'FacebookAutoUploader',
-    'HistoryManager',
-    'AutoUploaderPage',
-    'SettingsManager',
-]
-__version__ = '1.0.0'
+__all__ = ['FacebookAutoUploader', 'AutoUploaderPage']
+__version__ = '1.0.0-simplified'

@@ -1,6 +1,6 @@
 """
 modules/auto_uploader/gui.py
-Facebook Auto Uploader GUI - SIMPLIFIED VERSION
+Facebook Auto Uploader GUI
 """
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -8,12 +8,17 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from pathlib import Path
+import inspect
 import logging
 
 try:
     from .core import FacebookAutoUploader
+    from .configuration import SettingsManager
+    from .ui_configurator import InitialSetupUI
 except ImportError:
     FacebookAutoUploader = None
+    SettingsManager = None
+    InitialSetupUI = None
 
 
 class UploaderThread(QThread):
@@ -77,7 +82,7 @@ class UploaderThread(QThread):
 
 
 class AutoUploaderPage(QWidget):
-    """Facebook Auto Uploader GUI Page - SIMPLIFIED"""
+    """Facebook Auto Uploader GUI Page"""
 
     def __init__(self, back_callback=None):
         super().__init__()
@@ -247,13 +252,36 @@ class AutoUploaderPage(QWidget):
 
     def start_upload(self):
         """Start upload process"""
-        if FacebookAutoUploader is None:
+        if FacebookAutoUploader is None or SettingsManager is None or InitialSetupUI is None:
             QMessageBox.warning(
                 self,
                 "Module Not Available",
-                "The auto uploader module could not be loaded.\n\n"
-                "Make sure dependencies are installed:\n"
-                "pip install selenium webdriver-manager pyautogui pygetwindow"
+                "The auto uploader module could not be loaded."
+            )
+            return
+
+        base_dir = Path(__file__).resolve().parent
+        settings_path = base_dir / 'data' / 'settings.json'
+
+        try:
+            # Initialize settings manager
+            # Skip CLI-based setup wizard when running from GUI
+            settings_manager = SettingsManager(
+                settings_path,
+                base_dir,
+                skip_setup=True  # GUI environment - skip interactive terminal setup
+            )
+        except RuntimeError as exc:
+            message = str(exc) or "Initial setup was cancelled."
+            self.log_output.append(f"[!] {message}")
+            QMessageBox.information(self, "Setup Cancelled", message)
+            return
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logging.exception("Failed to complete initial setup", exc_info=True)
+            QMessageBox.critical(
+                self,
+                "Setup Failed",
+                f"Could not complete the initial setup: {exc}",
             )
             return
 

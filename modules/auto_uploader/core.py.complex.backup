@@ -1,31 +1,25 @@
-"""
-Facebook Auto Uploader - Core Module
-Main upload orchestration and logic - SIMPLIFIED VERSION
-"""
+"""Core orchestration for the Facebook automation workflow."""
 
-import os
-import json
-import time
 import logging
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from .utils import (
-    load_config,
-    load_tracking_data,
-    save_tracking_data,
-    parse_login_data,
-    get_video_files,
-    format_file_size,
-    get_config_value
-)
-from .browser_controller import BrowserController
+from .auth_handler import AuthHandler
+from .browser_launcher import BrowserLauncher
+from .configuration import AutomationMode, SettingsManager
+from .history_manager import HistoryManager
 from .upload_manager import UploadManager
+from .utils import (
+    get_video_files,
+    load_tracking_data,
+    parse_login_data,
+    save_tracking_data,
+)
 
 
 class FacebookAutoUploader:
-    """Main Facebook Auto Uploader class - Simple & Clean"""
+    """Main Facebook Auto Uploader class"""
 
     def __init__(self, base_dir: Optional[Path] = None):
         """
@@ -40,15 +34,29 @@ class FacebookAutoUploader:
         else:
             self.base_dir = Path(base_dir)
 
-        # Load configuration (simple JSON loading)
-        self.config = load_config(self.base_dir / 'data' / 'settings.json')
+        # Load configuration and resolve dynamic paths
+        self.settings_manager = SettingsManager(self.base_dir / 'data' / 'settings.json', self.base_dir)
+        self.config = self.settings_manager.config
+        self.paths = self.settings_manager.paths
+        self.mode = self.settings_manager.get_mode()
+
+        # Initialize credential handler and history storage
+        self.auth_handler = AuthHandler()
+        self.history_manager = HistoryManager(self.paths.history_file)
 
         # Load tracking data (JSON-based)
-        self.tracking = load_tracking_data(self.base_dir / 'data' / 'upload_tracking.json')
+        self.tracking_path = self.base_dir / 'data' / 'upload_tracking.json'
+        self.tracking = load_tracking_data(self.tracking_path)
 
         # Initialize components
-        self.browser_controller = BrowserController(self.config)
-        self.upload_manager = UploadManager(self.config, self.tracking, self.save_tracking)
+        self.browser_launcher = BrowserLauncher(self.settings_manager)
+        self.upload_manager = UploadManager(
+            self.config,
+            self.tracking,
+            self.save_tracking,
+            creators_root=self.paths.creators_root,
+            history_manager=self.history_manager,
+        )
 
         # Setup logging
         self.setup_logging()
@@ -72,7 +80,7 @@ class FacebookAutoUploader:
     def save_tracking(self):
         """Save tracking data to JSON file"""
         save_tracking_data(
-            self.base_dir / 'data' / 'upload_tracking.json',
+            self.tracking_path,
             self.tracking
         )
 
@@ -82,6 +90,9 @@ class FacebookAutoUploader:
             logging.info("="*60)
             logging.info("Facebook Auto Uploader Started")
             logging.info("="*60)
+            logging.info("Mode: %s", self.mode.value)
+            logging.info("Creators root: %s", self.paths.creators_root)
+            logging.info("Shortcuts root: %s", self.paths.shortcuts_root)
 
             # Scan creators and shortcuts
             mapping = self.scan_creator_shortcuts()
@@ -95,14 +106,8 @@ class FacebookAutoUploader:
 
             # Process each browser account
             for browser_type, accounts in mapping.items():
-                enabled = get_config_value(
-                    self.config,
-                    f'browsers.{browser_type}.enabled',
-                    True
-                )
-
-                if not enabled:
-                    logging.info(f"Skipping {browser_type} (disabled in config)")
+                if not self.config.get('browsers', {}).get(browser_type, {}).get('enabled', True):
+                    logging.info(f"Skipping {browser_type} (disabled)")
                     continue
 
                 for account_name, creators in accounts.items():
@@ -136,37 +141,30 @@ class FacebookAutoUploader:
         logging.info("Scanning creator shortcuts...")
 
         mapping = {}
-        shortcuts_path = self.base_dir / 'creator_shortcuts'
+        shortcuts_path = self.paths.shortcuts_root
 
         if not shortcuts_path.exists():
             logging.warning(f"Shortcuts folder not found: {shortcuts_path}")
             return mapping
 
-        # Iterate through browser types
-        for browser_dir in shortcuts_path.iterdir():
-            if not browser_dir.is_dir():
+        for candidate in shortcuts_path.iterdir():
+            if not candidate.is_dir():
                 continue
 
-            browser_type = browser_dir.name.lower()
-            mapping[browser_type] = {}
-
-            # Iterate through accounts
-            for account_dir in browser_dir.iterdir():
-                if not account_dir.is_dir():
-                    continue
-
-                account_name = account_dir.name
-
-                # Find creator folders
-                creators = [
-                    item.name for item in account_dir.iterdir()
-                    if item.is_dir() and not item.name.startswith('_') and not item.name.startswith('.')
-                ]
-
+            if (candidate / 'login_data.txt').exists():
+                browser_type = self._infer_browser_type(candidate.name, candidate)
+                creators = self._collect_creator_folders(candidate)
                 if creators:
-                    mapping[browser_type][account_name] = sorted(creators)
+                    mapping.setdefault(browser_type, {})[candidate.name] = creators
+            else:
+                browser_type = candidate.name.lower()
+                for account_dir in candidate.iterdir():
+                    if not account_dir.is_dir():
+                        continue
+                    creators = self._collect_creator_folders(account_dir)
+                    if creators:
+                        mapping.setdefault(browser_type, {})[account_dir.name] = creators
 
-        logging.info(f"Found {sum(len(accounts) for accounts in mapping.values())} browser account(s)")
         return mapping
 
     def display_summary(self, mapping: Dict):
@@ -202,14 +200,19 @@ class FacebookAutoUploader:
 
         try:
             # Load login data
-            login_data_map = self._load_account_credentials(browser_type, account_name)
+            account_root = self._resolve_account_root(browser_type, account_name)
+            if not account_root:
+                logging.warning(f"Unable to locate shortcuts for {account_name}")
+                return
+
+            login_data_map = self._load_account_credentials(browser_type, account_name, account_root)
 
             if not login_data_map:
                 logging.warning(f"No login data for {account_name}")
                 return
 
             # Launch browser
-            browser_window = self.browser_controller.launch_browser(browser_type)
+            browser_window = self.browser_launcher.launch(browser_type)
             if not browser_window:
                 logging.error(f"Failed to launch {browser_type}")
                 return
@@ -221,20 +224,21 @@ class FacebookAutoUploader:
                         browser_type,
                         account_name,
                         creator_name,
-                        login_data_map
+                        login_data_map,
+                        account_root
                     )
                 except Exception as e:
                     logging.error(f"Error with {creator_name}: {e}")
                     continue
 
             # Close browser
-            self.browser_controller.close_browser(browser_type)
+            self.browser_launcher.close(browser_type)
 
         except Exception as e:
             logging.error(f"Error in process_browser_account: {e}", exc_info=True)
 
     def _process_creator(self, browser_type: str, account_name: str,
-                        creator_name: str, login_data_map: Dict):
+                        creator_name: str, login_data_map: Dict, account_root: Path):
         """Process single creator"""
         logging.info(f"\n--- Processing Creator: {creator_name} ---")
 
@@ -245,16 +249,29 @@ class FacebookAutoUploader:
             return
 
         # Try to open profile
-        profile_shortcut = (
-            self.base_dir / 'creator_shortcuts' / browser_type /
-            account_name / creator_name / 'profile.lnk'
-        )
+        creator_shortcut_dir = account_root / creator_name
+        bulk_shortcut = creator_shortcut_dir / 'bulk videos.lnk'
+        single_shortcut = creator_shortcut_dir / 'single video.lnk'
+        profile_shortcut = creator_shortcut_dir / 'profile.lnk'
 
-        if profile_shortcut.exists():
-            self.browser_controller.open_profile_via_shortcut(browser_type, profile_shortcut)
+        pending_videos = self._get_creator_videos(creator_name)
+
+        shortcut_to_use = None
+        upload_mode = 'auto'
+        if bulk_shortcut.exists() and len(pending_videos) >= 2:
+            shortcut_to_use = bulk_shortcut
+            upload_mode = 'bulk'
+        elif single_shortcut.exists():
+            shortcut_to_use = single_shortcut
+            upload_mode = 'single'
+        elif profile_shortcut.exists():
+            shortcut_to_use = profile_shortcut
+
+        if shortcut_to_use:
+            self.browser_launcher.open_profile_shortcut(browser_type, shortcut_to_use)
 
         # Connect Selenium
-        driver = self.browser_controller.connect_selenium(browser_type, creator_name)
+        driver = self.browser_launcher.connect(browser_type, creator_name)
         if not driver:
             logging.error("Failed to connect Selenium")
             return
@@ -265,6 +282,7 @@ class FacebookAutoUploader:
                 'name': creator_name,
                 'browser_type': browser_type,
                 'account_name': account_name,
+                'upload_mode': upload_mode,
                 **login_data
             }
 
@@ -277,25 +295,63 @@ class FacebookAutoUploader:
             except:
                 pass
 
-    def _load_account_credentials(self, browser_type: str, account_name: str) -> Dict:
+    def _load_account_credentials(self, browser_type: str, account_name: str, account_root: Path) -> Dict:
         """Load login credentials for account"""
-        login_file = (
-            self.base_dir / 'creator_shortcuts' /
-            browser_type / account_name / 'login_data.txt'
-        )
+        login_file = account_root / 'login_data.txt'
 
         if not login_file.exists():
             return {}
 
         login_entries = parse_login_data(login_file)
-        return {entry['profile_name']: entry for entry in login_entries}
+        credentials = {}
+
+        for entry in login_entries:
+            identifier = f"{browser_type}:{account_name}:{entry['profile_name']}"
+            entry = self.auth_handler.read_password(identifier, entry)
+            credentials[entry['profile_name']] = entry
+
+        return credentials
 
     def _get_creator_videos(self, creator_name: str) -> List[Path]:
         """Get videos for creator"""
-        creator_path = self.base_dir / 'creators' / creator_name
+        creator_path = self.paths.creators_root / creator_name
         if not creator_path.exists():
             return []
         return get_video_files(creator_path)
+
+    def _collect_creator_folders(self, account_dir: Path) -> List[str]:
+        return sorted(
+            [item.name for item in account_dir.iterdir() if item.is_dir() and not item.name.startswith('_')]
+        )
+
+    def _resolve_account_root(self, browser_type: str, account_name: str) -> Optional[Path]:
+        candidates = [
+            self.paths.shortcuts_root / browser_type / account_name,
+            self.paths.shortcuts_root / account_name,
+        ]
+
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return None
+
+    def _infer_browser_type(self, account_name: str, account_dir: Path) -> str:
+        lower_name = account_name.lower()
+        if 'gologin' in lower_name or 'orbita' in lower_name:
+            return 'gologin'
+        if 'ix' in lower_name or 'incogniton' in lower_name:
+            return 'ix'
+        if 'vpn' in lower_name:
+            return 'vpn'
+
+        # check login data hints
+        login_file = account_dir / 'login_data.txt'
+        entries = parse_login_data(login_file)
+        for entry in entries:
+            if entry.get('browser_type'):
+                return entry['browser_type']
+
+        return self.mode.value
 
     def _is_uploaded(self, creator_name: str, video_name: str) -> bool:
         """Check if video was uploaded"""
@@ -313,7 +369,7 @@ class FacebookAutoUploader:
         """Cleanup resources"""
         logging.info("Cleaning up...")
         try:
-            self.browser_controller.close_all()
+            self.browser_launcher.close_all()
             self.save_tracking()
         except Exception as e:
             logging.error(f"Cleanup error: {e}")

@@ -1,6 +1,6 @@
 """
-Image Matcher - Template matching for UI element detection
-Uses structural similarity (SSIM) for reliable template matching
+Image Matcher - Simple and reliable template matching for UI detection
+Uses OpenCV for fast, robust template matching
 """
 
 import logging
@@ -12,15 +12,23 @@ try:
     import pyautogui
     from PIL import Image
     import numpy as np
-    from skimage.metrics import structural_similarity as ssim
     MATCHER_AVAILABLE = True
 except ImportError:
     MATCHER_AVAILABLE = False
-    logging.warning("Image matching tools not available. Install with: pip install pillow scikit-image")
+    logging.warning("Image matching tools not available. Install with: pip install pillow pyautogui")
+
+# Try to import OpenCV for template matching
+try:
+    import cv2
+    OPENCV_AVAILABLE = True
+    logging.debug("OpenCV available for template matching")
+except ImportError:
+    OPENCV_AVAILABLE = False
+    logging.warning("OpenCV not available. Install with: pip install opencv-python")
 
 
 class ImageMatcher:
-    """Match templates in screenshots using structural similarity"""
+    """Match templates in screenshots using OpenCV template matching"""
 
     def __init__(self, template_dir: Optional[Path] = None):
         """
@@ -42,10 +50,11 @@ class ImageMatcher:
 
         self.template_dir = Path(template_dir)
         self.template_dir.mkdir(parents=True, exist_ok=True)
-        self.threshold = 0.85  # SSIM threshold for match (0-1)
-        self.templates = {}
+        self.threshold = 0.70  # Matching threshold (0-1) - lower = more forgiving
+        self.templates = {}  # Cache loaded templates
 
         logging.debug(f"ImageMatcher using template directory: {self.template_dir}")
+        logging.debug(f"OpenCV available: {OPENCV_AVAILABLE}")
 
     def load_template(self, template_name: str) -> Optional[np.ndarray]:
         """
@@ -63,15 +72,27 @@ class ImageMatcher:
         template_path = self.template_dir / f"{template_name}.png"
 
         if not template_path.exists():
-            logging.warning(f"Template not found: {template_path}")
+            logging.debug(f"Template not found: {template_path}")
             return None
 
         try:
-            template = Image.open(template_path).convert('RGB')
-            template_array = np.array(template)
-            self.templates[template_name] = template_array
-            logging.debug(f"Loaded template: {template_name} ({template_array.shape})")
-            return template_array
+            if OPENCV_AVAILABLE:
+                # Use OpenCV to load (better for matching)
+                template = cv2.imread(str(template_path))
+                if template is None:
+                    logging.warning(f"Failed to load template with OpenCV: {template_name}")
+                    return None
+                # Convert BGR to RGB
+                template = cv2.cvtColor(template, cv2.COLOR_BGR2RGB)
+            else:
+                # Fallback to PIL
+                template = Image.open(template_path).convert('RGB')
+                template = np.array(template)
+
+            self.templates[template_name] = template
+            logging.debug(f"Loaded template: {template_name} (shape: {template.shape})")
+            return template
+
         except Exception as e:
             logging.error(f"Failed to load template {template_name}: {e}")
             return None
@@ -94,60 +115,51 @@ class ImageMatcher:
     def find_template(self, screenshot: np.ndarray, template: np.ndarray,
                      threshold: Optional[float] = None) -> Optional[Tuple[int, int, float]]:
         """
-        Find template in screenshot using structural similarity
+        Find template in screenshot using OpenCV template matching
 
         Args:
-            screenshot: NumPy array of screenshot
-            template: NumPy array of template
-            threshold: SSIM threshold (default: self.threshold)
+            screenshot: NumPy array of screenshot (RGB)
+            template: NumPy array of template (RGB)
+            threshold: Matching threshold (default: self.threshold)
 
         Returns:
-            Tuple of (x, y, similarity_score) or None if not found
+            Tuple of (x, y, match_score) or None if not found
         """
         if threshold is None:
             threshold = self.threshold
 
         try:
-            # Convert to grayscale for SSIM calculation
-            gray_screenshot = self._to_grayscale(screenshot)
-            gray_template = self._to_grayscale(template)
+            if not OPENCV_AVAILABLE:
+                logging.warning("OpenCV not available, cannot do template matching")
+                return None
 
-            # Ensure template is smaller than screenshot
+            # Convert to grayscale for matching (faster and more reliable)
+            gray_screenshot = cv2.cvtColor(screenshot, cv2.COLOR_RGB2GRAY)
+            gray_template = cv2.cvtColor(template, cv2.COLOR_RGB2GRAY)
+
+            # Check dimensions
             if (gray_template.shape[0] > gray_screenshot.shape[0] or
                 gray_template.shape[1] > gray_screenshot.shape[1]):
                 logging.debug("Template larger than screenshot")
                 return None
 
-            # Use OpenCV-like sliding window with SSIM
-            best_match = None
-            best_score = -1
+            # Use TM_CCOEFF_NORMED for correlation (best for this use case)
+            result = cv2.matchTemplate(gray_screenshot, gray_template, cv2.TM_CCOEFF_NORMED)
+            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
 
-            template_h, template_w = gray_template.shape
-            screenshot_h, screenshot_w = gray_screenshot.shape
+            # max_val is the match score (0-1)
+            match_score = float(max_val)
 
-            # Search with step size (faster but less accurate)
-            step = max(1, min(template_h, template_w) // 4)
+            if match_score >= threshold:
+                x, y = max_loc
+                # Return center of matched template
+                center_x = x + gray_template.shape[1] // 2
+                center_y = y + gray_template.shape[0] // 2
 
-            for y in range(0, screenshot_h - template_h, step):
-                for x in range(0, screenshot_w - template_w, step):
-                    window = gray_screenshot[y:y+template_h, x:x+template_w]
+                logging.debug(f"Found template at ({center_x}, {center_y}) with score {match_score:.2f}")
+                return (center_x, center_y, match_score)
 
-                    # Calculate SSIM
-                    score = ssim(window, gray_template, data_range=255)
-
-                    if score > best_score:
-                        best_score = score
-                        best_match = (x, y)
-
-            if best_match and best_score >= threshold:
-                x, y = best_match
-                # Return center of template
-                center_x = x + template_w // 2
-                center_y = y + template_h // 2
-                logging.debug(f"Found template match at ({center_x}, {center_y}) with score {best_score:.2f}")
-                return (center_x, center_y, best_score)
-
-            logging.debug(f"No template match found (best score: {best_score:.2f}, threshold: {threshold})")
+            logging.debug(f"Template not found (best score: {match_score:.2f}, threshold: {threshold})")
             return None
 
         except Exception as e:
@@ -170,10 +182,10 @@ class ImageMatcher:
                 return 'UNCLEAR'
 
         try:
-            # Check for logged-in indicators
+            # Check for logged-in indicators (profile icon)
             profile_template = self.load_template('current_profile_cordinates')
             if profile_template is not None:
-                result = self.find_template(screenshot, profile_template, threshold=0.80)
+                result = self.find_template(screenshot, profile_template, threshold=0.65)
                 if result:
                     logging.info("✓ Detected logged-in status (profile icon visible)")
                     return 'LOGGED_IN'
@@ -181,12 +193,12 @@ class ImageMatcher:
             # Check for not-logged-in indicators (login form)
             login_template = self.load_template('new_login_cordinates')
             if login_template is not None:
-                result = self.find_template(screenshot, login_template, threshold=0.80)
+                result = self.find_template(screenshot, login_template, threshold=0.65)
                 if result:
                     logging.info("✓ Detected not-logged-in status (login form visible)")
                     return 'NOT_LOGGED_IN'
 
-            logging.warning("⚠ Could not determine login status")
+            logging.warning("⚠ Could not determine login status (no matching templates)")
             return 'UNCLEAR'
 
         except Exception as e:
@@ -217,7 +229,7 @@ class ImageMatcher:
             result = self.find_template(screenshot, template)
             if result:
                 x, y, score = result
-                logging.debug(f"Found {element_name} at ({x}, {y})")
+                logging.debug(f"Found {element_name} at ({x}, {y}) with score {score:.2f}")
                 return (x, y)
 
             return None
@@ -248,24 +260,6 @@ class ImageMatcher:
             results[element_name] = self.find_ui_element(element_name, screenshot)
 
         return results
-
-    def _to_grayscale(self, image_array: np.ndarray) -> np.ndarray:
-        """
-        Convert RGB image to grayscale
-
-        Args:
-            image_array: RGB image array
-
-        Returns:
-            Grayscale image array
-        """
-        if len(image_array.shape) == 2:
-            return image_array  # Already grayscale
-
-        # Convert RGB to grayscale using standard formula
-        r, g, b = image_array[:,:,0], image_array[:,:,1], image_array[:,:,2]
-        gray = 0.299 * r + 0.587 * g + 0.114 * b
-        return gray.astype(np.uint8)
 
     def save_screenshot(self, filename: str = "debug") -> Optional[Path]:
         """

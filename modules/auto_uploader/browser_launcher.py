@@ -73,16 +73,24 @@ class BrowserLauncher:
         }
 
         patterns = window_title_patterns.get(browser_type, [browser_type])
-        window = monitor.find_browser_window(patterns, timeout=30)
+        logging.info("🔍 Searching for browser window...")
+        window = monitor.find_browser_window(patterns, timeout=60)  # Longer timeout
 
         if not window:
             logging.warning("⚠  Could not detect browser window")
             logging.warning("⚠  Browser may be running, proceeding anyway...")
         else:
+            logging.info(f"✓ Found browser window: {window.title}")
+
             # Wait for browser to be responsive
-            with ActivityContext("⏳ Waiting for browser responsiveness..."):
-                if not monitor.wait_for_browser_load(timeout=15, show_activity=False):
-                    logging.warning("⚠  Browser responsiveness timeout")
+            logging.info("⏳ Waiting for browser to fully load...")
+            if not monitor.wait_for_browser_load(timeout=30, show_activity=False):
+                logging.warning("⚠  Browser responsiveness timeout")
+
+            # Extra wait to ensure page elements are loaded
+            logging.info("⏳ Waiting for page elements to load...")
+            time.sleep(5)
+            logging.info("✓ Browser fully loaded")
 
         # Step 4: Maximize window for better visibility
         logging.info("\n4️⃣  Maximizing window...")

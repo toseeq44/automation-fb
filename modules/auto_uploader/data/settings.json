@@ -3,9 +3,9 @@
     "mode": "free_automation",
     "setup_completed": true,
     "paths": {
-      "creators_root": "./creators",
-      "shortcuts_root": "./creator_shortcuts",
-      "history_file": "./data/history.json"
+      "creators_root": "",
+      "shortcuts_root": "",
+      "history_file": ""
     },
     "credentials": {
       "gologin": {},

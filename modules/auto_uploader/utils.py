@@ -236,7 +236,15 @@ def parse_login_data(file_path: Path) -> List[Dict[str, str]]:
     """
     Parse login_data.txt file
 
-    Format: profile_name|facebook_email|facebook_password|page_name|page_id
+    Supports two formats:
+    1. Pipe-separated (legacy): profile_name|facebook_email|facebook_password|page_name|page_id|browser_type
+    2. Key-value (new):
+       browser: ix
+       email: user@example.com
+       password: pass123
+       page_name: My Page
+       page_id: 12345
+       ---
 
     Args:
         file_path: Path to login_data.txt
@@ -252,33 +260,119 @@ def parse_login_data(file_path: Path) -> List[Dict[str, str]]:
 
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
-            for line_num, line in enumerate(f, 1):
-                line = line.strip()
+            content = f.read()
 
-                # Skip empty lines and comments
-                if not line or line.startswith('#'):
-                    continue
+        # Detect format
+        if '|' in content:
+            # Pipe-separated format
+            login_entries = _parse_pipe_format(content, file_path)
+        else:
+            # Key-value format
+            login_entries = _parse_key_value_format(content, file_path)
 
-                # Parse line
-                parts = line.split('|')
-
-                if len(parts) not in (5, 6):
-                    logging.warning(f"Invalid format at line {line_num}: {line}")
-                    continue
-
-                login_entries.append({
-                    'profile_name': parts[0].strip(),
-                    'facebook_email': parts[1].strip(),
-                    'facebook_password': parts[2].strip(),
-                    'page_name': parts[3].strip(),
-                    'page_id': parts[4].strip(),
-                    'browser_type': parts[5].strip().lower() if len(parts) == 6 else ''
-                })
-
-        logging.info(f"Loaded {len(login_entries)} login entries")
+        logging.info(f"Loaded {len(login_entries)} login entries from {file_path.name}")
 
     except Exception as e:
         logging.error(f"Error parsing login data: {e}")
+
+    return login_entries
+
+
+def _parse_pipe_format(content: str, file_path: Path) -> List[Dict[str, str]]:
+    """Parse pipe-separated format"""
+    login_entries = []
+
+    for line_num, line in enumerate(content.splitlines(), 1):
+        line = line.strip()
+
+        # Skip empty lines and comments
+        if not line or line.startswith('#'):
+            continue
+
+        # Parse line
+        parts = line.split('|')
+
+        if len(parts) not in (5, 6):
+            logging.warning(f"Invalid pipe format at line {line_num}: {line}")
+            continue
+
+        login_entries.append({
+            'profile_name': parts[0].strip(),
+            'facebook_email': parts[1].strip(),
+            'facebook_password': parts[2].strip(),
+            'page_name': parts[3].strip(),
+            'page_id': parts[4].strip(),
+            'browser_type': parts[5].strip().lower() if len(parts) == 6 else ''
+        })
+
+    return login_entries
+
+
+def _parse_key_value_format(content: str, file_path: Path) -> List[Dict[str, str]]:
+    """Parse key-value format (multiple entries separated by ---)"""
+    login_entries = []
+
+    # Split by --- separator for multiple entries
+    entry_blocks = content.split('---')
+
+    for block_num, block in enumerate(entry_blocks, 1):
+        entry = {
+            'profile_name': '',
+            'facebook_email': '',
+            'facebook_password': '',
+            'page_name': '',
+            'page_id': '',
+            'browser_type': ''
+        }
+
+        for line in block.splitlines():
+            line = line.strip()
+
+            # Skip empty lines and comments
+            if not line or line.startswith('#'):
+                continue
+
+            # Parse key:value
+            if ':' not in line:
+                continue
+
+            key, value = line.split(':', 1)
+            key = key.strip().lower()
+            value = value.strip()
+
+            # Map keys to entry fields
+            if key in ('browser', 'browser_type'):
+                entry['browser_type'] = value.lower()
+            elif key in ('email', 'facebook_email'):
+                entry['facebook_email'] = value
+            elif key in ('password', 'facebook_password'):
+                entry['facebook_password'] = value
+            elif key in ('page', 'page_name'):
+                entry['page_name'] = value
+            elif key in ('page_id', 'pageid'):
+                entry['page_id'] = value
+            elif key in ('profile', 'profile_name'):
+                entry['profile_name'] = value
+
+        # Set defaults for missing fields
+        # Use email as default page_name if not provided
+        if not entry['page_name'] and entry['facebook_email']:
+            entry['page_name'] = entry['facebook_email'].split('@')[0]  # Use email username
+
+        # Use page_name as profile_name if not set
+        if not entry['profile_name'] and entry['page_name']:
+            entry['profile_name'] = entry['page_name']
+
+        # Default page_id if not provided
+        if not entry['page_id']:
+            entry['page_id'] = '0'
+
+        # Only add if we have minimum required fields (email and password)
+        if entry['facebook_email'] and entry['facebook_password']:
+            login_entries.append(entry)
+            logging.debug(f"Loaded entry: {entry['page_name']} ({entry['facebook_email']})")
+        elif entry['facebook_email'] or entry['facebook_password']:
+            logging.warning(f"Incomplete entry in block {block_num}, skipping. Need: email, password")
 
     return login_entries
 

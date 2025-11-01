@@ -1,0 +1,10 @@
+# Ignore cookies and local secrets
+cookies/
+*.cookies
+*.cookie
+.env
+.vscode/
+__pycache__/
+*.pyc
+.DS_Store
+.idea/

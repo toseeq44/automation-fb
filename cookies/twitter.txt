@@ -1,0 +1,4 @@
+# Netscape HTTP Cookie File
+.x.com	TRUE	/	TRUE	1893456000	auth_token	abc123EXAMPLE
+.x.com	TRUE	/	TRUE	1893456000	ct0	efgh4567EXAMPLE
+.x.com	TRUE	/	TRUE	1893456000	twid	u%3D123456789

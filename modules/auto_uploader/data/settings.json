@@ -3,8 +3,8 @@
     "mode": "free_automation",
     "setup_completed": true,
     "paths": {
-      "creators_root": "C:\\Users\\Fast Computers\\Desktop\\Toseeq Links Grabber",
-      "shortcuts_root": "C:\\Users\\Fast Computers\\Desktop\\creator_shortcuts",
+      "creators_root": "C:\\Users\\Fast Computers\\Desktop\\Toseeq Links Grabber\\cretaers",
+      "shortcuts_root": "C:\\Users\\Fast Computers\\Desktop\\creator_shortcuts\\IX",
       "history_file": "C:\\Users\\Fast Computers\\automation\\modules\\auto_uploader\\data\\history.json"
     },
     "credentials": {

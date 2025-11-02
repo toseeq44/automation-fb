@@ -49,7 +49,16 @@ class AutomationPaths:
 class SettingsManager:
     """Central access point for automation configuration."""
 
-    def __init__(self, settings_path: Path, base_dir: Path):
+    def __init__(self, settings_path: Path, base_dir: Path, interactive_collector=None, **kwargs):
+        """
+        Initialize SettingsManager.
+
+        Args:
+            settings_path: Path to settings.json
+            base_dir: Base directory for module
+            interactive_collector: Optional callback for interactive setup (ignored in legacy mode)
+            **kwargs: Additional arguments (ignored for backward compatibility)
+        """
         self.settings_path = settings_path
         self.base_dir = base_dir
         self._config = load_config(settings_path)

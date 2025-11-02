@@ -1,10 +1,10 @@
 {
   "automation": {
     "mode": "free_automation",
-    "setup_completed": false,
+    "setup_completed": true,
     "paths": {
-      "creators_root": "",
-      "shortcuts_root": "",
+      "creators_root": "C:/Users/Fast Computers/Desktop/Toseeq Links Grabber/cretaers",
+      "shortcuts_root": "C:/Users/Fast Computers/Desktop/creator_shortcuts/IX",
       "history_file": ""
     },
     "credentials": {

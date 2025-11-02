@@ -1,13 +1,5 @@
-"""
-GUI Module - Backward Compatibility Wrapper
-============================================
-This file provides backward compatibility for code that imports:
-    from modules.auto_uploader.gui import AutoUploaderPage
+"""PyQt5 GUI entry point for the modular auto uploader."""
 
-It redirects to the legacy GUI implementation.
-"""
+from .ui.main_window import AutoUploaderPage
 
-# Import from legacy folder for backward compatibility
-from ._legacy.gui import AutoUploaderPage
-
-__all__ = ['AutoUploaderPage']
+__all__ = ["AutoUploaderPage"]

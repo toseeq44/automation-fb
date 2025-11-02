@@ -17,3 +17,9 @@ imageio>=2.31.0
 imageio-ffmpeg>=0.4.9
 
 pyperclip>=1.8.2
+
+# Browser Automation Dependencies (NEW - for intelligent automation)
+opencv-python>=4.8.0       # Image recognition for UI detection
+pyautogui>=0.9.54         # Mouse and keyboard automation
+pygetwindow>=0.0.9        # Window management (cross-platform)
+psutil>=5.9.0             # Process management

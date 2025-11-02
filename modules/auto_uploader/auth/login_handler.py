@@ -1,7 +1,9 @@
 """
 Login Handler
 =============
-Handles Facebook login automation including form filling and checkpoint handling.
+High-level Facebook login automation using intelligent browser module.
+
+This wraps browser/login_manager.py with auth-specific logic.
 """
 
 import logging
@@ -9,237 +11,206 @@ import time
 from typing import Optional, Dict, Any
 
 try:
+    from selenium import webdriver
     from selenium.webdriver.common.by import By
-    from selenium.webdriver.common.keys import Keys
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
-    from selenium.common.exceptions import TimeoutException, NoSuchElementException
+    from selenium.common.exceptions import TimeoutException
     SELENIUM_AVAILABLE = True
 except ImportError:
     SELENIUM_AVAILABLE = False
     logging.warning("Selenium not available")
 
+from ..browser.login_manager import LoginManager
+from ..browser.mouse_controller import MouseController
+from .credential_manager import CredentialManager
+
 
 class LoginHandler:
-    """Handles Facebook login automation."""
+    """Handles Facebook login automation using browser module."""
 
-    def __init__(self, config: Optional[Dict] = None):
+    def __init__(self, driver: Optional[Any] = None, config: Optional[Dict] = None):
         """
         Initialize login handler.
 
         Args:
+            driver: Selenium WebDriver instance
             config: Configuration dictionary
         """
+        self.driver = driver
         self.config = config or {}
+
+        # Initialize components
+        self.login_manager = LoginManager(driver)
+        self.mouse = MouseController()
+        self.credential_manager = CredentialManager()
+
         logging.debug("LoginHandler initialized")
 
-    def login(self, driver: Any, email: str, password: str, wait_time: int = 20) -> bool:
+    def login_with_credentials(self, email: str, password: str, timeout: int = 30) -> bool:
         """
-        Perform complete Facebook login.
+        Login to Facebook with email and password.
+
+        This uses the intelligent browser/login_manager for actual login.
 
         Args:
-            driver: WebDriver instance
-            email: Facebook email
+            email: Facebook email/username
             password: Facebook password
-            wait_time: Wait time after login
+            timeout: Maximum time to wait for login
 
         Returns:
-            True if logged in successfully
+            True if login successful
 
         Example:
-            >>> handler = LoginHandler()
-            >>> success = handler.login(driver, "user@email.com", "password")
-            >>> if success:
-            >>>     print("Logged in!")
+            >>> handler = LoginHandler(driver)
+            >>> success = handler.login_with_credentials("user@email.com", "password123")
         """
-        logging.info("Attempting Facebook login...")
-        # TODO: Implement complete login flow
-        # 1. Navigate to login page if needed
-        # 2. Fill email
-        # 3. Fill password
-        # 4. Submit
-        # 5. Handle checkpoints
-        # 6. Wait for login completion
-        pass
+        logging.info("Attempting login with credentials...")
 
-    def fill_email(self, driver: Any, email: str) -> bool:
+        if not self.driver:
+            logging.error("No WebDriver provided")
+            return False
+
+        # Use browser/login_manager for intelligent login
+        success = self.login_manager.login_user(email, password, timeout=timeout)
+
+        if success:
+            logging.info("✓ Login successful")
+        else:
+            logging.error("✗ Login failed")
+
+        return success
+
+    def login_with_identifier(self, identifier: str, timeout: int = 30) -> bool:
         """
-        Fill email field.
+        Login using saved credentials from credential manager.
 
         Args:
-            driver: WebDriver instance
-            email: Email address
+            identifier: Credential identifier
+            timeout: Maximum time to wait
 
         Returns:
-            True if filled successfully
+            True if login successful
+
+        Example:
+            >>> handler = LoginHandler(driver)
+            >>> handler.login_with_identifier("profile1")
         """
-        logging.debug("Filling email field...")
-        # TODO: Implement email filling
-        # - Find email input (multiple selectors)
-        # - Clear existing text
-        # - Enter email
-        pass
+        logging.info("Loading credentials for: %s", identifier)
 
-    def fill_password(self, driver: Any, password: str) -> bool:
+        # Load credentials
+        credentials = self.credential_manager.load_credentials(identifier)
+
+        if not credentials:
+            logging.error("Credentials not found for: %s", identifier)
+            return False
+
+        email = credentials.get('email')
+        password = credentials.get('password')
+
+        if not email or not password:
+            logging.error("Invalid credentials: missing email or password")
+            return False
+
+        # Login with loaded credentials
+        return self.login_with_credentials(email, password, timeout=timeout)
+
+    def is_logged_in(self) -> bool:
         """
-        Fill password field.
+        Check if user is currently logged in.
 
-        Args:
-            driver: WebDriver instance
-            password: Password
-
-        Returns:
-            True if filled successfully
-        """
-        logging.debug("Filling password field...")
-        # TODO: Implement password filling
-        pass
-
-    def submit_login(self, driver: Any) -> bool:
-        """
-        Submit login form.
-
-        Args:
-            driver: WebDriver instance
-
-        Returns:
-            True if submitted successfully
-        """
-        logging.debug("Submitting login form...")
-        # TODO: Implement form submission
-        # - Find login button
-        # - Click button OR press Enter
-        pass
-
-    def handle_checkpoint(self, driver: Any, timeout: int = 300) -> bool:
-        """
-        Handle Facebook checkpoint (security check).
-
-        Args:
-            driver: WebDriver instance
-            timeout: Maximum wait time for user to resolve checkpoint
-
-        Returns:
-            True if checkpoint resolved
-        """
-        logging.info("Handling checkpoint...")
-        # TODO: Implement checkpoint handling
-        # - Detect checkpoint screen
-        # - Wait for user to complete verification
-        # - Check if checkpoint cleared
-        pass
-
-    def wait_for_login(self, driver: Any, timeout: int = 30) -> bool:
-        """
-        Wait for login to complete.
-
-        Args:
-            driver: WebDriver instance
-            timeout: Maximum wait time
-
-        Returns:
-            True if login completed
-        """
-        logging.debug("Waiting for login completion...")
-        # TODO: Implement login waiting
-        # - Check URL change
-        # - Check for home page elements
-        # - Verify cookies set
-        pass
-
-    def is_on_login_page(self, driver: Any) -> bool:
-        """
-        Check if currently on login page.
-
-        Args:
-            driver: WebDriver instance
-
-        Returns:
-            True if on login page
-        """
-        logging.debug("Checking if on login page...")
-        # TODO: Implement login page detection
-        pass
-
-    def navigate_to_login(self, driver: Any) -> bool:
-        """
-        Navigate to Facebook login page.
-
-        Args:
-            driver: WebDriver instance
-
-        Returns:
-            True if navigated successfully
-        """
-        logging.info("Navigating to Facebook login page...")
-        # TODO: Implement navigation
-        pass
-
-    def handle_save_password_prompt(self, driver: Any, save: bool = False) -> bool:
-        """
-        Handle browser's save password prompt.
-
-        Args:
-            driver: WebDriver instance
-            save: Whether to save password
-
-        Returns:
-            True if handled
-        """
-        logging.debug("Handling save password prompt...")
-        # TODO: Implement prompt handling
-        pass
-
-    def handle_remember_device(self, driver: Any, remember: bool = True) -> bool:
-        """
-        Handle "Remember this device" option.
-
-        Args:
-            driver: WebDriver instance
-            remember: Whether to remember device
-
-        Returns:
-            True if handled
-        """
-        logging.debug("Handling remember device option...")
-        # TODO: Implement remember device handling
-        pass
-
-    def verify_login_success(self, driver: Any) -> bool:
-        """
-        Verify login was successful.
-
-        Args:
-            driver: WebDriver instance
+        Uses image recognition from browser/login_manager.
 
         Returns:
             True if logged in
         """
-        logging.debug("Verifying login success...")
-        # TODO: Implement verification
-        # - Check for user profile elements
-        # - Check cookies
-        # - Verify can access protected pages
-        pass
+        status = self.login_manager.check_login_status()
+        return status.get('logged_in', False)
 
-    # Internal methods
+    def wait_for_login(self, timeout: int = 30) -> bool:
+        """
+        Wait for login to complete.
 
-    def _find_email_field(self, driver: Any) -> Optional[Any]:
-        """Find email input field."""
-        # TODO: Multiple selector attempts
-        pass
+        Args:
+            timeout: Maximum time to wait
 
-    def _find_password_field(self, driver: Any) -> Optional[Any]:
-        """Find password input field."""
-        # TODO: Multiple selector attempts
-        pass
+        Returns:
+            True if login detected within timeout
+        """
+        return self.login_manager.wait_for_login_completion(timeout=timeout)
 
-    def _find_login_button(self, driver: Any) -> Optional[Any]:
-        """Find login button."""
-        # TODO: Multiple selector attempts
-        pass
+    def handle_checkpoint(self) -> bool:
+        """
+        Handle Facebook security checkpoint (if encountered).
 
-    def _is_checkpoint_screen(self, driver: Any) -> bool:
-        """Check if checkpoint screen is showing."""
-        # TODO: Detect checkpoint patterns
-        pass
+        Returns:
+            True if checkpoint handled successfully
+        """
+        logging.info("Checking for security checkpoint...")
+
+        if not self.driver:
+            return False
+
+        try:
+            # Check for checkpoint page
+            current_url = self.driver.current_url
+
+            if 'checkpoint' in current_url.lower():
+                logging.warning("⚠ Security checkpoint detected!")
+                logging.info("Manual intervention may be required")
+
+                # Show circular animation to indicate waiting
+                self.mouse.circular_idle_movement(duration=5.0, radius=50)
+
+                return False
+
+            logging.debug("No checkpoint detected")
+            return True
+
+        except Exception as e:
+            logging.error("Error checking for checkpoint: %s", e)
+            return False
+
+    def navigate_to_login_page(self, url: str = "https://www.facebook.com") -> bool:
+        """
+        Navigate to Facebook login page.
+
+        Args:
+            url: Facebook URL to navigate to
+
+        Returns:
+            True if navigation successful
+        """
+        return self.login_manager.navigate_to_facebook(url)
+
+    def set_driver(self, driver: Any) -> None:
+        """
+        Set or update WebDriver instance.
+
+        Args:
+            driver: Selenium WebDriver
+        """
+        self.driver = driver
+        self.login_manager.set_driver(driver)
+        logging.debug("WebDriver updated")
+
+    def save_session_credentials(self, identifier: str, email: str, password: str, **extra_data) -> bool:
+        """
+        Save credentials for future use.
+
+        Args:
+            identifier: Unique identifier for this account
+            email: Facebook email
+            password: Facebook password
+            **extra_data: Additional data (page_id, etc.)
+
+        Returns:
+            True if saved successfully
+        """
+        credentials = {
+            'email': email,
+            'password': password,
+            **extra_data
+        }
+
+        return self.credential_manager.save_credentials(identifier, credentials)

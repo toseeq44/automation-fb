@@ -1,6 +1,7 @@
 {
   "automation": {
     "mode": "free_automation",
+    "approach": "legacy",
     "setup_completed": false,
     "paths": {
       "creators_root": "",

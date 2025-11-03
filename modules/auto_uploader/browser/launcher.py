@@ -111,11 +111,21 @@ class BrowserLauncher:
             logging.error("PyQt5 not available, cannot show download popup")
             return False
 
-        logging.info("Showing download popup for %s", browser_type)
+        logging.info("Browser '%s' not found on desktop", browser_type)
 
         try:
-            # Create QApplication if it doesn't exist
+            # Check if event loop is already running
+            from PyQt5.QtCore import QCoreApplication
             app = QApplication.instance()
+
+            # If running from GUI (event loop already exists), just log and return
+            if app is not None and isinstance(QCoreApplication.instance(), QCoreApplication):
+                logging.warning("PyQt5 event loop already running, skipping popup")
+                logging.warning("Please install %s browser manually", browser_type.upper())
+                logging.warning("Download URL: %s", self.DOWNLOAD_URLS.get(browser_type.lower(), 'N/A'))
+                return False
+
+            # Only show popup if NOT running from GUI
             if app is None:
                 app = QApplication([])
 
@@ -131,7 +141,9 @@ class BrowserLauncher:
             cancel_btn = msg_box.addButton("Cancel", QMessageBox.RejectRole)
 
             msg_box.setDefaultButton(download_btn)
-            msg_box.exec_()
+
+            # Use exec_() only if we created the app (not running from GUI)
+            result = msg_box.exec_()
 
             if msg_box.clickedButton() == download_btn:
                 logging.info("User chose to download %s", browser_type)

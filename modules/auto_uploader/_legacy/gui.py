@@ -296,6 +296,25 @@ class AutoUploaderPage(QWidget):
         self.clear_log_btn.clicked.connect(lambda: self.log_output.clear())
         btn_layout.addWidget(self.clear_log_btn)
 
+        # Approaches button (NEW - select automation approach)
+        self.approaches_btn = QPushButton("⚙️ Approaches")
+        self.approaches_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #9B59B6;
+                color: #F5F6F5;
+                border: none;
+                padding: 12px 24px;
+                border-radius: 8px;
+                font-size: 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #8E44AD;
+            }
+        """)
+        self.approaches_btn.clicked.connect(self.show_approach_selector)
+        btn_layout.addWidget(self.approaches_btn)
+
         back_btn = QPushButton("⬅ Back")
         back_btn.setStyleSheet("""
             QPushButton {
@@ -399,6 +418,159 @@ class AutoUploaderPage(QWidget):
         else:
             self.status_text.setText("Failed/Stopped")
             self.status_text.setStyleSheet("font-size: 14px; color: #E74C3C;")
+
+    def show_approach_selector(self):
+        """Show dialog to select automation approach"""
+        from PyQt5.QtWidgets import QDialog, QRadioButton, QButtonGroup, QDialogButtonBox
+
+        # Load current approach from settings
+        current_approach = self.get_current_approach()
+
+        # Create dialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Select Automation Approach")
+        dialog.setModal(True)
+        dialog.setStyleSheet("background-color: #2C2F33; color: #F5F6F5;")
+        dialog.setMinimumWidth(500)
+
+        layout = QVBoxLayout()
+        layout.setSpacing(15)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        # Title
+        title_label = QLabel("⚙️ Choose Automation Approach")
+        title_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #1ABC9C;")
+        layout.addWidget(title_label)
+
+        # Description
+        desc_label = QLabel("Select which approach the bot should use for automation:")
+        desc_label.setStyleSheet("font-size: 13px; color: #B9BBBE; margin-bottom: 10px;")
+        desc_label.setWordWrap(True)
+        layout.addWidget(desc_label)
+
+        # Radio buttons
+        button_group = QButtonGroup(dialog)
+
+        # Legacy approach
+        legacy_radio = QRadioButton("🔧 Legacy Approach (Original Code)")
+        legacy_radio.setStyleSheet("""
+            QRadioButton {
+                font-size: 14px;
+                color: #F5F6F5;
+                spacing: 10px;
+            }
+            QRadioButton::indicator {
+                width: 18px;
+                height: 18px;
+            }
+        """)
+        legacy_desc = QLabel("   Uses the original automation code. Stable and tested.")
+        legacy_desc.setStyleSheet("font-size: 12px; color: #95A5A6; margin-left: 30px;")
+        legacy_desc.setWordWrap(True)
+
+        button_group.addButton(legacy_radio, 0)
+        layout.addWidget(legacy_radio)
+        layout.addWidget(legacy_desc)
+
+        # Intelligent approach
+        intelligent_radio = QRadioButton("🤖 Intelligent Approach (AI-Powered)")
+        intelligent_radio.setStyleSheet("""
+            QRadioButton {
+                font-size: 14px;
+                color: #F5F6F5;
+                spacing: 10px;
+            }
+            QRadioButton::indicator {
+                width: 18px;
+                height: 18px;
+            }
+        """)
+        intelligent_desc = QLabel("   Uses new modular code with:\n   • Image recognition for UI detection\n   • Human-like mouse movements with bezier curves\n   • Circular idle animations for trust-building\n   • Intelligent login/logout with autofill handling")
+        intelligent_desc.setStyleSheet("font-size: 12px; color: #95A5A6; margin-left: 30px;")
+        intelligent_desc.setWordWrap(True)
+
+        button_group.addButton(intelligent_radio, 1)
+        layout.addWidget(intelligent_radio)
+        layout.addWidget(intelligent_desc)
+
+        # Set current selection
+        if current_approach == "intelligent":
+            intelligent_radio.setChecked(True)
+        else:
+            legacy_radio.setChecked(True)
+
+        # Current selection indicator
+        current_label = QLabel(f"Current: {current_approach.upper()}")
+        current_label.setStyleSheet("font-size: 12px; color: #43B581; margin-top: 10px;")
+        layout.addWidget(current_label)
+
+        # Buttons
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.setStyleSheet("""
+            QPushButton {
+                background-color: #1ABC9C;
+                color: #F5F6F5;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 5px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #16A085;
+            }
+        """)
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        layout.addWidget(button_box)
+
+        dialog.setLayout(layout)
+
+        # Show dialog and get result
+        if dialog.exec_() == QDialog.Accepted:
+            selected_id = button_group.checkedId()
+            new_approach = "intelligent" if selected_id == 1 else "legacy"
+
+            # Save to settings
+            if self.save_approach(new_approach):
+                self.log_output.append(f"\n✓ Approach changed to: {new_approach.upper()}")
+                QMessageBox.information(
+                    self,
+                    "Approach Updated",
+                    f"Automation approach set to: {new_approach.upper()}\n\nThis will take effect on next upload."
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Save Failed",
+                    "Could not save approach to settings.json"
+                )
+
+    def get_current_approach(self):
+        """Get current approach from settings.json"""
+        try:
+            if load_config:
+                config = load_config()
+                return config.get('automation', {}).get('approach', 'legacy')
+            return 'legacy'
+        except Exception as e:
+            logging.error(f"Error loading approach: {e}")
+            return 'legacy'
+
+    def save_approach(self, approach):
+        """Save approach to settings.json"""
+        try:
+            if load_config and save_config:
+                config = load_config()
+                if 'automation' not in config:
+                    config['automation'] = {}
+                config['automation']['approach'] = approach
+                save_config(config)
+                logging.info(f"Approach saved: {approach}")
+                return True
+            return False
+        except Exception as e:
+            logging.error(f"Error saving approach: {e}")
+            return False
             self.log_output.append("\n" + "="*60)
             self.log_output.append("✗ Upload process failed or was stopped")
             self.log_output.append("="*60)

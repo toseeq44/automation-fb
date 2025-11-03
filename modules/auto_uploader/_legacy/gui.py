@@ -348,7 +348,7 @@ class AutoUploaderPage(QWidget):
             return
 
         base_dir = Path(__file__).resolve().parent
-        settings_path = base_dir / 'data' / 'settings.json'
+        settings_path = base_dir / 'data_files' / 'settings.json'  # ✓ FIXED PATH
 
         try:
             SettingsManager(

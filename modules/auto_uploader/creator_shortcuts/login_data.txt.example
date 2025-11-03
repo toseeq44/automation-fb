@@ -1,10 +1,40 @@
 # Facebook Login Data Template
 #
 # Copy this file to each browser account folder and rename to: login_data.txt
-# Format: profile_name|facebook_email|facebook_password|page_name|page_id
 #
-# Example:
+# FORMAT 1: Pipe-separated (|) format
+# profile_name|facebook_email|facebook_password|page_name|page_id
+#
+# FORMAT 2: Key-value format (one per line)
+# browser: chrome
+# profile_name: Creator1
+# email: myemail@gmail.com
+# password: mypassword123
+# page_name: My Page Name
+# page_id: 123456789012345
+#
+# BROWSER OPTIONS:
+# - chrome       (Google Chrome)
+# - firefox      (Mozilla Firefox)
+# - edge         (Microsoft Edge)
+# - brave        (Brave Browser)
+# - opera        (Opera Browser)
+# - gologin      (GoLogin anti-detect browser)
+# - incogniton   (Incogniton/IX anti-detect browser)
+#
+# IMPORTANT: Browser shortcut must exist on Desktop!
+#
+# Example (Pipe-separated format):
+# Creator1|myemail@gmail.com|mypassword123|My Page Name|123456789012345
+#
+# Example (Key-value format with browser):
+# browser: chrome
 # Creator1|myemail@gmail.com|mypassword123|My Page Name|123456789012345
 
+# Specify which browser to use (optional - defaults to chrome)
+# Remove the # below to uncomment and set your browser
+# browser: chrome
+
+# Creator accounts (one per line)
 Creator1|your_email@gmail.com|your_password|Your Page Name|123456789012345
 Creator2|your_email2@gmail.com|your_password2|Your Page 2|987654321098765

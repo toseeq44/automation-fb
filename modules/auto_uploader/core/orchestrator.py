@@ -149,6 +149,10 @@ class UploadOrchestrator:
             )
             browser_config = self._get_browser_config(browser_type)
 
+            # If browser_hint is specified and mode is free_automation, pass it to launcher
+            if browser_hint and browser_type in ['chrome', 'free_automation']:
+                browser_config['browser_name'] = browser_hint
+
             work_items.append(
                 AccountWorkItem(
                     account_name=account_dir.name,

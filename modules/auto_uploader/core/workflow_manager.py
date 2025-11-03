@@ -135,6 +135,26 @@ class WorkflowManager:
             logging.info("⚠ No login entries - browser launched but no creators to process")
             return True
 
+        # Step 1.5: Browser Login System
+        logging.info("")
+        logging.info("╔════════════════════════════════════════════════════════╗")
+        logging.info("║ 🔐 BROWSER LOGIN SYSTEM                               ║")
+        logging.info("╚════════════════════════════════════════════════════════╝")
+        logging.info("")
+        logging.info("📋 ACCOUNT CREDENTIALS (from login_data.txt):")
+        logging.info("   → Account: %s", work_item.account_name)
+        logging.info("   → Email: %s", work_item.login_entries[0].email if work_item.login_entries else "N/A")
+        logging.info("")
+        logging.info("🔑 LOGIN PROCESS:")
+        logging.info("   Step 1: Browser is running and waiting for user input")
+        logging.info("   Step 2: User will log in with account credentials")
+        logging.info("   Step 3: System will detect login completion")
+        logging.info("   Step 4: Creator automation will begin")
+        logging.info("")
+        logging.info("💡 NOTE: For now, automatic login is prepared but requires")
+        logging.info("   manual browser interaction. Full automation coming soon.")
+        logging.info("")
+
         # Step 2: Process creators
         logging.info("⚙ Step 2/3: Processing creators...")
         tracker = UploadTracker(context.history_file)

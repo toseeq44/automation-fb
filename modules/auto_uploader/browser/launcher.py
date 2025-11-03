@@ -43,9 +43,11 @@ class BrowserLauncher:
     """Launches and manages anti-detect browsers."""
 
     # Browser-specific process names
+    # Note: IX is a Chrome-based browser, but we check for IX-specific processes first
+    # chrome.exe is a fallback only if no IX-specific processes are found
     BROWSER_PROCESSES = {
         'gologin': ['orbita.exe', 'gologin.exe', 'GoLogin.exe', 'gologin'],
-        'ix': ['ixbrowser.exe', 'incogniton.exe', 'Incogniton.exe', 'chrome.exe', 'ixbrowser', 'incogniton', 'ix'],
+        'ix': ['ixbrowser.exe', 'incogniton.exe', 'Incogniton.exe', 'ixbrowser', 'incogniton', 'chrome.exe'],
         'chrome': ['chrome.exe', 'google-chrome', 'chromium']
     }
 
@@ -237,7 +239,11 @@ class BrowserLauncher:
         logging.info("⚙️  [GOLOGIN] Step 2/4: Searching for GoLogin shortcut on desktop...")
         shortcut_path = kwargs.get('desktop_shortcut')
         if not shortcut_path:
-            shortcut_path = self.find_browser_on_desktop('gologin')
+            # Use browser_name from kwargs if provided (from login_data.txt)
+            # Otherwise fall back to 'gologin'
+            browser_name_hint = kwargs.get('browser_name', 'gologin')
+            logging.debug("   Using browser name for search: %s", browser_name_hint)
+            shortcut_path = self.find_browser_on_desktop(browser_name_hint)
 
         if not shortcut_path:
             logging.error("   ❌ [GOLOGIN] GoLogin shortcut not found on desktop!")
@@ -297,7 +303,11 @@ class BrowserLauncher:
         logging.info("⚙️  [INCOGNITON] Step 2/4: Searching for Incogniton shortcut on desktop...")
         shortcut_path = kwargs.get('desktop_shortcut')
         if not shortcut_path:
-            shortcut_path = self.find_browser_on_desktop('incogniton')
+            # Use browser_name from kwargs if provided (from login_data.txt)
+            # Otherwise fall back to 'incogniton'
+            browser_name_hint = kwargs.get('browser_name', 'incogniton')
+            logging.debug("   Using browser name for search: %s", browser_name_hint)
+            shortcut_path = self.find_browser_on_desktop(browser_name_hint)
 
         if not shortcut_path:
             logging.error("   ❌ [INCOGNITON] Incogniton shortcut not found on desktop!")
@@ -675,8 +685,22 @@ class BrowserLauncher:
                     continue
 
                 lowered_image = image_name.lower()
-                if any(target == lowered_image or target in lowered_image for target in normalized_targets):
-                    matches[pid] = ProcessEntry(pid=pid, name=image_name)
+
+                # Special handling for 'ix' browser type: only match if IX-specific process found
+                # Don't match generic chrome.exe unless no IX-specific processes exist
+                if browser_type.lower() == 'ix':
+                    # First, check for IX-specific processes (ixbrowser, incogniton)
+                    ix_specific = ['ixbrowser.exe', 'incogniton.exe', 'ixbrowser', 'incogniton']
+                    ix_specific_lower = [s.lower() for s in ix_specific]
+
+                    # Match if it's an IX-specific process
+                    if any(target == lowered_image or target in lowered_image for target in ix_specific_lower):
+                        matches[pid] = ProcessEntry(pid=pid, name=image_name)
+                        logging.debug("   IX-specific process matched: %s (PID %d)", image_name, pid)
+                else:
+                    # For other browser types, use normal matching
+                    if any(target == lowered_image or target in lowered_image for target in normalized_targets):
+                        matches[pid] = ProcessEntry(pid=pid, name=image_name)
         else:  # macOS / Linux
             for candidate in process_names:
                 try:

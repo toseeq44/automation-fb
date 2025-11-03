@@ -213,10 +213,12 @@ class UploadOrchestrator:
 
             browser_config = self._get_browser_config(browser_type)
 
-            # If browser_hint is specified and mode is free_automation, pass it to launcher
-            if browser_hint and browser_type in ['chrome', 'free_automation']:
+            # If browser_hint is specified, pass it to launcher for desktop shortcut search
+            # This allows searching for the exact shortcut name from login_data.txt
+            # instead of using hardcoded paths like ~/Desktop/Incogniton.lnk
+            if browser_hint:
                 browser_config['browser_name'] = browser_hint
-                logging.info("    → Browser name set to: %s", browser_hint)
+                logging.info("    → Browser name for shortcut search: %s", browser_hint)
 
             # Log creator names
             creator_names = [entry.profile_name for entry in entries]

@@ -73,35 +73,62 @@ class WorkflowManager:
         logging.info("")
 
         # Step 1: Browser Launch
-        logging.info("⚙ Step 1/3: Launching browser...")
-        logging.info("  → Browser type: %s", work_item.browser_type)
+        logging.info("")
+        logging.info("▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓")
+        logging.info("⚙️  STEP 1/3: LAUNCHING BROWSER")
+        logging.info("▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓")
+        logging.info("")
 
+        logging.info("📋 Configuration:")
+        logging.info("   → Browser type: %s", work_item.browser_type.upper())
+        logging.info("   → Automation mode: %s", work_item.automation_mode)
+
+        if 'browser_name' in work_item.browser_config:
+            logging.info("   → Custom browser name: %s", work_item.browser_config['browser_name'])
+
+        logging.info("")
+        logging.info("🔧 Initializing BrowserLauncher...")
         launcher = BrowserLauncher(config=work_item.browser_config)
 
         # Pass browser_config as kwargs to launcher (includes browser_name if specified)
         launch_kwargs = {'show_popup': True}
         launch_kwargs.update(work_item.browser_config)
 
-        if 'browser_name' in launch_kwargs:
-            logging.info("  → Browser name: %s", launch_kwargs['browser_name'])
+        logging.info("   ✓ BrowserLauncher initialized")
+        logging.info("")
+        logging.info("🚀 Calling launcher.launch_generic('%s')...", work_item.browser_type)
 
-        logging.info("  → Searching for browser shortcut on desktop...")
+        launch_result = launcher.launch_generic(work_item.browser_type, **launch_kwargs)
 
-        if launcher.launch_generic(work_item.browser_type, **launch_kwargs):
-            logging.info("  ✓ Browser launched successfully")
+        if launch_result:
+            logging.info("")
+            logging.info("✅ BROWSER LAUNCH SUCCESSFUL!")
+            logging.info("   Process is running and ready for automation")
             logging.info("")
         else:
-            logging.error("  ✗ Failed to launch browser")
             logging.error("")
-            logging.error("BROWSER LAUNCH FAILED - Possible reasons:")
-            logging.error("1. Browser shortcut not found on Desktop")
-            logging.error("2. Browser not installed")
-            logging.error("3. Incorrect browser name in login_data.txt")
+            logging.error("╔════════════════════════════════════════════════════════╗")
+            logging.error("║ ❌ BROWSER LAUNCH FAILED                               ║")
+            logging.error("╚════════════════════════════════════════════════════════╝")
             logging.error("")
-            logging.error("What to check:")
-            logging.error("  • Desktop should have browser shortcut (.lnk file)")
-            logging.error("  • Browser name: %s", work_item.browser_config.get('browser_name', 'chrome'))
-            logging.error("  • Available browsers: chrome, firefox, edge, brave, opera")
+            logging.error("🔍 POSSIBLE REASONS:")
+            logging.error("   1. Browser shortcut not found on Desktop (.lnk file)")
+            logging.error("   2. Browser not installed on system")
+            logging.error("   3. Incorrect browser name in login_data.txt")
+            logging.error("   4. Browser shortcut is broken or inaccessible")
+            logging.error("")
+            logging.error("📋 WHAT TO CHECK:")
+            logging.error("   • Open: C:\\Users\\Fast Computers\\Desktop")
+            logging.error("   • Look for: *.lnk files (shortcuts)")
+            logging.error("   • Browser type configured: %s", work_item.browser_type)
+            logging.error("   • Custom browser name: %s", work_item.browser_config.get('browser_name', 'default (chrome)'))
+            logging.error("   • Available browsers: chrome, firefox, edge, brave, opera")
+            logging.error("")
+            logging.error("💡 QUICK FIX:")
+            logging.error("   1. Check if browser is installed on your system")
+            logging.error("   2. Create a desktop shortcut to the browser")
+            logging.error("   3. Ensure shortcut name contains browser name (e.g., 'Google Chrome.lnk')")
+            logging.error("")
             return False
 
         if not work_item.login_entries:

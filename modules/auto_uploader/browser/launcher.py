@@ -97,25 +97,49 @@ class BrowserLauncher:
             >>> launcher = BrowserLauncher()
             >>> gologin_path = launcher.find_browser_on_desktop('gologin')
         """
-        logging.info("Searching desktop for '%s' browser shortcut...", browser_name)
+        logging.info("🔍 [DESKTOP SEARCH] Searching for '%s' browser shortcut...", browser_name.upper())
 
         if not self.desktop_path or not self.desktop_path.exists():
-            logging.warning("Desktop path not found: %s", self.desktop_path)
+            logging.error("❌ [DESKTOP SEARCH] Desktop path doesn't exist: %s", self.desktop_path)
             return None
 
         try:
-            # Search for .lnk files containing browser name
-            for file_path in self.desktop_path.iterdir():
-                if file_path.suffix.lower() == '.lnk':
-                    if browser_name.lower() in file_path.stem.lower():
-                        logging.info("Found browser shortcut: %s", file_path)
-                        return file_path
+            # List all files on desktop first for debugging
+            desktop_files = list(self.desktop_path.iterdir())
+            shortcut_files = [f for f in desktop_files if f.suffix.lower() == '.lnk']
 
-            logging.warning("Browser shortcut '%s' not found on desktop", browser_name)
+            logging.debug("   📁 Desktop path: %s", self.desktop_path)
+            logging.debug("   📊 Total files on desktop: %d", len(desktop_files))
+            logging.debug("   🔗 Shortcut files found: %d", len(shortcut_files))
+
+            if shortcut_files:
+                logging.debug("   📋 Available shortcuts:")
+                for f in shortcut_files:
+                    logging.debug("      → %s", f.name)
+            else:
+                logging.warning("   ⚠️  NO shortcut files (.lnk) found on desktop!")
+
+            # Search for .lnk files containing browser name
+            search_target = browser_name.lower()
+            logging.debug("   🎯 Searching for keyword: '%s'", search_target)
+
+            for file_path in shortcut_files:
+                file_stem_lower = file_path.stem.lower()
+                logging.debug("   ✓ Checking: %s (stem: '%s')", file_path.name, file_stem_lower)
+
+                if search_target in file_stem_lower:
+                    logging.info("   ✅ [FOUND] Browser shortcut: %s", file_path.name)
+                    logging.info("   📌 Full path: %s", file_path)
+                    return file_path
+                else:
+                    logging.debug("      (no match: '%s' not in '%s')", search_target, file_stem_lower)
+
+            logging.error("   ❌ [NOT FOUND] Browser shortcut for '%s' not found on desktop", browser_name)
+            logging.error("   💡 Expected filename pattern: *%s*.lnk (case-insensitive)", browser_name.lower())
             return None
 
         except Exception as e:
-            logging.error("Error searching desktop: %s", e, exc_info=True)
+            logging.error("   ❌ [ERROR] Error searching desktop: %s", e, exc_info=True)
             return None
 
     def show_download_popup(self, browser_type: str) -> bool:
@@ -199,41 +223,54 @@ class BrowserLauncher:
             >>> launcher = BrowserLauncher()
             >>> launcher.launch_gologin(startup_wait=15)
         """
-        logging.info("Launching GoLogin browser...")
+        logging.info("="*60)
+        logging.info("🚀 [GOLOGIN] Starting GoLogin browser launch sequence")
+        logging.info("="*60)
 
         # Check if already running
+        logging.info("⚙️  [GOLOGIN] Step 1/4: Checking if GoLogin is already running...")
         if self.is_browser_running('gologin'):
-            logging.info("GoLogin is already running")
+            logging.info("   ✅ [GOLOGIN] GoLogin is already running - skipping launch")
             return True
 
         # Get shortcut path
+        logging.info("⚙️  [GOLOGIN] Step 2/4: Searching for GoLogin shortcut on desktop...")
         shortcut_path = kwargs.get('desktop_shortcut')
         if not shortcut_path:
             shortcut_path = self.find_browser_on_desktop('gologin')
 
         if not shortcut_path:
-            logging.warning("GoLogin shortcut not found on desktop")
+            logging.error("   ❌ [GOLOGIN] GoLogin shortcut not found on desktop!")
+            logging.error("   💡 Please create a shortcut to GoLogin on your desktop")
             if kwargs.get('show_popup', True):
+                logging.info("   📋 Attempting to show download popup...")
                 self.show_download_popup('gologin')
             return False
 
         # Launch browser
+        logging.info("⚙️  [GOLOGIN] Step 3/4: Executing GoLogin shortcut...")
         success = self.launch_from_shortcut(shortcut_path, **kwargs)
 
         if success:
             # Wait for startup
             startup_wait = kwargs.get('startup_wait', 10)
-            logging.info("Waiting %ds for GoLogin to start...", startup_wait)
+            logging.info("⚙️  [GOLOGIN] Step 4/4: Waiting for GoLogin startup (timeout: %ds)...", startup_wait)
             time.sleep(startup_wait)
 
             # Verify it's running
+            logging.info("   🔍 Verifying GoLogin process...")
             if self.is_browser_running('gologin'):
-                logging.info("GoLogin launched successfully")
+                logging.info("   ✅ [GOLOGIN] GoLogin process detected - launch successful!")
+                logging.info("="*60)
                 return True
             else:
-                logging.warning("GoLogin process not detected after launch")
+                logging.error("   ❌ [GOLOGIN] GoLogin process NOT detected after waiting %ds", startup_wait)
+                logging.error("   💡 Process may still be starting, or launch failed silently")
+                logging.info("="*60)
                 return False
 
+        logging.error("❌ [GOLOGIN] Failed to execute GoLogin shortcut")
+        logging.info("="*60)
         return False
 
     def launch_incogniton(self, **kwargs) -> bool:
@@ -246,36 +283,54 @@ class BrowserLauncher:
         Returns:
             True if launched successfully, False otherwise
         """
-        logging.info("Launching Incogniton browser...")
+        logging.info("="*60)
+        logging.info("🚀 [INCOGNITON] Starting Incogniton (IX) browser launch sequence")
+        logging.info("="*60)
 
         # Check if already running
+        logging.info("⚙️  [INCOGNITON] Step 1/4: Checking if Incogniton is already running...")
         if self.is_browser_running('ix'):
-            logging.info("Incogniton is already running")
+            logging.info("   ✅ [INCOGNITON] Incogniton is already running - skipping launch")
             return True
 
         # Get shortcut path
+        logging.info("⚙️  [INCOGNITON] Step 2/4: Searching for Incogniton shortcut on desktop...")
         shortcut_path = kwargs.get('desktop_shortcut')
         if not shortcut_path:
             shortcut_path = self.find_browser_on_desktop('incogniton')
 
         if not shortcut_path:
-            logging.warning("Incogniton shortcut not found on desktop")
+            logging.error("   ❌ [INCOGNITON] Incogniton shortcut not found on desktop!")
+            logging.error("   💡 Please create a shortcut to Incogniton on your desktop")
             if kwargs.get('show_popup', True):
+                logging.info("   📋 Attempting to show download popup...")
                 self.show_download_popup('ix')
             return False
 
         # Launch browser
+        logging.info("⚙️  [INCOGNITON] Step 3/4: Executing Incogniton shortcut...")
         success = self.launch_from_shortcut(shortcut_path, **kwargs)
 
         if success:
             # Wait for startup
             startup_wait = kwargs.get('startup_wait', 10)
+            logging.info("⚙️  [INCOGNITON] Step 4/4: Waiting for Incogniton startup (timeout: %ds)...", startup_wait)
             time.sleep(startup_wait)
 
+            # Verify it's running
+            logging.info("   🔍 Verifying Incogniton process...")
             if self.is_browser_running('ix'):
-                logging.info("Incogniton launched successfully")
+                logging.info("   ✅ [INCOGNITON] Incogniton process detected - launch successful!")
+                logging.info("="*60)
                 return True
+            else:
+                logging.error("   ❌ [INCOGNITON] Incogniton process NOT detected after waiting %ds", startup_wait)
+                logging.error("   💡 Process may still be starting, or launch failed silently")
+                logging.info("="*60)
+                return False
 
+        logging.error("❌ [INCOGNITON] Failed to execute Incogniton shortcut")
+        logging.info("="*60)
         return False
 
     def launch_generic(self, browser_type: str, **kwargs) -> bool:
@@ -290,56 +345,82 @@ class BrowserLauncher:
         Returns:
             True if launched successfully, False otherwise
         """
-        logging.info("Launching browser: %s", browser_type)
+        logging.info("")
+        logging.info("╔" + "═"*58 + "╗")
+        logging.info("║ BROWSER LAUNCHER - GENERIC LAUNCH REQUEST              ║")
+        logging.info("╚" + "═"*58 + "╝")
+        logging.info("📌 Browser Type: %s", browser_type.upper())
+        logging.debug("   Launch kwargs: %s", kwargs)
 
         browser_type_lower = browser_type.lower()
 
         if browser_type_lower == 'gologin':
+            logging.info("⚡ Routing to: launch_gologin()")
             return self.launch_gologin(**kwargs)
+
         elif browser_type_lower in ['ix', 'incogniton']:
+            logging.info("⚡ Routing to: launch_incogniton()")
             return self.launch_incogniton(**kwargs)
+
         elif browser_type_lower in ['chrome', 'free_automation']:
+            logging.info("⚡ Routing to: Free Automation Mode")
+            logging.info("")
+            logging.info("🔄 [FREE_AUTO] Starting free automation browser search...")
+
             # For free automation, try to find any browser on desktop
             # User can specify browser_name in kwargs or we search for common browsers
             browser_name = kwargs.get('browser_name', 'chrome')
-            logging.info("Free automation mode - searching for '%s' browser", browser_name)
+            logging.info("   🎯 Primary search target: '%s'", browser_name.upper())
 
             # Search for browser shortcut on desktop
+            logging.info("   🔍 Searching for shortcut...")
             shortcut_path = self.find_browser_on_desktop(browser_name)
 
             if not shortcut_path:
                 # Try alternative browser names
+                logging.info("   ❌ Not found. Trying alternative browsers...")
                 alternative_names = ['chrome', 'firefox', 'edge', 'brave', 'opera']
                 for alt_name in alternative_names:
                     if alt_name.lower() == browser_name.lower():
                         continue
-                    logging.info("Trying alternative browser: %s", alt_name)
+                    logging.info("   → Trying: %s", alt_name.upper())
                     shortcut_path = self.find_browser_on_desktop(alt_name)
                     if shortcut_path:
+                        logging.info("   ✅ Found alternative: %s", alt_name.upper())
                         browser_name = alt_name
                         break
 
             if not shortcut_path:
-                logging.error("No browser shortcut found on desktop for free automation")
-                logging.error("Please create a shortcut for Chrome, Firefox, Edge, or other browser on desktop")
+                logging.error("   ❌ [FREE_AUTO] NO browser shortcut found on desktop!")
+                logging.error("   💡 Please create a desktop shortcut for one of these browsers:")
+                logging.error("      • Chrome")
+                logging.error("      • Firefox")
+                logging.error("      • Edge")
+                logging.error("      • Brave")
+                logging.error("      • Opera")
                 return False
 
-            logging.info("Found browser shortcut: %s", shortcut_path)
+            logging.info("   ✅ Browser shortcut found: %s", shortcut_path.name)
 
             # Launch browser from shortcut
+            logging.info("   🚀 Executing browser shortcut...")
             success = self.launch_from_shortcut(shortcut_path, **kwargs)
 
             if success:
                 startup_wait = kwargs.get('startup_wait', 5)
-                logging.info("Waiting %ds for browser to start...", startup_wait)
+                logging.info("   ⏳ Waiting %ds for browser to start...", startup_wait)
                 time.sleep(startup_wait)
-                logging.info("Browser launched successfully in free automation mode")
+                logging.info("   ✅ [FREE_AUTO] Browser launched successfully")
+                logging.info("")
                 return True
             else:
-                logging.error("Failed to launch browser from shortcut")
+                logging.error("   ❌ [FREE_AUTO] Failed to execute browser shortcut")
+                logging.info("")
                 return False
         else:
-            logging.warning("Unknown browser type: %s", browser_type)
+            logging.warning("❌ Unknown browser type: %s", browser_type)
+            logging.warning("   Supported types: gologin, ix, incogniton, chrome, free_automation")
+            logging.info("")
             return False
 
     def launch_from_exe(self, exe_path: str, **kwargs) -> bool:
@@ -381,22 +462,35 @@ class BrowserLauncher:
         Returns:
             True if launched successfully
         """
-        logging.info("Launching from shortcut: %s", shortcut_path)
+        logging.info("🚀 [LAUNCH] Starting browser from shortcut: %s", shortcut_path.name)
+        logging.debug("   📍 Full path: %s", shortcut_path)
+        logging.debug("   ✓ File exists: %s", shortcut_path.exists())
+        logging.debug("   ℹ️  Platform: %s", self.platform)
 
         try:
             if self.platform == 'Windows':
+                logging.debug("   🪟 Using os.startfile() on Windows")
                 # Windows: use os.startfile for .lnk files
                 os.startfile(str(shortcut_path))
+                logging.debug("   ✓ os.startfile() executed successfully")
             else:
                 # Linux/Mac: resolve symlink and execute
+                logging.debug("   🐧 Using subprocess on Linux/Mac")
                 resolved_path = shortcut_path.resolve()
                 subprocess.Popen([str(resolved_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                logging.debug("   ✓ subprocess.Popen() executed successfully")
 
-            logging.info("Browser launched from shortcut")
+            logging.info("   ✅ [LAUNCH] Browser shortcut executed successfully")
             return True
 
+        except FileNotFoundError as e:
+            logging.error("   ❌ [LAUNCH] Shortcut file not found: %s", e, exc_info=True)
+            return False
+        except OSError as e:
+            logging.error("   ❌ [LAUNCH] OS error executing shortcut: %s", e, exc_info=True)
+            return False
         except Exception as e:
-            logging.error("Error launching from shortcut: %s", e, exc_info=True)
+            logging.error("   ❌ [LAUNCH] Unexpected error launching from shortcut: %s", e, exc_info=True)
             return False
 
     def is_browser_running(self, browser_type: str) -> bool:

@@ -1,8 +1,10 @@
 """Main PyQt5 page for the modular Facebook auto uploader."""
 
 import logging
+import sys
 from datetime import datetime
 from typing import Callable, Optional
+from io import StringIO
 
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import (
@@ -23,6 +25,23 @@ from ..core.orchestrator import UploadOrchestrator
 from .approach_dialog import ApproachDialog
 
 
+class LogCapture(logging.Handler):
+    """Custom logging handler that captures logs and emits them via Qt signal."""
+
+    def __init__(self, log_signal: pyqtSignal):
+        super().__init__()
+        self.log_signal = log_signal
+        self.setFormatter(logging.Formatter('%(message)s'))
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Emit log record via Qt signal."""
+        try:
+            msg = self.format(record)
+            self.log_signal.emit(msg)
+        except Exception:
+            self.handleError(record)
+
+
 class UploadWorker(QThread):
     """Background worker that executes the orchestration flow."""
 
@@ -33,16 +52,49 @@ class UploadWorker(QThread):
         super().__init__()
         self._orchestrator = orchestrator
         self._automation_mode = automation_mode
+        self._log_handler = None
 
     def run(self) -> None:
+        """Execute the upload workflow with proper logging capture."""
         try:
-            self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] Starting workflow ({self._automation_mode})")
+            # Attach log handler to capture all logging output
+            self._log_handler = LogCapture(self.log_signal)
+            self._log_handler.setLevel(logging.DEBUG)
+            logger = logging.getLogger()
+            logger.addHandler(self._log_handler)
+
+            self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] ▶️  STARTING WORKFLOW (Mode: {self._automation_mode.upper()})")
+            self.log_signal.emit("")
+
+            logging.info("="*70)
+            logging.info("🚀 UPLOAD ORCHESTRATOR - STARTING")
+            logging.info("="*70)
+
             success = self._orchestrator.run(mode=self._automation_mode)
+
+            logging.info("="*70)
+            if success:
+                logging.info("✅ UPLOAD ORCHESTRATOR - COMPLETED SUCCESSFULLY")
+            else:
+                logging.error("❌ UPLOAD ORCHESTRATOR - FAILED")
+            logging.info("="*70)
+
+            self.log_signal.emit("")
+            self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] {'✅ SUCCESS' if success else '❌ FAILED'}")
+
             self.finished_signal.emit(bool(success))
+
         except Exception as exc:  # pragma: no cover - runtime safeguard
-            logging.exception("Upload workflow crashed", exc_info=True)
-            self.log_signal.emit(f"[ERROR] {exc}")
+            logging.exception("💥 Upload workflow crashed", exc_info=True)
+            self.log_signal.emit(f"[ERROR] Workflow crashed: {exc}")
             self.finished_signal.emit(False)
+
+        finally:
+            # Clean up log handler
+            if self._log_handler:
+                logger = logging.getLogger()
+                logger.removeHandler(self._log_handler)
+                self._log_handler.close()
 
 
 class AutoUploaderPage(QWidget):
@@ -142,17 +194,44 @@ class AutoUploaderPage(QWidget):
         button_row = QHBoxLayout()
         button_row.setSpacing(12)
 
-        self.approach_button = QPushButton("Approaches...")
+        # Back button
+        self.back_button = QPushButton("◀ Back")
+        self.back_button.setMaximumWidth(100)
+        self.back_button.setStyleSheet("""
+            QPushButton {
+                background-color: #95A5A6;
+            }
+            QPushButton:hover {
+                background-color: #7F8C8D;
+            }
+        """)
+        self.back_button.clicked.connect(self._go_back)
+        button_row.addWidget(self.back_button)
+
+        button_row.addSpacing(20)
+
+        self.approach_button = QPushButton("⚙️ Approaches...")
         self.approach_button.clicked.connect(self._open_approach_dialog)
         button_row.addWidget(self.approach_button)
 
-        self.start_button = QPushButton("Start Upload")
+        self.start_button = QPushButton("▶️ Start Upload")
         self.start_button.clicked.connect(self.start_upload)
         button_row.addWidget(self.start_button)
 
-        self.stop_button = QPushButton("Stop")
+        self.stop_button = QPushButton("⏹️ Stop")
         self.stop_button.clicked.connect(self.stop_upload)
         self.stop_button.setEnabled(False)
+        self.stop_button.setStyleSheet("""
+            QPushButton {
+                background-color: #E74C3C;
+            }
+            QPushButton:hover {
+                background-color: #C0392B;
+            }
+            QPushButton:disabled {
+                background-color: #4B6584;
+            }
+        """)
         button_row.addWidget(self.stop_button)
 
         button_row.addStretch()
@@ -171,6 +250,25 @@ class AutoUploaderPage(QWidget):
         outer_layout.addWidget(self.log_output)
 
         outer_layout.addStretch()
+
+    # ------------------------------------------------------------------ #
+    # Navigation                                                         #
+    # ------------------------------------------------------------------ #
+    def _go_back(self) -> None:
+        """Go back to previous page."""
+        if self.worker and self.worker.isRunning():
+            QMessageBox.warning(
+                self,
+                "Upload Running",
+                "Cannot go back while upload is running. Please stop the upload first."
+            )
+            return
+
+        self.log_output.clear()
+        self._append_log("Going back to main menu...")
+
+        if self.back_callback:
+            self.back_callback()
 
     # ------------------------------------------------------------------ #
     # Workflow management                                                #
@@ -192,24 +290,36 @@ class AutoUploaderPage(QWidget):
             )
 
     def start_upload(self) -> None:
+        """Start the upload workflow in a separate thread."""
         if self.worker and self.worker.isRunning():
             QMessageBox.information(self, "Upload running", "The upload workflow is already running.")
             return
 
+        # Check if setup is completed
         if not self.settings.is_setup_completed():
+            self._append_log("⚠️  Setup not completed. Opening Approaches dialog...")
             self._open_approach_dialog(force=True)
             if not self.settings.is_setup_completed():
+                self._append_log("❌ Setup cancelled.")
                 return
 
+        # Get current automation mode
         self.current_mode = self.settings.get_automation_mode()
+        self._append_log(f"✅ Setup completed. Automation mode: {self.current_mode.upper()}")
+        self._append_log("")
+
+        # Update UI state
         self.status_value.setText("Running...")
         self.status_value.setStyleSheet("font-size: 14px; color: #F39C12;")
 
         self.start_button.setEnabled(False)
+        self.approach_button.setEnabled(False)
+        self.back_button.setEnabled(False)
         self.stop_button.setEnabled(True)
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 0)  # indeterminate
 
+        # Create and start worker thread
         self.worker = UploadWorker(self.orchestrator, self.current_mode)
         self.worker.log_signal.connect(self._append_log)
         self.worker.finished_signal.connect(self._upload_finished)
@@ -226,21 +336,32 @@ class AutoUploaderPage(QWidget):
         self._upload_finished(False)
 
     def _upload_finished(self, success: bool) -> None:
+        """Handle upload workflow completion."""
+        # Re-enable buttons
         self.start_button.setEnabled(True)
+        self.approach_button.setEnabled(True)
+        self.back_button.setEnabled(True)
         self.stop_button.setEnabled(False)
         self.progress_bar.setVisible(False)
         self.progress_bar.setRange(0, 1)
         self.progress_bar.setValue(0)
 
+        # Update status
+        self._append_log("")
         if success:
-            self.status_value.setText("Completed Successfully")
+            self.status_value.setText("✅ Completed Successfully")
             self.status_value.setStyleSheet("font-size: 14px; color: #43B581;")
-            self._append_log("Upload process completed successfully.")
+            self._append_log("═" * 70)
+            self._append_log("✅ Upload process COMPLETED SUCCESSFULLY")
+            self._append_log("═" * 70)
         else:
-            self.status_value.setText("Stopped / Failed")
+            self.status_value.setText("❌ Stopped / Failed")
             self.status_value.setStyleSheet("font-size: 14px; color: #E74C3C;")
-            self._append_log("Upload process stopped or failed.")
+            self._append_log("═" * 70)
+            self._append_log("❌ Upload process FAILED or STOPPED")
+            self._append_log("═" * 70)
 
+        # Clean up worker
         if self.worker:
             self.worker.finished_signal.disconnect()
             self.worker.log_signal.disconnect()

@@ -114,7 +114,9 @@ class UploaderThread(QThread):
             self.log_signal.emit("Initializing Facebook Auto Uploader...")
 
             try:
-                self.uploader = FacebookAutoUploader()
+                # Use parent directory (auto_uploader) as base, not _legacy folder
+                base_dir = Path(__file__).parent.parent
+                self.uploader = FacebookAutoUploader(base_dir=base_dir)
             except ImportError as e:
                 self.log_signal.emit(f"\n❌ DEPENDENCY ERROR:\n{str(e)}\n")
                 self.log_signal.emit("\nRequired packages:")
@@ -347,7 +349,8 @@ class AutoUploaderPage(QWidget):
             )
             return
 
-        base_dir = Path(__file__).resolve().parent
+        # Use parent directory (auto_uploader) as base, not _legacy folder
+        base_dir = Path(__file__).resolve().parent.parent
         settings_path = base_dir / 'data_files' / 'settings.json'  # ✓ FIXED PATH
 
         try:

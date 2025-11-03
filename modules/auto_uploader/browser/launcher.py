@@ -283,8 +283,9 @@ class BrowserLauncher:
         Launch a generic browser by type.
 
         Args:
-            browser_type: Browser type identifier (gologin, ix, chrome, etc.)
+            browser_type: Browser type identifier (gologin, ix, chrome, free_automation, etc.)
             **kwargs: Additional launch parameters
+                - browser_name: Specific browser shortcut name to search for (used with free_automation)
 
         Returns:
             True if launched successfully, False otherwise
@@ -297,6 +298,46 @@ class BrowserLauncher:
             return self.launch_gologin(**kwargs)
         elif browser_type_lower in ['ix', 'incogniton']:
             return self.launch_incogniton(**kwargs)
+        elif browser_type_lower in ['chrome', 'free_automation']:
+            # For free automation, try to find any browser on desktop
+            # User can specify browser_name in kwargs or we search for common browsers
+            browser_name = kwargs.get('browser_name', 'chrome')
+            logging.info("Free automation mode - searching for '%s' browser", browser_name)
+
+            # Search for browser shortcut on desktop
+            shortcut_path = self.find_browser_on_desktop(browser_name)
+
+            if not shortcut_path:
+                # Try alternative browser names
+                alternative_names = ['chrome', 'firefox', 'edge', 'brave', 'opera']
+                for alt_name in alternative_names:
+                    if alt_name.lower() == browser_name.lower():
+                        continue
+                    logging.info("Trying alternative browser: %s", alt_name)
+                    shortcut_path = self.find_browser_on_desktop(alt_name)
+                    if shortcut_path:
+                        browser_name = alt_name
+                        break
+
+            if not shortcut_path:
+                logging.error("No browser shortcut found on desktop for free automation")
+                logging.error("Please create a shortcut for Chrome, Firefox, Edge, or other browser on desktop")
+                return False
+
+            logging.info("Found browser shortcut: %s", shortcut_path)
+
+            # Launch browser from shortcut
+            success = self.launch_from_shortcut(shortcut_path, **kwargs)
+
+            if success:
+                startup_wait = kwargs.get('startup_wait', 5)
+                logging.info("Waiting %ds for browser to start...", startup_wait)
+                time.sleep(startup_wait)
+                logging.info("Browser launched successfully in free automation mode")
+                return True
+            else:
+                logging.error("Failed to launch browser from shortcut")
+                return False
         else:
             logging.warning("Unknown browser type: %s", browser_type)
             return False

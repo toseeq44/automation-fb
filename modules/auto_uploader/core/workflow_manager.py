@@ -71,7 +71,12 @@ class WorkflowManager:
         )
 
         launcher = BrowserLauncher(config=work_item.browser_config)
-        if launcher.launch_generic(work_item.browser_type, show_popup=True):
+
+        # Pass browser_config as kwargs to launcher (includes browser_name if specified)
+        launch_kwargs = {'show_popup': True}
+        launch_kwargs.update(work_item.browser_config)
+
+        if launcher.launch_generic(work_item.browser_type, **launch_kwargs):
             logging.info(
                 "Browser '%s' launched for account '%s'.",
                 work_item.browser_type,

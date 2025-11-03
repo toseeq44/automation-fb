@@ -423,18 +423,21 @@ class AutoUploaderPage(QWidget):
             self.status_text.setStyleSheet("font-size: 14px; color: #E74C3C;")
 
     def show_approach_selector(self):
-        """Show dialog to select automation approach"""
-        from PyQt5.QtWidgets import QDialog, QRadioButton, QButtonGroup, QDialogButtonBox
+        """Show dialog to select automation approach and configure paths"""
+        from PyQt5.QtWidgets import (QDialog, QRadioButton, QButtonGroup, QDialogButtonBox,
+                                      QLineEdit, QFileDialog, QGroupBox)
 
-        # Load current approach from settings
+        # Load current approach and paths from settings
         current_approach = self.get_current_approach()
+        current_paths = self.get_current_paths()
 
         # Create dialog
         dialog = QDialog(self)
-        dialog.setWindowTitle("Select Automation Approach")
+        dialog.setWindowTitle("Configure Automation")
         dialog.setModal(True)
         dialog.setStyleSheet("background-color: #2C2F33; color: #F5F6F5;")
-        dialog.setMinimumWidth(500)
+        dialog.setMinimumWidth(650)
+        dialog.setMinimumHeight(700)
 
         layout = QVBoxLayout()
         layout.setSpacing(15)
@@ -507,6 +510,104 @@ class AutoUploaderPage(QWidget):
         current_label.setStyleSheet("font-size: 12px; color: #43B581; margin-top: 10px;")
         layout.addWidget(current_label)
 
+        # Path configuration section
+        path_group = QGroupBox("📁 Folder Configuration")
+        path_group.setStyleSheet("""
+            QGroupBox {
+                font-size: 14px;
+                font-weight: bold;
+                color: #1ABC9C;
+                border: 2px solid #1ABC9C;
+                border-radius: 8px;
+                margin-top: 15px;
+                padding-top: 15px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+        """)
+        path_layout = QVBoxLayout()
+        path_layout.setSpacing(10)
+
+        # Creators folder
+        creators_label = QLabel("Creators Folder (where video folders are):")
+        creators_label.setStyleSheet("font-size: 12px; color: #B9BBBE;")
+        path_layout.addWidget(creators_label)
+
+        creators_h_layout = QHBoxLayout()
+        self.creators_path_input = QLineEdit(current_paths.get('creators_root', ''))
+        self.creators_path_input.setPlaceholderText("Select folder containing creator video folders...")
+        self.creators_path_input.setStyleSheet("""
+            QLineEdit {
+                background-color: #40444B;
+                color: #F5F6F5;
+                border: 1px solid #1ABC9C;
+                border-radius: 5px;
+                padding: 8px;
+                font-size: 12px;
+            }
+        """)
+        creators_browse_btn = QPushButton("Browse...")
+        creators_browse_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #7289DA;
+                color: #F5F6F5;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 5px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #677BC4;
+            }
+        """)
+        creators_browse_btn.clicked.connect(lambda: self.browse_folder(self.creators_path_input, "Select Creators Folder"))
+        creators_h_layout.addWidget(self.creators_path_input)
+        creators_h_layout.addWidget(creators_browse_btn)
+        path_layout.addLayout(creators_h_layout)
+
+        # Shortcuts folder
+        shortcuts_label = QLabel("Shortcuts Folder (where login_data.txt files are):")
+        shortcuts_label.setStyleSheet("font-size: 12px; color: #B9BBBE; margin-top: 10px;")
+        path_layout.addWidget(shortcuts_label)
+
+        shortcuts_h_layout = QHBoxLayout()
+        self.shortcuts_path_input = QLineEdit(current_paths.get('shortcuts_root', ''))
+        self.shortcuts_path_input.setPlaceholderText("Select folder containing browser account shortcuts...")
+        self.shortcuts_path_input.setStyleSheet("""
+            QLineEdit {
+                background-color: #40444B;
+                color: #F5F6F5;
+                border: 1px solid #1ABC9C;
+                border-radius: 5px;
+                padding: 8px;
+                font-size: 12px;
+            }
+        """)
+        shortcuts_browse_btn = QPushButton("Browse...")
+        shortcuts_browse_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #7289DA;
+                color: #F5F6F5;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 5px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #677BC4;
+            }
+        """)
+        shortcuts_browse_btn.clicked.connect(lambda: self.browse_folder(self.shortcuts_path_input, "Select Shortcuts Folder"))
+        shortcuts_h_layout.addWidget(self.shortcuts_path_input)
+        shortcuts_h_layout.addWidget(shortcuts_browse_btn)
+        path_layout.addLayout(shortcuts_h_layout)
+
+        path_group.setLayout(path_layout)
+        layout.addWidget(path_group)
+
         # Buttons
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         button_box.setStyleSheet("""
@@ -533,19 +634,39 @@ class AutoUploaderPage(QWidget):
             selected_id = button_group.checkedId()
             new_approach = "intelligent" if selected_id == 1 else "legacy"
 
+            # Get paths from inputs
+            new_paths = {
+                'creators_root': self.creators_path_input.text().strip(),
+                'shortcuts_root': self.shortcuts_path_input.text().strip()
+            }
+
+            # Validate paths
+            if not new_paths['creators_root'] or not new_paths['shortcuts_root']:
+                QMessageBox.warning(
+                    self,
+                    "Missing Paths",
+                    "Please select both Creators and Shortcuts folders."
+                )
+                return
+
             # Save to settings
-            if self.save_approach(new_approach):
+            if self.save_approach_and_paths(new_approach, new_paths):
                 self.log_output.append(f"\n✓ Approach changed to: {new_approach.upper()}")
+                self.log_output.append(f"✓ Creators folder: {new_paths['creators_root']}")
+                self.log_output.append(f"✓ Shortcuts folder: {new_paths['shortcuts_root']}")
                 QMessageBox.information(
                     self,
-                    "Approach Updated",
-                    f"Automation approach set to: {new_approach.upper()}\n\nThis will take effect on next upload."
+                    "Configuration Updated",
+                    f"Automation approach: {new_approach.upper()}\n\n"
+                    f"Creators folder: {new_paths['creators_root']}\n"
+                    f"Shortcuts folder: {new_paths['shortcuts_root']}\n\n"
+                    f"This will take effect on next upload."
                 )
             else:
                 QMessageBox.warning(
                     self,
                     "Save Failed",
-                    "Could not save approach to settings.json"
+                    "Could not save configuration to settings.json"
                 )
 
     def get_current_approach(self):
@@ -574,9 +695,54 @@ class AutoUploaderPage(QWidget):
         except Exception as e:
             logging.error(f"Error saving approach: {e}")
             return False
-            self.log_output.append("\n" + "="*60)
-            self.log_output.append("✗ Upload process failed or was stopped")
-            self.log_output.append("="*60)
+
+    def get_current_paths(self):
+        """Get current paths from settings.json"""
+        try:
+            if load_config:
+                config = load_config()
+                paths = config.get('automation', {}).get('paths', {})
+                return {
+                    'creators_root': paths.get('creators_root', ''),
+                    'shortcuts_root': paths.get('shortcuts_root', '')
+                }
+            return {'creators_root': '', 'shortcuts_root': ''}
+        except Exception as e:
+            logging.error(f"Error loading paths: {e}")
+            return {'creators_root': '', 'shortcuts_root': ''}
+
+    def save_approach_and_paths(self, approach, paths):
+        """Save approach and paths to settings.json"""
+        try:
+            if load_config and save_config:
+                config = load_config()
+                if 'automation' not in config:
+                    config['automation'] = {}
+                if 'paths' not in config['automation']:
+                    config['automation']['paths'] = {}
+
+                config['automation']['approach'] = approach
+                config['automation']['paths']['creators_root'] = paths['creators_root']
+                config['automation']['paths']['shortcuts_root'] = paths['shortcuts_root']
+
+                # Also set history_file path automatically
+                base_dir = Path(__file__).resolve().parent.parent
+                config['automation']['paths']['history_file'] = str(base_dir / 'data_files' / 'history.json')
+
+                save_config(config)
+                logging.info(f"Approach and paths saved: {approach}, {paths}")
+                return True
+            return False
+        except Exception as e:
+            logging.error(f"Error saving approach and paths: {e}")
+            return False
+
+    def browse_folder(self, line_edit, title):
+        """Open folder browser and update line edit"""
+        from PyQt5.QtWidgets import QFileDialog
+        folder = QFileDialog.getExistingDirectory(self, title)
+        if folder:
+            line_edit.setText(folder)
 
     # ------------------------------------------------------------------
     # settings helpers

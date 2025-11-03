@@ -12,22 +12,18 @@ import inspect
 import logging
 
 try:  # pragma: no cover - import side effects exercised at runtime
-    from .core import FacebookAutoUploader
+    import sys
+    # Add parent directory to path to import orchestrator
+    parent_dir = Path(__file__).parent.parent
+    if str(parent_dir) not in sys.path:
+        sys.path.insert(0, str(parent_dir))
+
+    from orchestrator import AutomationOrchestrator
     from .configuration import SettingsManager
     from .ui_configurator import InitialSetupUI
 except ImportError:
-    FacebookAutoUploader = None
+    AutomationOrchestrator = None
     SettingsManager = None
-    InitialSetupUI = None
-
-try:  # pragma: no cover - import side effects exercised at runtime
-    from .configuration import SettingsManager
-except ImportError:  # pragma: no cover - compatibility guard
-    SettingsManager = None
-
-try:  # pragma: no cover - import side effects exercised at runtime
-    from .ui_configurator import InitialSetupUI
-except ImportError:  # pragma: no cover - compatibility guard
     InitialSetupUI = None
 
 try:  # pragma: no cover - import side effects exercised at runtime
@@ -116,7 +112,7 @@ class UploaderThread(QThread):
             try:
                 # Use parent directory (auto_uploader) as base, not _legacy folder
                 base_dir = Path(__file__).parent.parent
-                self.uploader = FacebookAutoUploader(base_dir=base_dir)
+                self.uploader = AutomationOrchestrator(base_dir=base_dir)
             except ImportError as e:
                 self.log_signal.emit(f"\n❌ DEPENDENCY ERROR:\n{str(e)}\n")
                 self.log_signal.emit("\nRequired packages:")
@@ -341,7 +337,7 @@ class AutoUploaderPage(QWidget):
 
     def start_upload(self):
         """Start upload process"""
-        if FacebookAutoUploader is None or SettingsManager is None or InitialSetupUI is None:
+        if AutomationOrchestrator is None or SettingsManager is None or InitialSetupUI is None:
             QMessageBox.warning(
                 self,
                 "Module Not Available",

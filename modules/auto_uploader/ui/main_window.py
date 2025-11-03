@@ -57,44 +57,93 @@ class UploadWorker(QThread):
     def run(self) -> None:
         """Execute the upload workflow with proper logging capture."""
         try:
-            # Attach log handler to capture all logging output
+            # Step 1: Setup logging
+            self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] 📋 STEP 1/7: Setting up logging system...")
+
             self._log_handler = LogCapture(self.log_signal)
             self._log_handler.setLevel(logging.DEBUG)
             logger = logging.getLogger()
             logger.addHandler(self._log_handler)
 
-            self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] ▶️  STARTING WORKFLOW (Mode: {self._automation_mode.upper()})")
+            self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] ✅ Logging configured successfully")
             self.log_signal.emit("")
 
+            # Step 2: Start workflow
+            self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] 📋 STEP 2/7: Initializing upload orchestrator...")
             logging.info("="*70)
-            logging.info("🚀 UPLOAD ORCHESTRATOR - STARTING")
+            logging.info("🚀 UPLOAD ORCHESTRATOR - INITIALIZING")
+            logging.info(f"   Mode: {self._automation_mode.upper()}")
+            logging.info("="*70)
+            self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] ✅ Orchestrator initialized")
+            self.log_signal.emit("")
+
+            # Step 3: Run orchestrator
+            self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] 📋 STEP 3/7: Running upload workflow...")
+            logging.info("="*70)
+            logging.info("🚀 UPLOAD ORCHESTRATOR - RUNNING WORKFLOW")
             logging.info("="*70)
 
             success = self._orchestrator.run(mode=self._automation_mode)
 
+            # Step 4: Check results
+            self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] 📋 STEP 4/7: Checking workflow results...")
             logging.info("="*70)
             if success:
-                logging.info("✅ UPLOAD ORCHESTRATOR - COMPLETED SUCCESSFULLY")
+                logging.info("✅ WORKFLOW - COMPLETED SUCCESSFULLY")
             else:
-                logging.error("❌ UPLOAD ORCHESTRATOR - FAILED")
+                logging.error("❌ WORKFLOW - FAILED")
             logging.info("="*70)
 
+            self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] ✅ Results processed")
             self.log_signal.emit("")
-            self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] {'✅ SUCCESS' if success else '❌ FAILED'}")
 
+            # Step 5: Cleanup handler
+            self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] 📋 STEP 5/7: Cleaning up logging...")
+            if self._log_handler:
+                logger.removeHandler(self._log_handler)
+                self._log_handler.close()
+            self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] ✅ Logging cleaned up")
+            self.log_signal.emit("")
+
+            # Step 6: Final message
+            self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] 📋 STEP 6/7: Generating final status...")
+            self.log_signal.emit("")
+            if success:
+                self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] ✅✅✅ WORKFLOW COMPLETED SUCCESSFULLY ✅✅✅")
+            else:
+                self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] ❌ WORKFLOW FAILED - Check logs above for errors")
+
+            self.log_signal.emit("")
+            self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] 📋 STEP 7/7: Emitting finished signal...")
+
+            # Step 7: Emit signal
             self.finished_signal.emit(bool(success))
+            self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] ✅ Finished signal emitted. Thread ending.")
 
         except Exception as exc:  # pragma: no cover - runtime safeguard
+            self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] ❌ EXCEPTION OCCURRED: {type(exc).__name__}")
+            self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] 💥 Error details: {str(exc)}")
             logging.exception("💥 Upload workflow crashed", exc_info=True)
-            self.log_signal.emit(f"[ERROR] Workflow crashed: {exc}")
+
+            try:
+                if self._log_handler:
+                    logger = logging.getLogger()
+                    logger.removeHandler(self._log_handler)
+                    self._log_handler.close()
+            except:
+                pass
+
             self.finished_signal.emit(False)
 
         finally:
-            # Clean up log handler
-            if self._log_handler:
-                logger = logging.getLogger()
-                logger.removeHandler(self._log_handler)
-                self._log_handler.close()
+            # Final cleanup
+            try:
+                if self._log_handler:
+                    logger = logging.getLogger()
+                    logger.removeHandler(self._log_handler)
+                    self._log_handler.close()
+            except:
+                pass
 
 
 class AutoUploaderPage(QWidget):
@@ -326,18 +375,56 @@ class AutoUploaderPage(QWidget):
         self.worker.start()
 
     def stop_upload(self) -> None:
+        """Stop the running upload workflow."""
         if not self.worker or not self.worker.isRunning():
+            self._append_log("❌ No workflow currently running")
             return
 
-        self._append_log("Stopping upload...")
+        self._append_log("")
+        self._append_log(f"[{datetime.now():%H:%M:%S}] 🛑 STOPPING WORKFLOW...")
+        self._append_log(f"[{datetime.now():%H:%M:%S}] Requesting thread interruption...")
+
+        # Request interruption
         self.worker.requestInterruption()
         self.worker.quit()
-        self.worker.wait(2000)
+
+        # Wait for thread to finish (max 5 seconds)
+        self._append_log(f"[{datetime.now():%H:%M:%S}] Waiting for thread to finish (max 5 seconds)...")
+        if self.worker.wait(5000):
+            self._append_log(f"[{datetime.now():%H:%M:%S}] ✅ Thread stopped cleanly")
+        else:
+            self._append_log(f"[{datetime.now():%H:%M:%S}] ⚠️  Thread did not stop within timeout")
+            self._append_log(f"[{datetime.now():%H:%M:%S}] Forcing thread termination...")
+            self.worker.terminate()
+            self.worker.wait(1000)
+            self._append_log(f"[{datetime.now():%H:%M:%S}] ✅ Thread forcefully terminated")
+
         self._upload_finished(False)
 
     def _upload_finished(self, success: bool) -> None:
         """Handle upload workflow completion."""
+        self._append_log("")
+        self._append_log(f"[{datetime.now():%H:%M:%S}] 🧹 Cleaning up worker thread...")
+
+        # Disconnect signals
+        try:
+            if self.worker:
+                self.worker.finished_signal.disconnect()
+                self.worker.log_signal.disconnect()
+                self._append_log(f"[{datetime.now():%H:%M:%S}] ✅ Signals disconnected")
+
+                # Wait for thread to fully finish
+                if self.worker.isRunning():
+                    self._append_log(f"[{datetime.now():%H:%M:%S}] Thread still running, waiting...")
+                    self.worker.wait(2000)
+
+                self.worker = None
+                self._append_log(f"[{datetime.now():%H:%M:%S}] ✅ Worker cleaned up completely")
+        except Exception as e:
+            self._append_log(f"[{datetime.now():%H:%M:%S}] ⚠️  Error during cleanup: {e}")
+
         # Re-enable buttons
+        self._append_log(f"[{datetime.now():%H:%M:%S}] 🔘 Re-enabling UI buttons...")
         self.start_button.setEnabled(True)
         self.approach_button.setEnabled(True)
         self.back_button.setEnabled(True)
@@ -345,27 +432,22 @@ class AutoUploaderPage(QWidget):
         self.progress_bar.setVisible(False)
         self.progress_bar.setRange(0, 1)
         self.progress_bar.setValue(0)
+        self._append_log(f"[{datetime.now():%H:%M:%S}] ✅ Buttons re-enabled")
 
         # Update status
         self._append_log("")
+        self._append_log("=" * 70)
         if success:
             self.status_value.setText("✅ Completed Successfully")
             self.status_value.setStyleSheet("font-size: 14px; color: #43B581;")
-            self._append_log("═" * 70)
-            self._append_log("✅ Upload process COMPLETED SUCCESSFULLY")
-            self._append_log("═" * 70)
+            self._append_log(f"[{datetime.now():%H:%M:%S}] ✅✅✅ WORKFLOW COMPLETED SUCCESSFULLY ✅✅✅")
         else:
             self.status_value.setText("❌ Stopped / Failed")
             self.status_value.setStyleSheet("font-size: 14px; color: #E74C3C;")
-            self._append_log("═" * 70)
-            self._append_log("❌ Upload process FAILED or STOPPED")
-            self._append_log("═" * 70)
+            self._append_log(f"[{datetime.now():%H:%M:%S}] ❌ WORKFLOW FAILED OR STOPPED")
 
-        # Clean up worker
-        if self.worker:
-            self.worker.finished_signal.disconnect()
-            self.worker.log_signal.disconnect()
-            self.worker = None
+        self._append_log("=" * 70)
+        self._append_log(f"[{datetime.now():%H:%M:%S}] Ready for next upload")
 
     # ------------------------------------------------------------------ #
     # Logging helper                                                     #

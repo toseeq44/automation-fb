@@ -31,7 +31,10 @@ class LogCapture(logging.Handler):
     def __init__(self, log_signal: pyqtSignal):
         super().__init__()
         self.log_signal = log_signal
-        self.setFormatter(logging.Formatter('%(message)s'))
+        # Don't format here - let records pass through with full info
+        self.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
+        # Ensure this handler captures everything
+        self.setLevel(logging.DEBUG)
 
     def emit(self, record: logging.LogRecord) -> None:
         """Emit log record via Qt signal."""
@@ -60,12 +63,19 @@ class UploadWorker(QThread):
             # Step 1: Setup logging
             self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] 📋 STEP 1/7: Setting up logging system...")
 
+            # Setup log handler
             self._log_handler = LogCapture(self.log_signal)
             self._log_handler.setLevel(logging.DEBUG)
+
+            # Get root logger and set it to DEBUG
             logger = logging.getLogger()
+            logger.setLevel(logging.DEBUG)  # ← Important: Set root logger to DEBUG
             logger.addHandler(self._log_handler)
 
+            # Emit diagnostic info
             self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] ✅ Logging configured successfully")
+            self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] 📊 Root logger level: {logger.level} (DEBUG={logging.DEBUG})")
+            self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] 📊 Handler count: {len(logger.handlers)}")
             self.log_signal.emit("")
 
             # Step 2: Start workflow
@@ -79,11 +89,27 @@ class UploadWorker(QThread):
 
             # Step 3: Run orchestrator
             self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] 📋 STEP 3/7: Running upload workflow...")
+
+            # Add blank line and start logging from orchestrator
+            self.log_signal.emit("")
+
             logging.info("="*70)
             logging.info("🚀 UPLOAD ORCHESTRATOR - RUNNING WORKFLOW")
             logging.info("="*70)
+            logging.info("📌 IMPORTANT: Calling orchestrator.run() with mode: %s", self._automation_mode)
+            logging.info("📌 This should show desktop search, browser launch, etc. below:")
+            logging.info("")
 
+            self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] 🔄 About to call orchestrator.run()...")
+            self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] Mode: {self._automation_mode}")
+
+            # CRITICAL: Call the orchestrator
             success = self._orchestrator.run(mode=self._automation_mode)
+
+            # Log the result
+            self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] ✅ orchestrator.run() COMPLETED with result: {success}")
+            logging.info("")
+            logging.info("📌 orchestrator.run() returned: %s", success)
 
             # Step 4: Check results
             self.log_signal.emit(f"[{datetime.now():%H:%M:%S}] 📋 STEP 4/7: Checking workflow results...")

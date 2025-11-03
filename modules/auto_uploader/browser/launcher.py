@@ -461,17 +461,21 @@ class BrowserLauncher:
             logging.error("Error launching from exe: %s", e, exc_info=True)
             return False
 
-    def launch_from_shortcut(self, shortcut_path: Path, **kwargs) -> bool:
+    def launch_from_shortcut(self, shortcut_path, **kwargs) -> bool:
         """
         Launch browser from desktop shortcut (.lnk file).
 
         Args:
-            shortcut_path: Path to shortcut file
+            shortcut_path: Path to shortcut file (str or Path)
             **kwargs: Additional parameters
 
         Returns:
             True if launched successfully
         """
+        # Convert to Path if string
+        if isinstance(shortcut_path, str):
+            shortcut_path = Path(shortcut_path)
+
         logging.info("🚀 [LAUNCH] Starting browser from shortcut: %s", shortcut_path.name)
         logging.debug("   📍 Full path: %s", shortcut_path)
         logging.debug("   ✓ File exists: %s", shortcut_path.exists())

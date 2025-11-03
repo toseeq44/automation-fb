@@ -16,9 +16,19 @@ import logging
 import subprocess
 import platform
 import time
-import psutil
+import csv
+import io
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Dict, Any, List
+
+
+@dataclass(frozen=True)
+class ProcessEntry:
+    """Lightweight representation of a running process."""
+
+    pid: int
+    name: str
 
 try:
     from PyQt5.QtWidgets import QMessageBox, QApplication
@@ -34,9 +44,20 @@ class BrowserLauncher:
 
     # Browser-specific process names
     BROWSER_PROCESSES = {
-        'gologin': ['orbita.exe', 'GoLogin.exe', 'gologin'],
-        'ix': ['chrome.exe', 'incogniton', 'ix'],
+        'gologin': ['orbita.exe', 'gologin.exe', 'GoLogin.exe', 'gologin'],
+        'ix': ['ixbrowser.exe', 'incogniton.exe', 'Incogniton.exe', 'chrome.exe', 'ixbrowser', 'incogniton', 'ix'],
         'chrome': ['chrome.exe', 'google-chrome', 'chromium']
+    }
+
+    BROWSER_ALIASES = {
+        'gologin': 'gologin',
+        'orbita': 'gologin',
+        'gologinbrowser': 'gologin',
+        'ix': 'ix',
+        'ixbrowser': 'ix',
+        'incogniton': 'ix',
+        'incognitonbrowser': 'ix',
+        'chrome': 'chrome',
     }
 
     # Browser download URLs
@@ -354,22 +375,15 @@ class BrowserLauncher:
         """
         logging.debug("Checking if %s is running...", browser_type)
 
-        process_names = self.BROWSER_PROCESSES.get(browser_type.lower(), [])
+        matches = self._collect_process_entries(browser_type)
+        running = bool(matches)
 
-        try:
-            for proc in psutil.process_iter(['name']):
-                proc_name = proc.info['name']
-                if proc_name and any(name.lower() in proc_name.lower() for name in process_names):
-                    logging.debug("Found %s process: %s", browser_type, proc_name)
-                    return True
+        if running:
+            logging.debug("Detected %s process(es): %s", browser_type, ", ".join(f"{m.name} (PID {m.pid})" for m in matches))
 
-            return False
+        return running
 
-        except Exception as e:
-            logging.error("Error checking if browser running: %s", e, exc_info=True)
-            return False
-
-    def get_browser_process(self, browser_type: str) -> Optional[psutil.Process]:
+    def get_browser_process(self, browser_type: str) -> Optional[ProcessEntry]:
         """
         Get the process object for a running browser.
 
@@ -381,20 +395,8 @@ class BrowserLauncher:
         """
         logging.debug("Getting process for %s", browser_type)
 
-        process_names = self.BROWSER_PROCESSES.get(browser_type.lower(), [])
-
-        try:
-            for proc in psutil.process_iter(['name', 'pid']):
-                proc_name = proc.info['name']
-                if proc_name and any(name.lower() in proc_name.lower() for name in process_names):
-                    logging.debug("Found %s process: PID=%d, Name=%s", browser_type, proc.info['pid'], proc_name)
-                    return proc
-
-            return None
-
-        except Exception as e:
-            logging.error("Error getting browser process: %s", e, exc_info=True)
-            return None
+        matches = self._collect_process_entries(browser_type)
+        return matches[0] if matches else None
 
     def kill_browser(self, browser_type: str, force: bool = False) -> bool:
         """
@@ -409,31 +411,19 @@ class BrowserLauncher:
         """
         logging.info("Killing browser: %s (force=%s)", browser_type, force)
 
-        proc = self.get_browser_process(browser_type)
-        if not proc:
+        matches = self._collect_process_entries(browser_type)
+        if not matches:
             logging.warning("Browser process not found: %s", browser_type)
             return False
 
-        try:
-            if force:
-                proc.kill()  # SIGKILL
+        success = True
+        for proc in matches:
+            if self._kill_process_entry(proc, force=force):
+                logging.info("Browser process terminated: %s (PID=%s)", proc.name, proc.pid)
             else:
-                proc.terminate()  # SIGTERM
+                success = False
 
-            # Wait for process to end
-            proc.wait(timeout=5)
-
-            logging.info("Browser killed: %s", browser_type)
-            return True
-
-        except psutil.TimeoutExpired:
-            logging.warning("Browser did not terminate within timeout, force killing...")
-            proc.kill()
-            return True
-
-        except Exception as e:
-            logging.error("Error killing browser: %s", e, exc_info=True)
-            return False
+        return success
 
     def kill_all_browsers(self) -> int:
         """
@@ -447,9 +437,11 @@ class BrowserLauncher:
         killed_count = 0
 
         for browser_type in self.BROWSER_PROCESSES.keys():
-            if self.is_browser_running(browser_type):
-                if self.kill_browser(browser_type, force=True):
-                    killed_count += 1
+            matches = self._collect_process_entries(browser_type)
+            if not matches:
+                continue
+            if self.kill_browser(browser_type, force=True):
+                killed_count += len(matches)
 
         logging.info("Killed %d browser(s)", killed_count)
         return killed_count
@@ -473,7 +465,7 @@ class BrowserLauncher:
             time.sleep(2)
 
         # Relaunch
-        return self.launch_generic(browser_type, **kwargs)
+            return self.launch_generic(browser_type, **kwargs)
 
     def get_browser_info(self, browser_type: str) -> Dict[str, Any]:
         """
@@ -497,15 +489,108 @@ class BrowserLauncher:
 
         proc = self.get_browser_process(browser_type)
         if proc:
-            try:
-                info['running'] = True
-                info['pid'] = proc.pid
-                info['name'] = proc.name()
-                info['memory_mb'] = proc.memory_info().rss / (1024 * 1024)  # Convert to MB
-            except Exception as e:
-                logging.error("Error getting browser info: %s", e)
+            info['running'] = True
+            info['pid'] = proc.pid
+            info['name'] = proc.name
 
         return info
+
+    # ------------------------------------------------------------------ #
+    # Process helpers                                                    #
+    # ------------------------------------------------------------------ #
+    def _collect_process_entries(self, browser_type: str) -> List[ProcessEntry]:
+        """Return a list of matching process entries for the given browser type."""
+        process_names = self.BROWSER_PROCESSES.get(browser_type.lower(), [])
+        if not process_names:
+            return []
+
+        matches: Dict[int, ProcessEntry] = {}
+
+        if self.platform == 'Windows':
+            try:
+                result = subprocess.run(
+                    ["tasklist", "/FO", "CSV", "/NH"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            except Exception as exc:
+                logging.debug("tasklist invocation failed: %s", exc)
+                return []
+
+            output = result.stdout.strip()
+            if not output:
+                return []
+
+            normalized_targets: List[str] = []
+            for candidate in process_names:
+                lowered = candidate.lower()
+                normalized_targets.append(lowered)
+                if not lowered.endswith(".exe"):
+                    normalized_targets.append(f"{lowered}.exe")
+
+            reader = csv.reader(io.StringIO(output))
+            for row in reader:
+                if not row:
+                    continue
+                image_name = row[0].strip('"')
+                try:
+                    pid = int(row[1])
+                except (IndexError, ValueError):
+                    continue
+
+                lowered_image = image_name.lower()
+                if any(target == lowered_image or target in lowered_image for target in normalized_targets):
+                    matches[pid] = ProcessEntry(pid=pid, name=image_name)
+        else:  # macOS / Linux
+            for candidate in process_names:
+                try:
+                    result = subprocess.run(
+                        ["pgrep", "-fl", candidate],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                except Exception as exc:
+                    logging.debug("pgrep failed for %s: %s", candidate, exc)
+                    continue
+
+                if result.returncode != 0:
+                    continue
+
+                for line in result.stdout.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    parts = line.split(None, 1)
+                    try:
+                        pid = int(parts[0])
+                    except (ValueError, IndexError):
+                        continue
+                    name = parts[1] if len(parts) > 1 else candidate
+                    matches[pid] = ProcessEntry(pid=pid, name=name)
+
+        return list(matches.values())
+
+    def _kill_process_entry(self, entry: ProcessEntry, *, force: bool) -> bool:
+        """Terminate a process entry using platform-specific tools."""
+        if self.platform == 'Windows':
+            command = ["taskkill"]
+            if force:
+                command.append("/F")
+            command.extend(["/PID", str(entry.pid)])
+            result = subprocess.run(command, capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                logging.error("taskkill failed for PID %s: %s", entry.pid, (result.stderr or result.stdout).strip())
+                return False
+            return True
+
+        signal = "-9" if force else "-15"
+        result = subprocess.run(["kill", signal, str(entry.pid)], capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            logging.error("kill command failed for PID %s: %s", entry.pid, result.stderr.strip())
+            return False
+        return True
 
     def _get_desktop_path(self) -> Optional[Path]:
         """

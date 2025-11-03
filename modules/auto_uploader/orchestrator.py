@@ -233,19 +233,131 @@ class AutomationOrchestrator:
 
         logging.info(f"Found {len(login_data)} creator account(s) in login_data.txt")
 
-        # TODO: Implement the actual workflow:
-        # 1. Launch browser using browser/launcher.py
-        # 2. For each creator in login_data:
-        #    a. Login using auth/login_manager.py
-        #    b. Validate session using auth/session_validator.py
-        #    c. Find videos in creators_root/{creator_name}/
-        #    d. Upload videos using upload module
-        #    e. Logout using auth/logout_handler.py
+        # Step 1: Launch browser
+        from browser.launcher import BrowserLauncher
 
-        logging.info("⚠️ Intelligent approach workflow not yet fully implemented")
-        logging.info("This will be completed in next phase")
+        browser_config = self.settings.get('browsers', {}).get(account_info['browser_type'], {})
+        launcher = BrowserLauncher(
+            browser_type=account_info['browser_type'],
+            config=browser_config
+        )
 
-        return True
+        driver = None
+        try:
+            logging.info(f"Launching {account_info['browser_type']} browser...")
+            driver = launcher.launch()
+
+            if driver is None:
+                logging.error("Failed to launch browser!")
+                return False
+
+            logging.info("✓ Browser launched successfully")
+
+            # Import intelligent modules
+            from auth.login_manager import LoginManager
+            from auth.session_validator import SessionValidator
+            from auth.logout_handler import LogoutHandler
+            from core.screen_detector import ScreenDetector
+            from utils.mouse_controller import MouseController
+
+            # Initialize components
+            screen_detector = ScreenDetector(driver)
+            mouse = MouseController(driver)
+            login_manager = LoginManager(driver, mouse, screen_detector)
+            session_validator = SessionValidator(driver, screen_detector)
+            logout_handler = LogoutHandler(driver, mouse, screen_detector)
+
+            # Step 2: Process each creator account
+            for creator_data in login_data:
+                try:
+                    profile_name = creator_data['profile_name']
+                    logging.info("="*60)
+                    logging.info(f"Processing creator: {profile_name}")
+                    logging.info("="*60)
+
+                    # Find creator folder
+                    creator_folder = creators_root / profile_name
+                    if not creator_folder.exists():
+                        logging.warning(f"Creator folder not found: {creator_folder}")
+                        continue
+
+                    # Find videos
+                    videos = list(creator_folder.glob("*.mp4"))
+                    if not videos:
+                        logging.warning(f"No videos found in {creator_folder}")
+                        continue
+
+                    logging.info(f"Found {len(videos)} video(s)")
+
+                    # Step 2a: Login
+                    logging.info("Attempting login...")
+                    login_success = login_manager.login(
+                        email=creator_data['email'],
+                        password=creator_data['password']
+                    )
+
+                    if not login_success:
+                        logging.error("Login failed!")
+                        continue
+
+                    logging.info("✓ Login successful")
+
+                    # Step 2b: Validate session
+                    logging.info("Validating session...")
+                    session_result = session_validator.validate_session(full_check=True)
+
+                    if not session_result['valid']:
+                        logging.error(f"Session validation failed: {session_result['issues']}")
+                        continue
+
+                    logging.info("✓ Session validated")
+
+                    # Step 2c: Upload videos
+                    logging.info(f"Uploading {len(videos)} video(s)...")
+
+                    for video_path in videos:
+                        try:
+                            logging.info(f"Uploading: {video_path.name}")
+                            # TODO: Implement actual video upload
+                            # This requires the upload module which is not yet implemented
+                            logging.info("⚠️ Video upload module not yet implemented")
+
+                        except Exception as e:
+                            logging.error(f"Error uploading {video_path.name}: {e}")
+                            continue
+
+                    # Step 2d: Logout
+                    logging.info("Logging out...")
+                    logout_success = logout_handler.logout_and_clear()
+
+                    if logout_success:
+                        logging.info("✓ Logout successful")
+                    else:
+                        logging.warning("Logout had issues")
+
+                except Exception as e:
+                    logging.error(f"Error processing creator {profile_name}: {e}")
+                    import traceback
+                    logging.error(traceback.format_exc())
+                    continue
+
+            return True
+
+        except Exception as e:
+            logging.error(f"Error in intelligent workflow: {e}")
+            import traceback
+            logging.error(traceback.format_exc())
+            return False
+
+        finally:
+            # Always close browser
+            if driver:
+                try:
+                    logging.info("Closing browser...")
+                    driver.quit()
+                    logging.info("✓ Browser closed")
+                except:
+                    pass
 
     def _parse_login_data(self, login_data_path: Path) -> list:
         """

@@ -181,57 +181,87 @@ class WorkflowManager:
             login.page_name or "N/A",
         )
 
-        creator_folder = work_item.creators_root / login.profile_name
-        if not creator_folder.exists():
-            logging.info("Creator folder not found for '%s'; skipping uploads.", login.profile_name)
+        # Step 1: Check if creator has shortcuts in the account's Creators folder
+        # The correct path is: shortcuts_root/account_name/Creators/creator_name/
+        account_creators_folder = work_item.shortcuts_root / work_item.account_name / "Creators"
+        creator_shortcut_folder = account_creators_folder / login.profile_name
+
+        logging.debug("Looking for creator shortcuts at: %s", creator_shortcut_folder)
+
+        if not creator_shortcut_folder.exists():
+            logging.info("Creator shortcut folder not found for '%s'; skipping uploads.", login.profile_name)
+            logging.debug("Expected path: %s", creator_shortcut_folder)
             return True
 
-        videos = self._file_selector.get_pending_videos(
-            creator_folder,
-            tracker=tracker,
-            browser_account=work_item.account_name,
-        )
+        logging.info("✓ Found creator shortcut folder: %s", creator_shortcut_folder)
 
-        if not videos:
-            logging.info("No pending videos for creator '%s'; nothing to upload.", login.profile_name)
-            return True
+        # List available shortcuts for this creator
+        shortcut_files = list(creator_shortcut_folder.glob("*.lnk"))
+        if shortcut_files:
+            logging.info("  → Found %d shortcut(s) for creator '%s':", len(shortcut_files), login.profile_name)
+            for shortcut in shortcut_files:
+                logging.info("    • %s", shortcut.name)
+        else:
+            logging.warning("  → No shortcuts found in creator folder: %s", creator_shortcut_folder)
 
-        creator_success = True
+        # Step 2: TODO - Open shortcuts and perform uploads
+        # For now, just log that we found the creator and its shortcuts
+        logging.info("")
+        logging.info("✓ Creator '%s' is ready for automation", login.profile_name)
+        logging.info("  Shortcuts will be opened in browser when upload feature is implemented")
+        logging.info("")
 
-        for video_path in videos:
-            metadata = self._metadata_handler.load_metadata(creator_folder, video_path.name)
-            logging.debug(
-                "Uploading %s for creator '%s' with metadata keys: %s",
-                video_path.name,
-                login.profile_name,
-                ", ".join(sorted(metadata.keys())) or "none",
-            )
+        # For now, return True since we're only logging shortcut discovery
+        # Actual upload functionality will be added in next phase
+        return True
 
-            upload_ok = self._uploader.upload_single_video(
-                driver=None,  # Driver wiring handled in upload module implementation
-                video_path=video_path,
-                metadata=metadata,
-            )
-
-            status = "completed" if upload_ok else "failed"
-            tracker.record_upload(
-                creator=login.profile_name,
-                video=video_path.name,
-                status=status,
-                account=work_item.account_name,
-                browser_type=work_item.browser_type,
-                metadata={
-                    "page_name": login.page_name,
-                    "page_id": login.page_id,
-                },
-            )
-
-            if not upload_ok:
-                creator_success = False
-                logging.error(
-                    "Upload failed for %s/%s",
-                    login.profile_name,
-                    video_path.name,
-                )
-
-        return creator_success
+        # NOTE: Below is the old logic for direct file uploads - will be replaced with shortcut-based approach
+        # videos = self._file_selector.get_pending_videos(
+        #     creator_folder,
+        #     tracker=tracker,
+        #     browser_account=work_item.account_name,
+        # )
+        #
+        # if not videos:
+        #     logging.info("No pending videos for creator '%s'; nothing to upload.", login.profile_name)
+        #     return True
+        #
+        # creator_success = True
+        #
+        # for video_path in videos:
+        #     metadata = self._metadata_handler.load_metadata(creator_folder, video_path.name)
+        #     logging.debug(
+        #         "Uploading %s for creator '%s' with metadata keys: %s",
+        #         video_path.name,
+        #         login.profile_name,
+        #         ", ".join(sorted(metadata.keys())) or "none",
+        #     )
+        #
+        #     upload_ok = self._uploader.upload_single_video(
+        #         driver=None,  # Driver wiring handled in upload module implementation
+        #         video_path=video_path,
+        #         metadata=metadata,
+        #     )
+        #
+        #     status = "completed" if upload_ok else "failed"
+        #     tracker.record_upload(
+        #         creator=login.profile_name,
+        #         video=video_path.name,
+        #         status=status,
+        #         account=work_item.account_name,
+        #         browser_type=work_item.browser_type,
+        #         metadata={
+        #             "page_name": login.page_name,
+        #             "page_id": login.page_id,
+        #         },
+        #     )
+        #
+        #     if not upload_ok:
+        #         creator_success = False
+        #         logging.error(
+        #             "Upload failed for %s/%s",
+        #             login.profile_name,
+        #             video_path.name,
+        #         )
+        #
+        # return creator_success

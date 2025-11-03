@@ -289,32 +289,77 @@ class UploadOrchestrator:
             logging.warning("Skipping unrecognised line %d in %s", idx, login_path)
 
         if not entries and kv_pairs:
-            profile_name = kv_pairs.get("profile_name") or account_name
-            extras = {
-                key: value
-                for key, value in kv_pairs.items()
-                if key
-                not in {
-                    "profile_name",
-                    "email",
-                    "password",
-                    "page_name",
-                    "page_id",
-                    "browser",
-                    "browser_type",
-                }
-            }
+            # No pipe-separated entries found, use account-based discovery
+            # Look for creators in the account's Creators subfolder
+            account_dir = login_path.parent
+            creators_subfolder = account_dir / "Creators"
 
-            entries.append(
-                CreatorLogin(
-                    profile_name=profile_name,
-                    email=kv_pairs.get("email", ""),
-                    password=kv_pairs.get("password", ""),
-                    page_name=kv_pairs.get("page_name", ""),
-                    page_id=kv_pairs.get("page_id", ""),
-                    extras=extras,
+            if creators_subfolder.exists():
+                # Discover creator folders from Creators subfolder
+                creator_dirs = [d for d in creators_subfolder.iterdir() if d.is_dir()]
+                logging.debug(
+                    "Found %d creator folder(s) in %s: %s",
+                    len(creator_dirs),
+                    creators_subfolder,
+                    ", ".join(d.name for d in creator_dirs)
                 )
-            )
+
+                # Create CreatorLogin entries for each discovered creator
+                for creator_dir in creator_dirs:
+                    extras = {
+                        key: value
+                        for key, value in kv_pairs.items()
+                        if key
+                        not in {
+                            "profile_name",
+                            "email",
+                            "password",
+                            "page_name",
+                            "page_id",
+                            "browser",
+                            "browser_type",
+                        }
+                    }
+
+                    entries.append(
+                        CreatorLogin(
+                            profile_name=creator_dir.name,  # Use actual creator folder name
+                            email=kv_pairs.get("email", ""),
+                            password=kv_pairs.get("password", ""),
+                            page_name=kv_pairs.get("page_name", ""),
+                            page_id=kv_pairs.get("page_id", ""),
+                            extras=extras,
+                        )
+                    )
+            else:
+                # Fallback to old behavior if no Creators subfolder
+                logging.debug("No Creators subfolder found, using account name as profile")
+                profile_name = kv_pairs.get("profile_name") or account_name
+                extras = {
+                    key: value
+                    for key, value in kv_pairs.items()
+                    if key
+                    not in {
+                        "profile_name",
+                        "email",
+                        "password",
+                        "page_name",
+                        "page_id",
+                        "browser",
+                        "browser_type",
+                    }
+                }
+
+                entries.append(
+                    CreatorLogin(
+                        profile_name=profile_name,
+                        email=kv_pairs.get("email", ""),
+                        password=kv_pairs.get("password", ""),
+                        page_name=kv_pairs.get("page_name", ""),
+                        page_id=kv_pairs.get("page_id", ""),
+                        extras=extras,
+                    )
+                )
 
         return entries, kv_pairs
 

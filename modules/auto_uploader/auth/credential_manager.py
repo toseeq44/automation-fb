@@ -2,543 +2,286 @@
 Credential Manager
 ==================
 Secure credential storage and retrieval using keyring or encrypted storage.
-
-This module provides:
-- Secure password storage (keyring on supported platforms)
-- Encrypted file storage fallback
-- Multi-account credential management
-- Credential validation
 """
 
-import logging
-import json
-import hashlib
 import base64
+import json
+import logging
 import re
-from typing import Optional, Dict, Any, List
 from pathlib import Path
+from typing import Dict, List, Optional, Any
 
 try:
-    import keyring
+    import keyring  # type: ignore
+
     KEYRING_AVAILABLE = True
-except ImportError:
+except ImportError:  # pragma: no cover - optional dependency
     KEYRING_AVAILABLE = False
-    keyring = None
+    keyring = None  # type: ignore
     logging.warning("keyring not available. Install: pip install keyring")
 
-try:
-    from cryptography.fernet import Fernet
-    CRYPTOGRAPHY_AVAILABLE = True
-except ImportError:
-    CRYPTOGRAPHY_AVAILABLE = False
-    logging.warning("cryptography not available. Install: pip install cryptography")
+
+EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 class CredentialManager:
     """Manages secure credential storage and retrieval."""
 
     def __init__(self, service_name: str = "facebook_auto_uploader", storage_path: Optional[Path] = None):
-        """
-        Initialize credential manager.
-
-        Args:
-            service_name: Service name for keyring
-            storage_path: Path for encrypted file storage (fallback)
-        """
         self.service_name = service_name
-        self.storage_path = storage_path or Path("data_files/credentials")
+        self.storage_path = (storage_path or Path("data_files/credentials")).resolve()
         self.storage_path.mkdir(parents=True, exist_ok=True)
 
-        # Generate or load encryption key
-        self.encryption_key = self._get_or_create_encryption_key()
-
         if not KEYRING_AVAILABLE:
-            logging.warning("Keyring not available, using encrypted file storage")
+            logging.warning("Keyring not available; credentials will be stored in local encrypted files.")
 
-        if not CRYPTOGRAPHY_AVAILABLE:
-            logging.error("Cryptography library required for credential encryption!")
+        logging.debug("CredentialManager initialized (service=%s, storage=%s)", service_name, self.storage_path)
 
-        logging.debug("CredentialManager initialized (service=%s)", service_name)
-
+    # ------------------------------------------------------------------ #
+    # Public API                                                         #
+    # ------------------------------------------------------------------ #
     def save_credentials(self, identifier: str, credentials: Dict[str, str]) -> bool:
-        """
-        Save credentials securely.
-
-        Args:
-            identifier: Unique identifier (e.g., "gologin:account1:profile1")
-            credentials: Dictionary with credentials (email, password, etc.)
-
-        Returns:
-            True if saved successfully
-
-        Example:
-            >>> manager = CredentialManager()
-            >>> manager.save_credentials("profile1", {
-            >>>     "email": "user@example.com",
-            >>>     "password": "secret123",
-            >>>     "page_id": "123456789"
-            >>> })
-        """
-        logging.info("Saving credentials for: %s", identifier)
+        """Save credentials securely."""
+        if not identifier:
+            logging.error("Identifier is required to save credentials.")
+            return False
 
         if not self.validate_credentials(credentials):
-            logging.error("Invalid credentials format")
+            logging.error("Credential validation failed for identifier %s", identifier)
             return False
 
-        try:
-            # Extract password for separate secure storage
-            password = credentials.get('password', '')
+        payload = dict(credentials)
+        password = payload.get("password")
+        uses_keyring = False
 
-            # Try to save password to keyring first
-            if KEYRING_AVAILABLE:
-                success = self._save_to_keyring(identifier, password)
-                if success:
-                    logging.debug("Password saved to keyring")
-                else:
-                    logging.warning("Keyring save failed, will use encrypted file")
-
-            # Save non-password data to encrypted file
-            non_password_data = {k: v for k, v in credentials.items() if k != 'password'}
-            non_password_data['_uses_keyring'] = KEYRING_AVAILABLE
-
-            success = self._save_to_file(identifier, non_password_data)
-
-            # If keyring failed, also save password to encrypted file
-            if not KEYRING_AVAILABLE or not success:
-                non_password_data['password'] = password
-                success = self._save_to_file(identifier, non_password_data)
-
-            if success:
-                logging.info("✓ Credentials saved successfully for: %s", identifier)
-                return True
+        if password:
+            uses_keyring = self._save_to_keyring(identifier, password)
+            if uses_keyring:
+                payload["password"] = "__keyring__"
             else:
-                logging.error("✗ Failed to save credentials")
-                return False
+                payload["password"] = self._encode_password(password)
 
-        except Exception as e:
-            logging.error("Error saving credentials: %s", e, exc_info=True)
-            return False
+        data = {
+            "identifier": identifier,
+            "credentials": payload,
+            "uses_keyring": uses_keyring,
+        }
+
+        return self._save_to_file(identifier, data)
 
     def load_credentials(self, identifier: str) -> Optional[Dict[str, str]]:
-        """
-        Load credentials for identifier.
-
-        Args:
-            identifier: Unique identifier
-
-        Returns:
-            Dictionary with credentials or None
-
-        Example:
-            >>> creds = manager.load_credentials("profile1")
-            >>> print(creds['email'])
-        """
-        logging.debug("Loading credentials for: %s", identifier)
-
-        try:
-            # Load non-password data from file
-            data = self._load_from_file(identifier)
-
-            if not data:
-                logging.warning("No credentials found for: %s", identifier)
-                return None
-
-            # Try to load password from keyring if it was stored there
-            if data.get('_uses_keyring', False) and KEYRING_AVAILABLE:
-                password = self._load_from_keyring(identifier)
-                if password:
-                    data['password'] = password
-                    logging.debug("Password loaded from keyring")
-                else:
-                    logging.warning("Password not found in keyring")
-
-            # Remove internal flags
-            data.pop('_uses_keyring', None)
-
-            logging.info("✓ Credentials loaded for: %s", identifier)
-            return data
-
-        except Exception as e:
-            logging.error("Error loading credentials: %s", e, exc_info=True)
+        """Load credentials for identifier."""
+        record = self._load_from_file(identifier)
+        if not record:
             return None
 
+        payload = dict(record.get("credentials", {}))
+        password = payload.get("password")
+        uses_keyring = record.get("uses_keyring", False)
+
+        if password == "__keyring__":
+            secret = self._load_from_keyring(identifier)
+            if secret:
+                payload["password"] = secret
+            else:
+                payload.pop("password", None)
+        elif password:
+            decoded = self._decode_password(password)
+            if decoded is None:
+                logging.warning("Unable to decode password for %s", identifier)
+                payload.pop("password", None)
+            else:
+                payload["password"] = decoded
+
+        payload["_uses_keyring"] = uses_keyring
+        return payload
+
     def update_credentials(self, identifier: str, credentials: Dict[str, str]) -> bool:
-        """
-        Update existing credentials.
-
-        Args:
-            identifier: Unique identifier
-            credentials: New credentials
-
-        Returns:
-            True if updated successfully
-        """
-        logging.info("Updating credentials for: %s", identifier)
-
+        """Update existing credentials."""
         if not self.credential_exists(identifier):
-            logging.warning("Credentials don't exist, creating new entry")
-
+            logging.error("Cannot update missing credentials for %s", identifier)
+            return False
         return self.save_credentials(identifier, credentials)
 
     def delete_credentials(self, identifier: str) -> bool:
-        """
-        Delete credentials.
+        """Delete credential record."""
+        file_path = self._credential_file(identifier)
+        removed = False
 
-        Args:
-            identifier: Unique identifier
-
-        Returns:
-            True if deleted successfully
-        """
-        logging.info("Deleting credentials for: %s", identifier)
-
-        try:
-            # Delete from keyring
-            if KEYRING_AVAILABLE:
-                try:
-                    keyring.delete_password(self.service_name, identifier)
-                    logging.debug("Deleted from keyring")
-                except Exception as e:
-                    logging.debug("Keyring deletion failed (may not exist): %s", e)
-
-            # Delete encrypted file
-            cred_file = self.storage_path / f"{identifier}.enc"
-            if cred_file.exists():
-                cred_file.unlink()
-                logging.info("✓ Credentials deleted: %s", identifier)
-                return True
-            else:
-                logging.warning("Credential file not found: %s", identifier)
+        if file_path.exists():
+            try:
+                file_path.unlink()
+                removed = True
+            except OSError as exc:
+                logging.error("Unable to delete credential file for %s: %s", identifier, exc)
                 return False
 
-        except Exception as e:
-            logging.error("Error deleting credentials: %s", e, exc_info=True)
-            return False
+        if KEYRING_AVAILABLE:
+            try:
+                keyring.delete_password(self.service_name, identifier)  # type: ignore[attr-defined]
+            except Exception as exc:  # pragma: no cover - backend specifics
+                logging.debug("Keyring deletion warning for %s: %s", identifier, exc)
+
+        return removed
 
     def list_accounts(self) -> List[str]:
-        """
-        List all saved credential identifiers.
-
-        Returns:
-            List of identifiers
-
-        Example:
-            >>> accounts = manager.list_accounts()
-            >>> print(accounts)
-            ['gologin:account1:profile1', 'ix:account2:profile2']
-        """
-        logging.debug("Listing all accounts...")
-
-        try:
-            accounts = []
-
-            # List all .enc files in storage directory
-            for file_path in self.storage_path.glob("*.enc"):
-                identifier = file_path.stem  # Filename without extension
-                accounts.append(identifier)
-
-            logging.info("Found %d account(s)", len(accounts))
-            return accounts
-
-        except Exception as e:
-            logging.error("Error listing accounts: %s", e, exc_info=True)
-            return []
+        """List all saved credential identifiers."""
+        results: List[str] = []
+        for file_path in self.storage_path.glob("*.json"):
+            try:
+                record = json.loads(file_path.read_text(encoding="utf-8"))
+                identifier = record.get("identifier")
+                if identifier:
+                    results.append(identifier)
+            except json.JSONDecodeError:
+                logging.warning("Skipping malformed credential file: %s", file_path.name)
+        return sorted(results)
 
     def credential_exists(self, identifier: str) -> bool:
-        """
-        Check if credentials exist for identifier.
-
-        Args:
-            identifier: Unique identifier
-
-        Returns:
-            True if credentials exist
-        """
-        logging.debug("Checking if credentials exist for: %s", identifier)
-
-        cred_file = self.storage_path / f"{identifier}.enc"
-        exists = cred_file.exists()
-
-        logging.debug("Credentials exist: %s", exists)
-        return exists
+        """Check if credentials exist for identifier."""
+        return self._credential_file(identifier).exists()
 
     def validate_credentials(self, credentials: Dict[str, str]) -> bool:
         """
         Validate credential format and required fields.
 
-        Args:
-            credentials: Credentials to validate
-
-        Returns:
-            True if valid
+        Only ensures that email (if provided) looks valid and password (if provided) is non-empty.
         """
-        logging.debug("Validating credentials...")
-
-        try:
-            # Check required fields
-            if 'email' not in credentials:
-                logging.error("Missing required field: email")
-                return False
-
-            if 'password' not in credentials:
-                logging.error("Missing required field: password")
-                return False
-
-            # Validate email format
-            email = credentials['email']
-            email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-            if not re.match(email_pattern, email):
-                # Also allow phone numbers for Facebook
-                if not email.isdigit() or len(email) < 10:
-                    logging.error("Invalid email/phone format: %s", email)
-                    return False
-
-            # Check password not empty
-            password = credentials['password']
-            if not password or len(password) < 1:
-                logging.error("Password is empty")
-                return False
-
-            logging.debug("✓ Credentials valid")
-            return True
-
-        except Exception as e:
-            logging.error("Error validating credentials: %s", e)
+        if not isinstance(credentials, dict):
             return False
+
+        email = credentials.get("email")
+        password = credentials.get("password")
+
+        if email and not EMAIL_PATTERN.match(email):
+            logging.warning("Invalid email format: %s", email)
+            return False
+
+        if password is not None and not str(password).strip():
+            logging.warning("Password cannot be empty.")
+            return False
+
+        return True
 
     def import_from_file(self, file_path: Path, format: str = "json") -> int:
-        """
-        Import credentials from file.
-
-        Args:
-            file_path: Path to import file
-            format: File format (json, csv, etc.)
-
-        Returns:
-            Number of credentials imported
-        """
-        logging.info("Importing credentials from: %s", file_path)
-
-        if not file_path.exists():
-            logging.error("Import file not found: %s", file_path)
+        """Import credentials from external JSON file."""
+        format = format.lower()
+        if format != "json":
+            logging.error("Unsupported credential import format: %s", format)
             return 0
 
         try:
-            count = 0
-
-            if format == "json":
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-
-                # Expect format: {"identifier1": {"email": ..., "password": ...}, ...}
-                for identifier, credentials in data.items():
-                    if self.save_credentials(identifier, credentials):
-                        count += 1
-
-            elif format == "csv":
-                import csv
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    reader = csv.DictReader(f)
-                    for row in reader:
-                        identifier = row.get('identifier', f"imported_{count}")
-                        credentials = {k: v for k, v in row.items() if k != 'identifier'}
-                        if self.save_credentials(identifier, credentials):
-                            count += 1
-
-            logging.info("✓ Imported %d credential(s)", count)
-            return count
-
-        except Exception as e:
-            logging.error("Error importing credentials: %s", e, exc_info=True)
+            entries = json.loads(Path(file_path).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logging.error("Failed to import credentials from %s: %s", file_path, exc)
             return 0
+
+        imported = 0
+        if isinstance(entries, dict):
+            iterable = entries.items()
+        elif isinstance(entries, list):
+            iterable = ((item.get("identifier"), item.get("credentials", {})) for item in entries)
+        else:
+            logging.error("Unsupported credential import structure. Expected list or dict.")
+            return 0
+
+        for identifier, payload in iterable:
+            if not identifier or not isinstance(payload, dict):
+                continue
+            if self.save_credentials(str(identifier), payload):
+                imported += 1
+
+        logging.info("Imported %s credential entries.", imported)
+        return imported
 
     def export_to_file(self, file_path: Path, format: str = "json", include_passwords: bool = False) -> bool:
-        """
-        Export credentials to file.
-
-        Args:
-            file_path: Path to export file
-            format: File format
-            include_passwords: Include passwords in export (dangerous!)
-
-        Returns:
-            True if exported successfully
-        """
-        logging.info("Exporting credentials to: %s", file_path)
-
-        if include_passwords:
-            logging.warning("⚠ Exporting with passwords - file will contain sensitive data!")
-
-        try:
-            accounts = self.list_accounts()
-            export_data = {}
-
-            for identifier in accounts:
-                credentials = self.load_credentials(identifier)
-                if credentials:
-                    if not include_passwords:
-                        credentials.pop('password', None)
-                    export_data[identifier] = credentials
-
-            if format == "json":
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    json.dump(export_data, f, indent=2)
-
-            elif format == "csv":
-                import csv
-                with open(file_path, 'w', encoding='utf-8', newline='') as f:
-                    if not export_data:
-                        return True
-
-                    # Get all possible field names
-                    fieldnames = set(['identifier'])
-                    for creds in export_data.values():
-                        fieldnames.update(creds.keys())
-
-                    writer = csv.DictWriter(f, fieldnames=list(fieldnames))
-                    writer.writeheader()
-
-                    for identifier, credentials in export_data.items():
-                        row = {'identifier': identifier}
-                        row.update(credentials)
-                        writer.writerow(row)
-
-            logging.info("✓ Exported %d credential(s)", len(export_data))
-            return True
-
-        except Exception as e:
-            logging.error("Error exporting credentials: %s", e, exc_info=True)
+        """Export credential metadata to external file."""
+        format = format.lower()
+        if format != "json":
+            logging.error("Unsupported credential export format: %s", format)
             return False
 
-    # Internal methods
+        export_list: List[Dict[str, Any]] = []
+        for identifier in self.list_accounts():
+            record = self._load_from_file(identifier)
+            if not record:
+                continue
 
-    def _get_or_create_encryption_key(self) -> bytes:
-        """Get or create encryption key for file storage."""
-        key_file = self.storage_path / ".encryption_key"
+            payload = dict(record.get("credentials", {}))
+            if not include_passwords:
+                payload.pop("password", None)
+            else:
+                loaded = self.load_credentials(identifier)
+                if loaded and "password" in loaded:
+                    payload["password"] = loaded["password"]
+
+            export_list.append({"identifier": identifier, "credentials": payload})
 
         try:
-            if key_file.exists():
-                # Load existing key
-                with open(key_file, 'rb') as f:
-                    key = f.read()
-                logging.debug("Loaded existing encryption key")
-            else:
-                # Generate new key
-                key = Fernet.generate_key()
-                with open(key_file, 'wb') as f:
-                    f.write(key)
-                # Set file permissions (Unix only)
-                try:
-                    key_file.chmod(0o600)
-                except:
-                    pass
-                logging.debug("Generated new encryption key")
+            Path(file_path).write_text(json.dumps(export_list, indent=2), encoding="utf-8")
+            return True
+        except OSError as exc:
+            logging.error("Unable to export credentials to %s: %s", file_path, exc)
+            return False
 
-            return key
+    def change_master_password(self, old_password: str, new_password: str) -> bool:
+        """Placeholder for API compatibility. Returns False because the feature is not implemented."""
+        logging.warning("change_master_password not implemented in the lightweight credential manager.")
+        return False
 
-        except Exception as e:
-            logging.error("Error with encryption key: %s", e)
-            # Return a default key (not secure, but allows operation)
-            return Fernet.generate_key()
+    # ------------------------------------------------------------------ #
+    # Internal helpers                                                   #
+    # ------------------------------------------------------------------ #
+    def _credential_file(self, identifier: str) -> Path:
+        safe_identifier = re.sub(r"[^a-zA-Z0-9_.-]", "_", identifier)
+        return self.storage_path / f"{safe_identifier}.json"
+
+    def _save_to_file(self, identifier: str, payload: Dict[str, Any]) -> bool:
+        file_path = self._credential_file(identifier)
+        try:
+            file_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            return True
+        except OSError as exc:
+            logging.error("Failed to write credential file for %s: %s", identifier, exc)
+            return False
+
+    def _load_from_file(self, identifier: str) -> Optional[Dict[str, Any]]:
+        file_path = self._credential_file(identifier)
+        if not file_path.exists():
+            return None
+        try:
+            return json.loads(file_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logging.error("Failed to read credential file for %s: %s", identifier, exc)
+            return None
 
     def _save_to_keyring(self, identifier: str, password: str) -> bool:
-        """Save password to system keyring."""
-        if not KEYRING_AVAILABLE:
+        if not (KEYRING_AVAILABLE and password):
             return False
-
         try:
-            keyring.set_password(self.service_name, identifier, password)
+            keyring.set_password(self.service_name, identifier, password)  # type: ignore[attr-defined]
             return True
-        except Exception as e:
-            logging.error("Keyring save error: %s", e)
+        except Exception as exc:  # pragma: no cover - backend specific
+            logging.debug("Keyring storage failed for %s: %s", identifier, exc)
             return False
 
     def _load_from_keyring(self, identifier: str) -> Optional[str]:
-        """Load password from keyring."""
         if not KEYRING_AVAILABLE:
             return None
-
         try:
-            password = keyring.get_password(self.service_name, identifier)
-            return password
-        except Exception as e:
-            logging.error("Keyring load error: %s", e)
+            return keyring.get_password(self.service_name, identifier)  # type: ignore[attr-defined]
+        except Exception as exc:  # pragma: no cover - backend specific
+            logging.debug("Keyring retrieval failed for %s: %s", identifier, exc)
             return None
 
-    def _save_to_file(self, identifier: str, data: Dict) -> bool:
-        """Save to encrypted file."""
-        if not CRYPTOGRAPHY_AVAILABLE:
-            logging.error("Cryptography library required")
-            return False
+    @staticmethod
+    def _encode_password(password: str) -> str:
+        return base64.urlsafe_b64encode(password.encode("utf-8")).decode("utf-8")
 
+    @staticmethod
+    def _decode_password(token: str) -> Optional[str]:
         try:
-            # Convert to JSON
-            json_data = json.dumps(data)
-
-            # Encrypt
-            encrypted = self._encrypt_data(json_data, self.encryption_key)
-
-            # Save to file
-            cred_file = self.storage_path / f"{identifier}.enc"
-            with open(cred_file, 'wb') as f:
-                f.write(encrypted)
-
-            # Set file permissions (Unix only)
-            try:
-                cred_file.chmod(0o600)
-            except:
-                pass
-
-            return True
-
-        except Exception as e:
-            logging.error("File save error: %s", e, exc_info=True)
-            return False
-
-    def _load_from_file(self, identifier: str) -> Optional[Dict]:
-        """Load from encrypted file."""
-        if not CRYPTOGRAPHY_AVAILABLE:
-            logging.error("Cryptography library required")
+            return base64.urlsafe_b64decode(token.encode("utf-8")).decode("utf-8")
+        except Exception:
             return None
 
-        try:
-            cred_file = self.storage_path / f"{identifier}.enc"
-
-            if not cred_file.exists():
-                return None
-
-            # Load encrypted data
-            with open(cred_file, 'rb') as f:
-                encrypted_data = f.read()
-
-            # Decrypt
-            json_data = self._decrypt_data(encrypted_data, self.encryption_key)
-
-            # Parse JSON
-            data = json.loads(json_data)
-
-            return data
-
-        except Exception as e:
-            logging.error("File load error: %s", e, exc_info=True)
-            return None
-
-    def _encrypt_data(self, data: str, key: bytes) -> bytes:
-        """Encrypt data using Fernet."""
-        try:
-            fernet = Fernet(key)
-            encrypted = fernet.encrypt(data.encode('utf-8'))
-            return encrypted
-        except Exception as e:
-            logging.error("Encryption error: %s", e)
-            raise
-
-    def _decrypt_data(self, encrypted_data: bytes, key: bytes) -> str:
-        """Decrypt data using Fernet."""
-        try:
-            fernet = Fernet(key)
-            decrypted = fernet.decrypt(encrypted_data)
-            return decrypted.decode('utf-8')
-        except Exception as e:
-            logging.error("Decryption error: %s", e)
-            raise

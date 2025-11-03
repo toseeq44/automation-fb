@@ -12,22 +12,18 @@ import inspect
 import logging
 
 try:  # pragma: no cover - import side effects exercised at runtime
-    from .core import FacebookAutoUploader
+    import sys
+    # Add parent directory to path to import orchestrator
+    parent_dir = Path(__file__).parent.parent
+    if str(parent_dir) not in sys.path:
+        sys.path.insert(0, str(parent_dir))
+
+    from orchestrator import AutomationOrchestrator
     from .configuration import SettingsManager
     from .ui_configurator import InitialSetupUI
 except ImportError:
-    FacebookAutoUploader = None
+    AutomationOrchestrator = None
     SettingsManager = None
-    InitialSetupUI = None
-
-try:  # pragma: no cover - import side effects exercised at runtime
-    from .configuration import SettingsManager
-except ImportError:  # pragma: no cover - compatibility guard
-    SettingsManager = None
-
-try:  # pragma: no cover - import side effects exercised at runtime
-    from .ui_configurator import InitialSetupUI
-except ImportError:  # pragma: no cover - compatibility guard
     InitialSetupUI = None
 
 try:  # pragma: no cover - import side effects exercised at runtime
@@ -114,7 +110,9 @@ class UploaderThread(QThread):
             self.log_signal.emit("Initializing Facebook Auto Uploader...")
 
             try:
-                self.uploader = FacebookAutoUploader()
+                # Use parent directory (auto_uploader) as base, not _legacy folder
+                base_dir = Path(__file__).parent.parent
+                self.uploader = AutomationOrchestrator(base_dir=base_dir)
             except ImportError as e:
                 self.log_signal.emit(f"\n❌ DEPENDENCY ERROR:\n{str(e)}\n")
                 self.log_signal.emit("\nRequired packages:")
@@ -296,6 +294,25 @@ class AutoUploaderPage(QWidget):
         self.clear_log_btn.clicked.connect(lambda: self.log_output.clear())
         btn_layout.addWidget(self.clear_log_btn)
 
+        # Approaches button (NEW - select automation approach)
+        self.approaches_btn = QPushButton("⚙️ Approaches")
+        self.approaches_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #9B59B6;
+                color: #F5F6F5;
+                border: none;
+                padding: 12px 24px;
+                border-radius: 8px;
+                font-size: 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #8E44AD;
+            }
+        """)
+        self.approaches_btn.clicked.connect(self.show_approach_selector)
+        btn_layout.addWidget(self.approaches_btn)
+
         back_btn = QPushButton("⬅ Back")
         back_btn.setStyleSheet("""
             QPushButton {
@@ -320,7 +337,7 @@ class AutoUploaderPage(QWidget):
 
     def start_upload(self):
         """Start upload process"""
-        if FacebookAutoUploader is None or SettingsManager is None or InitialSetupUI is None:
+        if AutomationOrchestrator is None or SettingsManager is None or InitialSetupUI is None:
             QMessageBox.warning(
                 self,
                 "Module Not Available",
@@ -328,8 +345,9 @@ class AutoUploaderPage(QWidget):
             )
             return
 
-        base_dir = Path(__file__).resolve().parent
-        settings_path = base_dir / 'data' / 'settings.json'
+        # Use parent directory (auto_uploader) as base, not _legacy folder
+        base_dir = Path(__file__).resolve().parent.parent
+        settings_path = base_dir / 'data_files' / 'settings.json'  # ✓ FIXED PATH
 
         try:
             SettingsManager(
@@ -399,9 +417,328 @@ class AutoUploaderPage(QWidget):
         else:
             self.status_text.setText("Failed/Stopped")
             self.status_text.setStyleSheet("font-size: 14px; color: #E74C3C;")
-            self.log_output.append("\n" + "="*60)
-            self.log_output.append("✗ Upload process failed or was stopped")
-            self.log_output.append("="*60)
+
+    def show_approach_selector(self):
+        """Show dialog to select automation approach and configure paths"""
+        from PyQt5.QtWidgets import (QDialog, QRadioButton, QButtonGroup, QDialogButtonBox,
+                                      QLineEdit, QFileDialog, QGroupBox)
+
+        # Load current approach and paths from settings
+        current_approach = self.get_current_approach()
+        current_paths = self.get_current_paths()
+
+        # Create dialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Configure Automation")
+        dialog.setModal(True)
+        dialog.setStyleSheet("background-color: #2C2F33; color: #F5F6F5;")
+        dialog.setMinimumWidth(650)
+        dialog.setMinimumHeight(700)
+
+        layout = QVBoxLayout()
+        layout.setSpacing(15)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        # Title
+        title_label = QLabel("⚙️ Choose Automation Approach")
+        title_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #1ABC9C;")
+        layout.addWidget(title_label)
+
+        # Description
+        desc_label = QLabel("Select which approach the bot should use for automation:")
+        desc_label.setStyleSheet("font-size: 13px; color: #B9BBBE; margin-bottom: 10px;")
+        desc_label.setWordWrap(True)
+        layout.addWidget(desc_label)
+
+        # Radio buttons
+        button_group = QButtonGroup(dialog)
+
+        # Legacy approach
+        legacy_radio = QRadioButton("🔧 Legacy Approach (Original Code)")
+        legacy_radio.setStyleSheet("""
+            QRadioButton {
+                font-size: 14px;
+                color: #F5F6F5;
+                spacing: 10px;
+            }
+            QRadioButton::indicator {
+                width: 18px;
+                height: 18px;
+            }
+        """)
+        legacy_desc = QLabel("   Uses the original automation code. Stable and tested.")
+        legacy_desc.setStyleSheet("font-size: 12px; color: #95A5A6; margin-left: 30px;")
+        legacy_desc.setWordWrap(True)
+
+        button_group.addButton(legacy_radio, 0)
+        layout.addWidget(legacy_radio)
+        layout.addWidget(legacy_desc)
+
+        # Intelligent approach
+        intelligent_radio = QRadioButton("🤖 Intelligent Approach (AI-Powered)")
+        intelligent_radio.setStyleSheet("""
+            QRadioButton {
+                font-size: 14px;
+                color: #F5F6F5;
+                spacing: 10px;
+            }
+            QRadioButton::indicator {
+                width: 18px;
+                height: 18px;
+            }
+        """)
+        intelligent_desc = QLabel("   Uses new modular code with:\n   • Image recognition for UI detection\n   • Human-like mouse movements with bezier curves\n   • Circular idle animations for trust-building\n   • Intelligent login/logout with autofill handling")
+        intelligent_desc.setStyleSheet("font-size: 12px; color: #95A5A6; margin-left: 30px;")
+        intelligent_desc.setWordWrap(True)
+
+        button_group.addButton(intelligent_radio, 1)
+        layout.addWidget(intelligent_radio)
+        layout.addWidget(intelligent_desc)
+
+        # Set current selection
+        if current_approach == "intelligent":
+            intelligent_radio.setChecked(True)
+        else:
+            legacy_radio.setChecked(True)
+
+        # Current selection indicator
+        current_label = QLabel(f"Current: {current_approach.upper()}")
+        current_label.setStyleSheet("font-size: 12px; color: #43B581; margin-top: 10px;")
+        layout.addWidget(current_label)
+
+        # Path configuration section
+        path_group = QGroupBox("📁 Folder Configuration")
+        path_group.setStyleSheet("""
+            QGroupBox {
+                font-size: 14px;
+                font-weight: bold;
+                color: #1ABC9C;
+                border: 2px solid #1ABC9C;
+                border-radius: 8px;
+                margin-top: 15px;
+                padding-top: 15px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+        """)
+        path_layout = QVBoxLayout()
+        path_layout.setSpacing(10)
+
+        # Creators folder
+        creators_label = QLabel("Creators Folder (where video folders are):")
+        creators_label.setStyleSheet("font-size: 12px; color: #B9BBBE;")
+        path_layout.addWidget(creators_label)
+
+        creators_h_layout = QHBoxLayout()
+        self.creators_path_input = QLineEdit(current_paths.get('creators_root', ''))
+        self.creators_path_input.setPlaceholderText("Select folder containing creator video folders...")
+        self.creators_path_input.setStyleSheet("""
+            QLineEdit {
+                background-color: #40444B;
+                color: #F5F6F5;
+                border: 1px solid #1ABC9C;
+                border-radius: 5px;
+                padding: 8px;
+                font-size: 12px;
+            }
+        """)
+        creators_browse_btn = QPushButton("Browse...")
+        creators_browse_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #7289DA;
+                color: #F5F6F5;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 5px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #677BC4;
+            }
+        """)
+        creators_browse_btn.clicked.connect(lambda: self.browse_folder(self.creators_path_input, "Select Creators Folder"))
+        creators_h_layout.addWidget(self.creators_path_input)
+        creators_h_layout.addWidget(creators_browse_btn)
+        path_layout.addLayout(creators_h_layout)
+
+        # Shortcuts folder
+        shortcuts_label = QLabel("Shortcuts Folder (where login_data.txt files are):")
+        shortcuts_label.setStyleSheet("font-size: 12px; color: #B9BBBE; margin-top: 10px;")
+        path_layout.addWidget(shortcuts_label)
+
+        shortcuts_h_layout = QHBoxLayout()
+        self.shortcuts_path_input = QLineEdit(current_paths.get('shortcuts_root', ''))
+        self.shortcuts_path_input.setPlaceholderText("Select folder containing browser account shortcuts...")
+        self.shortcuts_path_input.setStyleSheet("""
+            QLineEdit {
+                background-color: #40444B;
+                color: #F5F6F5;
+                border: 1px solid #1ABC9C;
+                border-radius: 5px;
+                padding: 8px;
+                font-size: 12px;
+            }
+        """)
+        shortcuts_browse_btn = QPushButton("Browse...")
+        shortcuts_browse_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #7289DA;
+                color: #F5F6F5;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 5px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #677BC4;
+            }
+        """)
+        shortcuts_browse_btn.clicked.connect(lambda: self.browse_folder(self.shortcuts_path_input, "Select Shortcuts Folder"))
+        shortcuts_h_layout.addWidget(self.shortcuts_path_input)
+        shortcuts_h_layout.addWidget(shortcuts_browse_btn)
+        path_layout.addLayout(shortcuts_h_layout)
+
+        path_group.setLayout(path_layout)
+        layout.addWidget(path_group)
+
+        # Buttons
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.setStyleSheet("""
+            QPushButton {
+                background-color: #1ABC9C;
+                color: #F5F6F5;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 5px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #16A085;
+            }
+        """)
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        layout.addWidget(button_box)
+
+        dialog.setLayout(layout)
+
+        # Show dialog and get result
+        if dialog.exec_() == QDialog.Accepted:
+            selected_id = button_group.checkedId()
+            new_approach = "intelligent" if selected_id == 1 else "legacy"
+
+            # Get paths from inputs
+            new_paths = {
+                'creators_root': self.creators_path_input.text().strip(),
+                'shortcuts_root': self.shortcuts_path_input.text().strip()
+            }
+
+            # Validate paths
+            if not new_paths['creators_root'] or not new_paths['shortcuts_root']:
+                QMessageBox.warning(
+                    self,
+                    "Missing Paths",
+                    "Please select both Creators and Shortcuts folders."
+                )
+                return
+
+            # Save to settings
+            if self.save_approach_and_paths(new_approach, new_paths):
+                self.log_output.append(f"\n✓ Approach changed to: {new_approach.upper()}")
+                self.log_output.append(f"✓ Creators folder: {new_paths['creators_root']}")
+                self.log_output.append(f"✓ Shortcuts folder: {new_paths['shortcuts_root']}")
+                QMessageBox.information(
+                    self,
+                    "Configuration Updated",
+                    f"Automation approach: {new_approach.upper()}\n\n"
+                    f"Creators folder: {new_paths['creators_root']}\n"
+                    f"Shortcuts folder: {new_paths['shortcuts_root']}\n\n"
+                    f"This will take effect on next upload."
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Save Failed",
+                    "Could not save configuration to settings.json"
+                )
+
+    def get_current_approach(self):
+        """Get current approach from settings.json"""
+        try:
+            if load_config:
+                config = load_config()
+                return config.get('automation', {}).get('approach', 'legacy')
+            return 'legacy'
+        except Exception as e:
+            logging.error(f"Error loading approach: {e}")
+            return 'legacy'
+
+    def save_approach(self, approach):
+        """Save approach to settings.json"""
+        try:
+            if load_config and save_config:
+                config = load_config()
+                if 'automation' not in config:
+                    config['automation'] = {}
+                config['automation']['approach'] = approach
+                save_config(config)
+                logging.info(f"Approach saved: {approach}")
+                return True
+            return False
+        except Exception as e:
+            logging.error(f"Error saving approach: {e}")
+            return False
+
+    def get_current_paths(self):
+        """Get current paths from settings.json"""
+        try:
+            if load_config:
+                config = load_config()
+                paths = config.get('automation', {}).get('paths', {})
+                return {
+                    'creators_root': paths.get('creators_root', ''),
+                    'shortcuts_root': paths.get('shortcuts_root', '')
+                }
+            return {'creators_root': '', 'shortcuts_root': ''}
+        except Exception as e:
+            logging.error(f"Error loading paths: {e}")
+            return {'creators_root': '', 'shortcuts_root': ''}
+
+    def save_approach_and_paths(self, approach, paths):
+        """Save approach and paths to settings.json"""
+        try:
+            if load_config and save_config:
+                config = load_config()
+                if 'automation' not in config:
+                    config['automation'] = {}
+                if 'paths' not in config['automation']:
+                    config['automation']['paths'] = {}
+
+                config['automation']['approach'] = approach
+                config['automation']['paths']['creators_root'] = paths['creators_root']
+                config['automation']['paths']['shortcuts_root'] = paths['shortcuts_root']
+
+                # Also set history_file path automatically
+                base_dir = Path(__file__).resolve().parent.parent
+                config['automation']['paths']['history_file'] = str(base_dir / 'data_files' / 'history.json')
+
+                save_config(config)
+                logging.info(f"Approach and paths saved: {approach}, {paths}")
+                return True
+            return False
+        except Exception as e:
+            logging.error(f"Error saving approach and paths: {e}")
+            return False
+
+    def browse_folder(self, line_edit, title):
+        """Open folder browser and update line edit"""
+        from PyQt5.QtWidgets import QFileDialog
+        folder = QFileDialog.getExistingDirectory(self, title)
+        if folder:
+            line_edit.setText(folder)
 
     # ------------------------------------------------------------------
     # settings helpers

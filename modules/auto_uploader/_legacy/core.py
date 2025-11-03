@@ -35,7 +35,7 @@ class FacebookAutoUploader:
             self.base_dir = Path(base_dir)
 
         # Load configuration and resolve dynamic paths
-        self.settings_manager = SettingsManager(self.base_dir / 'data' / 'settings.json', self.base_dir)
+        self.settings_manager = SettingsManager(self.base_dir / 'data_files' / 'settings.json', self.base_dir)
         self.config = self.settings_manager.config
         self.paths = self.settings_manager.paths
         self.mode = self.settings_manager.get_mode()
@@ -45,7 +45,7 @@ class FacebookAutoUploader:
         self.history_manager = HistoryManager(self.paths.history_file)
 
         # Load tracking data (JSON-based)
-        self.tracking_path = self.base_dir / 'data' / 'upload_tracking.json'
+        self.tracking_path = self.base_dir / 'data_files' / 'upload_tracking.json'
         self.tracking = load_tracking_data(self.tracking_path)
 
         # Initialize components
@@ -63,7 +63,7 @@ class FacebookAutoUploader:
 
     def setup_logging(self, log_level: str = 'INFO'):
         """Configure logging system"""
-        logs_dir = self.base_dir / 'data' / 'logs'
+        logs_dir = self.base_dir / 'data_files' / 'logs'
         logs_dir.mkdir(parents=True, exist_ok=True)
 
         log_file = logs_dir / f"upload_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"

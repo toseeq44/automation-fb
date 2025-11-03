@@ -45,7 +45,7 @@ def get_default_config(base_dir: Optional[Path] = None) -> Dict:
 
     creators_root = (base_dir / 'creators').resolve()
     shortcuts_root = (base_dir / 'creator_shortcuts').resolve()
-    history_file = (base_dir / 'data' / 'history.json').resolve()
+    history_file = (base_dir / 'data_files' / 'history.json').resolve()
 
     return {
         'automation': {

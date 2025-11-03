@@ -104,7 +104,7 @@ class SettingsManager:
 
         creators_root = expand_path(paths_cfg.get("creators_root"), self.base_dir / "creators")
         shortcuts_root = expand_path(paths_cfg.get("shortcuts_root"), self.base_dir / "creator_shortcuts")
-        history_file = expand_path(paths_cfg.get("history_file"), self.base_dir / "data" / "history.json")
+        history_file = expand_path(paths_cfg.get("history_file"), self.base_dir / "data_files" / "history.json")
 
         # Persist resolved absolute paths for transparency
         self._config.setdefault("automation", {}).setdefault("paths", {})

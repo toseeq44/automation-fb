@@ -63,12 +63,18 @@ class WorkflowManager:
 
     def execute_account(self, work_item: AccountWorkItem, context: WorkflowContext) -> bool:
         """Process all creators that belong to a single browser account."""
-        logging.info(
-            "Running workflow for account '%s' (browser=%s, creators=%d)",
-            work_item.account_name,
-            work_item.browser_type,
-            len(work_item.login_entries),
-        )
+        logging.info("")
+        logging.info("┌" + "─"*58 + "┐")
+        logging.info("│ PROCESSING ACCOUNT: %-40s │" % work_item.account_name[:40])
+        logging.info("├" + "─"*58 + "┤")
+        logging.info("│ Browser Type: %-44s │" % work_item.browser_type[:44])
+        logging.info("│ Creator Accounts: %-40d │" % len(work_item.login_entries))
+        logging.info("└" + "─"*58 + "┘")
+        logging.info("")
+
+        # Step 1: Browser Launch
+        logging.info("⚙ Step 1/3: Launching browser...")
+        logging.info("  → Browser type: %s", work_item.browser_type)
 
         launcher = BrowserLauncher(config=work_item.browser_config)
 
@@ -76,38 +82,62 @@ class WorkflowManager:
         launch_kwargs = {'show_popup': True}
         launch_kwargs.update(work_item.browser_config)
 
+        if 'browser_name' in launch_kwargs:
+            logging.info("  → Browser name: %s", launch_kwargs['browser_name'])
+
+        logging.info("  → Searching for browser shortcut on desktop...")
+
         if launcher.launch_generic(work_item.browser_type, **launch_kwargs):
-            logging.info(
-                "Browser '%s' launched for account '%s'.",
-                work_item.browser_type,
-                work_item.account_name,
-            )
+            logging.info("  ✓ Browser launched successfully")
+            logging.info("")
         else:
-            logging.error(
-                "Unable to launch browser '%s' for account '%s'.",
-                work_item.browser_type,
-                work_item.account_name,
-            )
+            logging.error("  ✗ Failed to launch browser")
+            logging.error("")
+            logging.error("BROWSER LAUNCH FAILED - Possible reasons:")
+            logging.error("1. Browser shortcut not found on Desktop")
+            logging.error("2. Browser not installed")
+            logging.error("3. Incorrect browser name in login_data.txt")
+            logging.error("")
+            logging.error("What to check:")
+            logging.error("  • Desktop should have browser shortcut (.lnk file)")
+            logging.error("  • Browser name: %s", work_item.browser_config.get('browser_name', 'chrome'))
+            logging.error("  • Available browsers: chrome, firefox, edge, brave, opera")
             return False
 
         if not work_item.login_entries:
-            logging.info(
-                "No login entries found for account '%s'; finishing after browser launch.",
-                work_item.account_name,
-            )
+            logging.info("⚠ No login entries - browser launched but no creators to process")
             return True
 
+        # Step 2: Process creators
+        logging.info("⚙ Step 2/3: Processing creators...")
         tracker = UploadTracker(context.history_file)
         account_success = True
 
-        for login in work_item.login_entries:
+        for idx, login in enumerate(work_item.login_entries, 1):
+            logging.info("")
+            logging.info("  → Creator %d/%d: %s", idx, len(work_item.login_entries), login.profile_name)
             creator_success = self._process_creator(login, work_item, tracker)
             account_success = account_success and creator_success
 
+            if creator_success:
+                logging.info("  ✓ Creator '%s' processed", login.profile_name)
+            else:
+                logging.error("  ✗ Creator '%s' failed", login.profile_name)
+
+        # Step 3: Save tracking
+        logging.info("")
+        logging.info("⚙ Step 3/3: Saving upload history...")
         try:
             tracker.flush()
-        except Exception:  # pragma: no cover - IO guard
-            logging.exception("Unable to persist upload history to %s", context.history_file)
+            logging.info("  ✓ Upload history saved to: %s", context.history_file)
+        except Exception as exc:
+            logging.error("  ✗ Failed to save upload history: %s", exc)
+
+        logging.info("")
+        if account_success:
+            logging.info("✓ Account '%s' completed successfully", work_item.account_name)
+        else:
+            logging.error("✗ Account '%s' had errors", work_item.account_name)
 
         return account_success
 

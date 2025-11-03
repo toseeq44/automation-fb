@@ -58,33 +58,78 @@ class UploadOrchestrator:
     def run(self, mode: Optional[str] = None) -> bool:
         """Run the main upload workflow."""
         automation_mode = (mode or self.settings.get_automation_mode() or "free_automation").strip().lower()
-        logging.info("Starting upload orchestrator (mode=%s)...", automation_mode)
+        logging.info("="*60)
+        logging.info("UPLOAD ORCHESTRATOR STARTED")
+        logging.info("="*60)
+        logging.info("Step 1/5: Initializing orchestrator (mode=%s)", automation_mode)
 
         if mode and mode != self.settings.get_automation_mode():
             self.settings.set_automation_mode(automation_mode)
+            logging.info("→ Automation mode updated to: %s", automation_mode)
 
+        # Step 1: Resolve paths
+        logging.info("Step 2/5: Resolving folder paths from settings...")
         try:
             paths = self._resolve_paths()
+            logging.info("✓ Paths resolved successfully:")
+            logging.info("  → Creators root: %s", paths.creators_root)
+            logging.info("  → Shortcuts root: %s", paths.shortcuts_root)
+            logging.info("  → History file: %s", paths.history_file)
         except ValueError as exc:
-            logging.error("%s", exc)
+            logging.error("✗ Path resolution failed: %s", exc)
+            logging.error("Please check your folder paths in Approaches dialog")
             return False
 
+        # Step 2: Build work items
+        logging.info("Step 3/5: Scanning shortcuts folder for accounts...")
+        logging.info("→ Scanning: %s", paths.shortcuts_root)
         work_items = self._build_work_items(paths, automation_mode)
+
         if not work_items:
-            logging.warning(
-                "No automation accounts discovered in %s. Add shortcut folders with login_data.txt to continue.",
-                paths.shortcuts_root,
-            )
+            logging.error("="*60)
+            logging.error("✗ NO ACCOUNTS FOUND!")
+            logging.error("="*60)
+            logging.error("Reason: No folders with login_data.txt found in shortcuts folder")
+            logging.error("Location checked: %s", paths.shortcuts_root)
+            logging.error("")
+            logging.error("HOW TO FIX:")
+            logging.error("1. Create a folder inside shortcuts_root (e.g., 'Account1')")
+            logging.error("2. Inside that folder, create 'login_data.txt' file")
+            logging.error("3. Format: Creator1|email@gmail.com|password|PageName|PageID")
+            logging.error("4. Optional: Add 'browser: chrome' at top of file")
+            logging.error("="*60)
             return False
 
-        logging.info("Prepared %d automation account(s) for processing.", len(work_items))
+        logging.info("✓ Found %d account(s) to process:", len(work_items))
+        for idx, item in enumerate(work_items, 1):
+            logging.info("  %d. Account: %s | Browser: %s | Creators: %d",
+                        idx, item.account_name, item.browser_type, len(item.login_entries))
 
+        # Step 3: Execute workflow
+        logging.info("Step 4/5: Starting account processing...")
         context = WorkflowContext(history_file=paths.history_file)
         overall_success = True
 
-        for work_item in work_items:
+        for idx, work_item in enumerate(work_items, 1):
+            logging.info("-"*60)
+            logging.info("Processing account %d/%d: %s", idx, len(work_items), work_item.account_name)
+            logging.info("-"*60)
             result = self.workflow_manager.execute_account(work_item, context)
             overall_success = overall_success and result
+
+            if result:
+                logging.info("✓ Account '%s' processed successfully", work_item.account_name)
+            else:
+                logging.error("✗ Account '%s' processing failed", work_item.account_name)
+
+        # Step 4: Summary
+        logging.info("="*60)
+        logging.info("Step 5/5: Workflow completed")
+        if overall_success:
+            logging.info("✓ ALL ACCOUNTS PROCESSED SUCCESSFULLY")
+        else:
+            logging.warning("⚠ SOME ACCOUNTS FAILED - Check logs above")
+        logging.info("="*60)
 
         return overall_success
 
@@ -130,28 +175,52 @@ class UploadOrchestrator:
         """Scan shortcut folders and prepare account work items."""
         work_items: List[AccountWorkItem] = []
 
-        for account_dir in sorted(p for p in paths.shortcuts_root.iterdir() if p.is_dir()):
+        # List all directories in shortcuts folder
+        all_dirs = [p for p in paths.shortcuts_root.iterdir() if p.is_dir()]
+        logging.info("  → Found %d folder(s) in shortcuts directory", len(all_dirs))
+
+        for account_dir in sorted(all_dirs):
+            logging.info("  → Checking folder: %s", account_dir.name)
+
             login_data_path = account_dir / "login_data.txt"
             if not login_data_path.is_file():
-                logging.debug("Skipping %s (missing login_data.txt)", account_dir)
+                logging.warning("    ✗ Skipped: No login_data.txt found in '%s'", account_dir.name)
                 continue
 
+            logging.info("    ✓ Found login_data.txt")
+
+            # Parse login file
             entries, meta = self._parse_login_file(login_data_path, account_dir.name)
+
             if not entries:
-                logging.warning("No valid creator entries found in %s", login_data_path)
+                logging.warning("    ✗ Skipped: No valid creator entries in login_data.txt")
                 continue
 
+            logging.info("    ✓ Parsed %d creator account(s) from login_data.txt", len(entries))
+
+            # Determine browser type
             browser_hint = meta.get("browser") or meta.get("browser_type")
             browser_type = self._determine_browser_type(
                 account_dir.name,
                 automation_mode,
                 explicit=browser_hint,
             )
+
+            if browser_hint:
+                logging.info("    → Browser specified in file: %s", browser_hint)
+
+            logging.info("    → Browser type determined: %s", browser_type)
+
             browser_config = self._get_browser_config(browser_type)
 
             # If browser_hint is specified and mode is free_automation, pass it to launcher
             if browser_hint and browser_type in ['chrome', 'free_automation']:
                 browser_config['browser_name'] = browser_hint
+                logging.info("    → Browser name set to: %s", browser_hint)
+
+            # Log creator names
+            creator_names = [entry.profile_name for entry in entries]
+            logging.info("    → Creators: %s", ", ".join(creator_names))
 
             work_items.append(
                 AccountWorkItem(
@@ -165,6 +234,11 @@ class UploadOrchestrator:
                     automation_mode=automation_mode,
                 )
             )
+
+            logging.info("    ✓ Account '%s' added to processing queue", account_dir.name)
+
+        if not work_items:
+            logging.error("  → No valid accounts found with login_data.txt")
 
         return work_items
 

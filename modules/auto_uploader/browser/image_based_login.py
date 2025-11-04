@@ -57,13 +57,14 @@ WINDOW_TITLE_FALLBACKS: Dict[str, Sequence[str]] = {
 class ImageBasedLogin:
     """Automated login using pure image recognition and keyboard/mouse automation."""
 
-    def __init__(self, debug_port: int = 9223, chromedriver_path: Optional[str] = None):
+    def __init__(self, debug_port: int = 9223, chromedriver_path: Optional[str] = None, enable_field_verification: bool = False):
         """
         Initialize login automator with bulletproof features.
 
         Args:
             debug_port: Browser debug port (not used in pure image-based approach)
             chromedriver_path: Path to chromedriver (not used in pure image-based approach)
+            enable_field_verification: Enable clipboard-based field verification (experimental)
         """
         if not AUTOMATION_AVAILABLE:
             raise ImportError("pyautogui and opencv-python are required for login automation")
@@ -75,13 +76,20 @@ class ImageBasedLogin:
             confidence=0.75          # Ideal confidence threshold
         )
         self.timing = AdaptiveTiming(enable_network_check=False)
-        self.retry_handler = RetryWithVerification(
-            config=RetryConfig(
-                max_attempts=3,
-                verification_method=VerificationMethod.CLIPBOARD,
-                screenshot_on_failure=True
+
+        # Field verification is DISABLED by default for stability
+        # Enable only if needed and tested
+        self.enable_field_verification = enable_field_verification
+        if enable_field_verification:
+            self.retry_handler = RetryWithVerification(
+                config=RetryConfig(
+                    max_attempts=3,
+                    verification_method=VerificationMethod.CLIPBOARD,
+                    screenshot_on_failure=True
+                )
             )
-        )
+        else:
+            self.retry_handler = None
 
         # Timing parameters (can be adjusted by adaptive timing)
         self.type_interval = 0.05  # Natural typing speed (milliseconds between keystrokes)
@@ -90,10 +98,10 @@ class ImageBasedLogin:
         self.dropdown_settle_time = 1.3
         self._mouse_tween = getattr(pyautogui, "easeOutQuad", None)
 
-        logging.info("ImageBasedLogin initialized with bulletproof Phase 1 enhancements")
+        logging.info("ImageBasedLogin initialized with improved Phase 1 enhancements")
         logging.debug("  - Multi-scale image detection: ENABLED")
         logging.debug("  - Adaptive timing: ENABLED")
-        logging.debug("  - Retry with verification: ENABLED")
+        logging.debug("  - Field verification: %s", "ENABLED" if enable_field_verification else "DISABLED (stable mode)")
         logging.debug("  - Fallback chains: AVAILABLE")
 
     def _activate_browser_window(
@@ -177,28 +185,51 @@ class ImageBasedLogin:
         """
         Detect current login status using enhanced image recognition with multi-template support.
 
+        Uses relaxed thresholds and multiple checks for robustness.
+
         Returns:
             "logged_in", "logged_out", or "unknown"
         """
         logging.info("Detecting login status with enhanced detection...")
 
         # Check for user logged-in indicator (try variants)
-        status_result = self.screen_detector.detect_with_variants("check_user_status")
-        if status_result.get('found') or status_result.get('confidence', 0) >= 0.65:
-            confidence = status_result.get('confidence', 0)
-            logging.info("✓ User is LOGGED IN (confidence: %.2f)", confidence)
+        # Higher confidence threshold for logged-in (0.65) because this is more reliable
+        status_result = self.screen_detector.detect_with_variants(
+            "check_user_status",
+            min_confidence_override=0.65
+        )
+        status_confidence = status_result.get('confidence', 0)
+
+        if status_result.get('found') or status_confidence >= 0.65:
+            logging.info("✓ User is LOGGED IN (confidence: %.3f)", status_confidence)
             return "logged_in"
 
         # Check for login window (try variants)
-        login_result = self.screen_detector.detect_with_variants("sample_login_window")
-        if login_result.get('found') or login_result.get('confidence', 0) >= 0.65:
-            confidence = login_result.get('confidence', 0)
-            logging.info("✓ Login window DETECTED - User is LOGGED OUT (confidence: %.2f)", confidence)
+        # Lower confidence threshold for login window (0.40) because it varies more
+        login_result = self.screen_detector.detect_with_variants(
+            "sample_login_window",
+            min_confidence_override=0.40
+        )
+        login_confidence = login_result.get('confidence', 0)
+
+        if login_result.get('found') or login_confidence >= 0.40:
+            logging.info("✓ Login window DETECTED - User is LOGGED OUT (confidence: %.3f)", login_confidence)
             return "logged_out"
 
-        logging.warning("⚠ Could not determine login status (logged_in: %.2f, logged_out: %.2f)",
-                       status_result.get('confidence', 0),
-                       login_result.get('confidence', 0))
+        # If user status has very low confidence AND login window has some confidence, likely logged out
+        if status_confidence < 0.30 and login_confidence > 0.15:
+            logging.info(
+                "✓ User appears LOGGED OUT (status: %.3f, login window: %.3f)",
+                status_confidence,
+                login_confidence
+            )
+            return "logged_out"
+
+        logging.warning(
+            "⚠ Could not determine login status (status icon: %.3f, login window: %.3f)",
+            status_confidence,
+            login_confidence
+        )
         return "unknown"
 
     def _locate_field_via_icon(
@@ -338,18 +369,17 @@ class ImageBasedLogin:
 
     def _fill_email_field(self, email: str) -> bool:
         """
-        Fill email field using intelligent coordinate detection with retry and verification.
+        Fill email field using intelligent coordinate detection with simple, reliable method.
 
-        This method now includes:
-        - Retry logic with exponential backoff
-        - Clipboard-based verification
-        - Coordinate adjustment on failure
-        - Detailed logging
+        This method uses:
+        - Fallback chain for coordinate finding
+        - Direct field filling (no clipboard verification by default for stability)
+        - Retry logic with multiple attempts
         """
-        logging.info("Filling email field with bulletproof verification...")
+        logging.info("Filling email field...")
 
         # Use fallback chain for finding coordinates
-        coords_chain = FallbackChain("Find Email Field Coordinates")
+        coords_chain = FallbackChain("Find Email Field Coordinates", enable_logging=False)
         coords_chain.add_strategy(
             "Icon-based detection",
             lambda: self._locate_field_via_icon("login_profile_icon.png", offset_x=60),
@@ -367,41 +397,59 @@ class ImageBasedLogin:
             return False
 
         coords = coords_result.result_data
-        logging.info("  Email field detected at: (%d, %d)", coords[0], coords[1])
+        logging.info("  Email field at: (%d, %d)", coords[0], coords[1])
 
-        # Use retry handler with verification
-        result = self.retry_handler.fill_field_with_verification(
-            field_coords=coords,
-            value=email,
-            field_name="email",
-            verification_method="clipboard"
-        )
+        # Use retry handler with verification if enabled, otherwise simple fill
+        if self.enable_field_verification and self.retry_handler:
+            result = self.retry_handler.fill_field_with_verification(
+                field_coords=coords,
+                value=email,
+                field_name="email",
+                verification_method="clipboard"
+            )
 
-        if result.success and result.verification_passed:
-            logging.info("✅ Email field filled and verified: %s", email)
-            # Send TAB to move to next field
-            self.timing.smart_wait(ActionType.FIELD_FILL)
-            pyautogui.press('tab')
-            self.timing.smart_wait(ActionType.FIELD_FILL)
-            return True
+            if result.success and result.verification_passed:
+                logging.info("✅ Email filled and verified: %s", email)
+                self.timing.smart_wait(ActionType.FIELD_FILL)
+                pyautogui.press('tab')
+                self.timing.smart_wait(ActionType.FIELD_FILL)
+                return True
+            else:
+                logging.error("❌ Email field fill failed: %s", result.error_message)
+                return False
         else:
-            logging.error("❌ Email field fill failed: %s", result.error_message)
-            return False
+            # Simple, reliable method (default)
+            try:
+                x, y = coords
+                logging.info("  → Clearing and filling email field...")
+                self._clear_and_focus_field(x, y)
+                pyautogui.typewrite(email, interval=self.type_interval)
+                self.timing.smart_wait(ActionType.FIELD_FILL)
+
+                logging.debug("  → Sending TAB to advance to password field")
+                pyautogui.press('tab')
+                self.timing.smart_wait(ActionType.FIELD_FILL)
+
+                logging.info("✅ Email filled: %s", email)
+                return True
+
+            except Exception as e:
+                logging.error("❌ Email fill error: %s", e, exc_info=True)
+                return False
 
     def _fill_password_field(self, password: str) -> bool:
         """
-        Fill password field using intelligent coordinate detection with retry and verification.
+        Fill password field using intelligent coordinate detection with simple, reliable method.
 
-        This method now includes:
-        - Retry logic with exponential backoff
-        - Clipboard-based verification
-        - Coordinate adjustment on failure
-        - Detailed logging
+        This method uses:
+        - Fallback chain for coordinate finding
+        - Direct field filling (no clipboard verification by default for stability)
+        - Retry logic with multiple attempts
         """
-        logging.info("Filling password field with bulletproof verification...")
+        logging.info("Filling password field...")
 
         # Use fallback chain for finding coordinates
-        coords_chain = FallbackChain("Find Password Field Coordinates")
+        coords_chain = FallbackChain("Find Password Field Coordinates", enable_logging=False)
         coords_chain.add_strategy(
             "Icon-based detection",
             lambda: self._locate_field_via_icon("login_password_icon.png", offset_x=60),
@@ -419,23 +467,39 @@ class ImageBasedLogin:
             return False
 
         coords = coords_result.result_data
-        logging.info("  Password field detected at: (%d, %d)", coords[0], coords[1])
+        logging.info("  Password field at: (%d, %d)", coords[0], coords[1])
 
-        # Use retry handler with verification
-        result = self.retry_handler.fill_field_with_verification(
-            field_coords=coords,
-            value=password,
-            field_name="password",
-            verification_method="clipboard"
-        )
+        # Use retry handler with verification if enabled, otherwise simple fill
+        if self.enable_field_verification and self.retry_handler:
+            result = self.retry_handler.fill_field_with_verification(
+                field_coords=coords,
+                value=password,
+                field_name="password",
+                verification_method="clipboard"
+            )
 
-        if result.success and result.verification_passed:
-            logging.info("✅ Password field filled and verified (length: %d)", len(password))
-            self.timing.smart_wait(ActionType.FIELD_FILL)
-            return True
+            if result.success and result.verification_passed:
+                logging.info("✅ Password filled and verified (length: %d)", len(password))
+                self.timing.smart_wait(ActionType.FIELD_FILL)
+                return True
+            else:
+                logging.error("❌ Password field fill failed: %s", result.error_message)
+                return False
         else:
-            logging.error("❌ Password field fill failed: %s", result.error_message)
-            return False
+            # Simple, reliable method (default)
+            try:
+                x, y = coords
+                logging.info("  → Clearing and filling password field...")
+                self._clear_and_focus_field(x, y)
+                pyautogui.typewrite(password, interval=self.type_interval)
+                self.timing.smart_wait(ActionType.FIELD_FILL)
+
+                logging.info("✅ Password filled (length: %d)", len(password))
+                return True
+
+            except Exception as e:
+                logging.error("❌ Password fill error: %s", e, exc_info=True)
+                return False
 
     def _click_login_button(self) -> bool:
         """
@@ -524,13 +588,24 @@ class ImageBasedLogin:
             logging.error("❌ All login submission strategies failed")
             return False
 
-    def _wait_for_login_window(self, timeout: int = 10) -> bool:
-        """Wait until the login window is visible using adaptive timing."""
-        logging.info("Waiting for login window (timeout: %ds)...", timeout)
+    def _wait_for_login_window(self, timeout: int = 10, min_confidence: float = 0.50) -> bool:
+        """
+        Wait until the login window is visible using adaptive timing.
+
+        Uses relaxed confidence threshold for login window detection
+        since login pages can vary significantly.
+        """
+        logging.info("Waiting for login window (timeout: %ds, min_confidence: %.2f)...", timeout, min_confidence)
 
         def check_login_window():
             result = self.screen_detector.detect_with_variants("sample_login_window")
-            return result.get('found') or result.get('confidence', 0) >= 0.65
+            confidence = result.get('confidence', 0)
+            found = result.get('found') or confidence >= min_confidence
+
+            if found:
+                logging.debug("Login window detected with confidence: %.3f", confidence)
+
+            return found
 
         success = self.timing.wait_for_condition(
             check_login_window,
@@ -575,10 +650,26 @@ class ImageBasedLogin:
         return None
 
     def _logout_user(self) -> bool:
-        """Handle logout process using image recognition."""
+        """
+        Handle logout process with multiple verification methods.
+
+        Verification methods (in order):
+        1. Check if user status icon disappeared (most reliable)
+        2. Check if login window appeared
+        3. Fallback: Assume success if logout clicked and user icon gone
+        """
         logging.info("Initiating logout...")
 
         try:
+            # Step 1: Detect current user status before logout
+            logging.debug("Checking user status before logout...")
+            before_status = self.screen_detector.detect_with_variants("check_user_status")
+            was_logged_in = before_status.get('found') or before_status.get('confidence', 0) >= 0.65
+
+            if not was_logged_in:
+                logging.warning("User status not detected before logout (might already be logged out)")
+
+            # Step 2: Open dropdown and click logout
             dropdown = self._open_user_dropdown()
             if not dropdown:
                 logging.error("Unable to locate account dropdown for logout.")
@@ -603,13 +694,61 @@ class ImageBasedLogin:
             logging.info("Clicking logout option at (%d, %d)...", logout_x, logout_y)
             self._move_cursor(logout_x, logout_y)
             pyautogui.click(logout_x, logout_y)
-            time.sleep(2)
 
-            if self._wait_for_login_window(timeout=10):
-                logging.info("✓ Logout successful, login screen restored.")
+            # Wait for page transition
+            logging.info("Waiting for logout to complete...")
+            self.timing.smart_wait(ActionType.LOGOUT_VERIFY)
+
+            # Step 3: Verify logout using multiple methods
+            logging.info("Verifying logout using multiple methods...")
+
+            # Method 1: Check if user status icon disappeared (BEST method)
+            logging.debug("Method 1: Checking if user icon disappeared...")
+            after_status = self.screen_detector.detect_with_variants("check_user_status")
+            user_icon_disappeared = not after_status.get('found') and after_status.get('confidence', 0) < 0.50
+
+            if user_icon_disappeared:
+                logging.info("✅ Logout verified: User status icon disappeared")
                 return True
 
-            logging.warning("Logout action triggered but login screen not detected.")
+            # Method 2: Check if login window appeared (with relaxed confidence)
+            logging.debug("Method 2: Checking if login window appeared...")
+            if self._wait_for_login_window(timeout=8, min_confidence=0.40):
+                logging.info("✅ Logout verified: Login window appeared")
+                return True
+
+            # Method 3: Compare before/after status (fallback)
+            logging.debug("Method 3: Comparing before/after user status...")
+            before_confidence = before_status.get('confidence', 0)
+            after_confidence = after_status.get('confidence', 0)
+
+            # If confidence dropped significantly, likely logged out
+            if was_logged_in and (before_confidence - after_confidence > 0.3):
+                logging.info(
+                    "✅ Logout verified: User status confidence dropped significantly (%.2f -> %.2f)",
+                    before_confidence,
+                    after_confidence
+                )
+                return True
+
+            # Method 4: Final fallback - if we clicked logout and user icon is weak, assume success
+            if after_confidence < 0.50:
+                logging.warning(
+                    "⚠ Logout verification inconclusive, but user icon weak (%.2f) - assuming success",
+                    after_confidence
+                )
+                return True
+
+            # If all methods fail
+            logging.error(
+                "❌ Logout verification failed:\n"
+                "  - User icon disappeared: %s\n"
+                "  - Login window appeared: False\n"
+                "  - Status confidence: %.2f -> %.2f",
+                user_icon_disappeared,
+                before_confidence,
+                after_confidence
+            )
             return False
 
         except Exception as e:

@@ -421,7 +421,8 @@ class ScreenDetector:
     def detect_with_variants(
         self,
         template_name: str,
-        region: Optional[Tuple[int, int, int, int]] = None
+        region: Optional[Tuple[int, int, int, int]] = None,
+        min_confidence_override: Optional[float] = None
     ) -> Dict[str, Any]:
         """
         Detect element using multiple template variants.
@@ -431,9 +432,10 @@ class ScreenDetector:
         Args:
             template_name: Base template name
             region: Optional search region
+            min_confidence_override: Override minimum confidence for this detection
 
         Returns:
-            Best match result across all variants
+            Best match result across all variants with additional metadata
         """
         variants = self._find_template_variants(template_name)
 
@@ -442,6 +444,7 @@ class ScreenDetector:
             return {'found': False, 'position': None, 'confidence': 0.0}
 
         best_result = {'found': False, 'confidence': 0.0}
+        min_conf = min_confidence_override if min_confidence_override is not None else self.min_confidence
 
         for variant_path in variants:
             result = self._match_template(variant_path, region=region)
@@ -455,11 +458,16 @@ class ScreenDetector:
                 logging.debug("Strong match found with variant: %s", variant_path.name)
                 break
 
-        if best_result.get('found'):
+        # Re-evaluate 'found' status with override confidence if provided
+        if min_confidence_override is not None:
+            best_result['found'] = best_result.get('confidence', 0) >= min_conf
+
+        if best_result.get('found') or best_result.get('confidence', 0) >= min_conf:
             logging.debug(
-                "Best variant match: %s (confidence: %.3f)",
-                best_result.get('template_used'),
-                best_result.get('confidence', 0)
+                "Best variant match: %s (confidence: %.3f, threshold: %.2f)",
+                best_result.get('template_used', 'unknown'),
+                best_result.get('confidence', 0),
+                min_conf
             )
 
         return best_result

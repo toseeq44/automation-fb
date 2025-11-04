@@ -67,6 +67,10 @@ class ImageBasedLogin:
 
         self.screen_detector = ScreenDetector()
         self.type_interval = 0.05  # Natural typing speed (milliseconds between keystrokes)
+        self.mouse_move_duration = 0.6
+        self.post_move_pause = 0.25
+        self.dropdown_settle_time = 1.3
+        self._mouse_tween = getattr(pyautogui, "easeOutQuad", None)
 
         logging.debug("ImageBasedLogin initialized (pure image-based automation)")
 
@@ -278,13 +282,12 @@ class ImageBasedLogin:
             logging.error("Error finding field coordinates: %s", e, exc_info=True)
             return None
 
-    @staticmethod
-    def _clear_and_focus_field(x: int, y: int, *, pause: float = 0.3) -> None:
+    def _clear_and_focus_field(self, x: int, y: int, *, pause: float = 0.3) -> None:
         """Focus the given field and clear any existing text."""
-        pyautogui.moveTo(x, y, duration=0.2)
+        self._move_cursor(x, y)
         pyautogui.click(x, y)
         time.sleep(pause)
-        pyautogui.click(x, y)
+        pyautogui.doubleClick(x, y)
         time.sleep(pause / 2)
         pyautogui.hotkey("ctrl", "a")
         time.sleep(pause / 2)
@@ -292,6 +295,20 @@ class ImageBasedLogin:
         time.sleep(pause / 2)
         pyautogui.press("backspace")
         time.sleep(pause / 2)
+
+    def _move_cursor(self, x: int, y: int, pause: Optional[float] = None) -> None:
+        """Smoothly move the mouse cursor to the requested coordinates."""
+        kwargs = {"duration": self.mouse_move_duration}
+        if self._mouse_tween:
+            kwargs["tween"] = self._mouse_tween
+        pyautogui.moveTo(x, y, **kwargs)
+        time.sleep(pause if pause is not None else self.post_move_pause)
+
+    def _move_and_click(self, x: int, y: int, *, pause_after: Optional[float] = None) -> None:
+        """Convenience helper to move smoothly then click."""
+        self._move_cursor(x, y, pause=self.post_move_pause)
+        pyautogui.click(x, y)
+        time.sleep(pause_after if pause_after is not None else self.post_move_pause)
 
     def _fill_email_field(self, email: str) -> bool:
         """Fill email field using intelligent coordinate detection."""
@@ -370,8 +387,8 @@ class ImageBasedLogin:
 
                 if button_position:
                     logging.debug("Clicking explicit login button at %s", button_position)
-                    pyautogui.moveTo(button_position[0], button_position[1], duration=0.2)
-                    pyautogui.click()
+                    self._move_cursor(button_position[0], button_position[1])
+                    pyautogui.click(button_position[0], button_position[1])
                     time.sleep(1)
                     success = True
 
@@ -388,8 +405,8 @@ class ImageBasedLogin:
 
                     if button_position:
                         logging.debug("Clicking login button at %s", button_position)
-                        pyautogui.moveTo(button_position[0], button_position[1], duration=0.2)
-                        pyautogui.click()
+                        self._move_cursor(button_position[0], button_position[1])
+                        pyautogui.click(button_position[0], button_position[1])
                         time.sleep(1)
                         success = True
 
@@ -424,17 +441,19 @@ class ImageBasedLogin:
 
             if target_position:
                 x, y = target_position
-                pyautogui.moveTo(x, y, duration=0.2)
+                self._move_cursor(x, y)
                 if attempt % 2 == 0:
-                    pyautogui.click()
+                    pyautogui.click(x, y)
                 else:
-                    pyautogui.rightClick()
+                    pyautogui.rightClick(x, y)
             else:
                 screen_width, screen_height = pyautogui.size()
-                pyautogui.moveTo(int(screen_width * 0.96), int(screen_height * 0.10), duration=0.2)
-                pyautogui.click()
+                fx = int(screen_width * 0.96)
+                fy = int(screen_height * 0.10)
+                self._move_cursor(fx, fy)
+                pyautogui.click(fx, fy)
 
-            time.sleep(1)
+            time.sleep(self.dropdown_settle_time)
 
         return None
 
@@ -465,8 +484,8 @@ class ImageBasedLogin:
                 logout_y = int(screen_height * 0.20)
 
             logging.info("Clicking logout option at (%d, %d)...", logout_x, logout_y)
-            pyautogui.moveTo(logout_x, logout_y, duration=0.2)
-            pyautogui.click()
+            self._move_cursor(logout_x, logout_y)
+            pyautogui.click(logout_x, logout_y)
             time.sleep(2)
 
             if self._wait_for_login_window(timeout=10):

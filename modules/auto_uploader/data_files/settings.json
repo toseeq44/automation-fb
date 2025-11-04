@@ -21,11 +21,12 @@
       "debug_port": 9222,
       "startup_wait": 15,
       "profile_startup_wait": 10,
-      "enabled": true
+      "enabled": true,
+      "chromedriver_path": "C:\\Users\\{user}\\AppData\\Local\\Programs\\GoLogin\\resources\\chromedriver.exe"
     },
     "ix": {
-      "exe_path": "C:\\Users\\{user}\\AppData\\Local\\Programs\\Incogniton\\Incogniton.exe",
-      "desktop_shortcut": "~/Desktop/Incogniton.lnk",
+      "exe_path": "",
+      "desktop_shortcut": "~/Desktop/ixBrowser.lnk",
       "debug_port": 9223,
       "startup_wait": 15,
       "profile_startup_wait": 10,

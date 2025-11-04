@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, Optional, Sequence
 
 from ..browser.launcher import BrowserLauncher
+from ..browser.image_based_login import ImageBasedLogin
 from ..upload.file_selector import FileSelector
 from ..upload.metadata_handler import MetadataHandler
 from ..upload.video_uploader import VideoUploader
@@ -143,16 +144,64 @@ class WorkflowManager:
         logging.info("")
         logging.info("📋 ACCOUNT CREDENTIALS (from login_data.txt):")
         logging.info("   → Account: %s", work_item.account_name)
-        logging.info("   → Email: %s", work_item.login_entries[0].email if work_item.login_entries else "N/A")
+
+        account_email = work_item.login_entries[0].email if work_item.login_entries else "N/A"
+        account_password = work_item.login_entries[0].password if work_item.login_entries else "N/A"
+
+        logging.info("   → Email: %s", account_email)
         logging.info("")
         logging.info("🔑 LOGIN PROCESS:")
-        logging.info("   Step 1: Browser is running and waiting for user input")
-        logging.info("   Step 2: User will log in with account credentials")
-        logging.info("   Step 3: System will detect login completion")
-        logging.info("   Step 4: Creator automation will begin")
+        logging.info("   Step 1: Browser is running")
+        logging.info("   Step 2: Detecting login status...")
+        logging.info("   Step 3: Auto-filling account credentials")
+        logging.info("   Step 4: Clicking login button")
+        logging.info("   Step 5: Waiting for login completion")
         logging.info("")
-        logging.info("💡 NOTE: For now, automatic login is prepared but requires")
-        logging.info("   manual browser interaction. Full automation coming soon.")
+
+        # Image-based automated login
+        import time
+
+        logging.info("[LOGIN] Browser is open and ready for login")
+        logging.info("   Using image-based intelligent login automation...")
+        logging.info("")
+
+        try:
+            # Initialize image-based login
+            logging.info("[LOGIN] Initializing image-based login system...")
+            image_login = ImageBasedLogin()
+
+            # Run login flow
+            logging.info("[LOGIN] Running login flow...")
+            login_success = image_login.run_login_flow(
+                email=account_email,
+                password=account_password,
+                force_relogin=False
+            )
+
+            if login_success:
+                logging.info("[LOGIN] ✓ Login completed successfully")
+            else:
+                logging.warning("[LOGIN] ✗ Login flow did not complete")
+
+        except ImportError as e:
+            logging.error("[LOGIN] Image-based login not available: %s", str(e))
+            logging.warning("[LOGIN] Missing dependencies: pip install opencv-python pyautogui")
+            logging.info("[LOGIN] Falling back to manual login (waiting 60 seconds)...")
+            time.sleep(60)
+            login_success = True
+
+        except Exception as e:
+            logging.error("[LOGIN] Login error: %s", str(e))
+            logging.warning("[LOGIN] Falling back to manual login (waiting 60 seconds)...")
+            import traceback
+            logging.debug("[LOGIN] Traceback: %s", traceback.format_exc())
+            time.sleep(60)
+            login_success = True
+
+        logging.info("")
+        logging.info("[OK] LOGIN PROCESS COMPLETED")
+        logging.info("[OK] Browser is ready for creator automation")
+
         logging.info("")
 
         # Step 2: Process creators

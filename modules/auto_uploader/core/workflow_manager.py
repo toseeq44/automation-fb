@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
 from ..browser.launcher import BrowserLauncher
 from ..browser.image_based_login import ImageBasedLogin
@@ -95,6 +95,40 @@ class WorkflowManager:
         launch_kwargs = {'show_popup': True}
         launch_kwargs.update(work_item.browser_config)
 
+        account_shortcut_dir = work_item.shortcuts_root / work_item.account_name
+        launch_kwargs['account_shortcut_dir'] = account_shortcut_dir
+
+        def _append_path(accumulator: List[Path], candidate: Optional[object]) -> None:
+            if not candidate:
+                return
+            if isinstance(candidate, Path):
+                path_candidate = candidate
+            else:
+                text = str(candidate).strip()
+                if not text:
+                    return
+                path_candidate = Path(text).expanduser()
+            try:
+                resolved = path_candidate.resolve(strict=False)
+            except OSError:
+                resolved = path_candidate
+            if resolved not in accumulator:
+                accumulator.append(resolved)
+
+        search_paths: List[Path] = []
+        _append_path(search_paths, account_shortcut_dir)
+        _append_path(search_paths, account_shortcut_dir / "Creators")
+        _append_path(search_paths, work_item.shortcuts_root)
+
+        existing_search = launch_kwargs.pop('shortcut_search_paths', None)
+        if isinstance(existing_search, (list, tuple, set)):
+            for entry in existing_search:
+                _append_path(search_paths, entry)
+        else:
+            _append_path(search_paths, existing_search)
+
+        launch_kwargs['shortcut_search_paths'] = search_paths
+
         logging.info("   ✓ BrowserLauncher initialized")
         logging.info("")
         logging.info("🚀 Calling launcher.launch_generic('%s')...", work_item.browser_type)
@@ -145,8 +179,12 @@ class WorkflowManager:
         logging.info("📋 ACCOUNT CREDENTIALS (from login_data.txt):")
         logging.info("   → Account: %s", work_item.account_name)
 
-        account_email = work_item.login_entries[0].email if work_item.login_entries else "N/A"
-        account_password = work_item.login_entries[0].password if work_item.login_entries else "N/A"
+        primary_login = work_item.login_entries[0] if work_item.login_entries else None
+        account_email = primary_login.email if primary_login else "N/A"
+        account_password = primary_login.password if primary_login else "N/A"
+        window_title_hint = (
+            self._resolve_window_title_hint(work_item, primary_login) if primary_login else None
+        )
 
         logging.info("   → Email: %s", account_email)
         logging.info("")
@@ -175,7 +213,9 @@ class WorkflowManager:
             login_success = image_login.run_login_flow(
                 email=account_email,
                 password=account_password,
-                force_relogin=False
+                window_title=window_title_hint,
+                browser_type=work_item.browser_type,
+                force_relogin=True,
             )
 
             if login_success:
@@ -283,6 +323,36 @@ class WorkflowManager:
         # For now, return True since we're only logging shortcut discovery
         # Actual upload functionality will be added in next phase
         return True
+
+    @staticmethod
+    def _resolve_window_title_hint(work_item: AccountWorkItem, login: CreatorLogin) -> Optional[str]:
+        """Derive a sensible window-title hint for browser activation."""
+        extras = login.extras or {}
+        for key in ("window_title", "window_name", "window", "browser_window", "profile_window"):
+            value = extras.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+        config = work_item.browser_config or {}
+        for key in ("window_title", "window_name", "browser_name"):
+            value = config.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+        shortcut_hint = config.get("desktop_shortcut")
+        if isinstance(shortcut_hint, str) and shortcut_hint.strip():
+            try:
+                return Path(shortcut_hint).expanduser().stem
+            except Exception:
+                return shortcut_hint
+
+        if login.profile_name:
+            return login.profile_name
+
+        if work_item.account_name:
+            return work_item.account_name
+
+        return work_item.browser_type
 
         # NOTE: Below is the old logic for direct file uploads - will be replaced with shortcut-based approach
         # videos = self._file_selector.get_pending_videos(

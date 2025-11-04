@@ -107,11 +107,16 @@ class ScreenDetector:
         else:
             logging.debug("Logout dropdown NOT detected")
 
-        return {
+        payload = {
             'found': result['found'],
             'position': result['position'],
-            'confidence': result['confidence']
+            'confidence': result['confidence'],
         }
+        if 'top_left' in result:
+            payload['top_left'] = result['top_left']
+        if 'size' in result:
+            payload['size'] = result['size']
+        return payload
 
     def detect_browser_close_popup(self, region: Optional[Tuple[int, int, int, int]] = None) -> Dict[str, Any]:
         """
@@ -135,11 +140,16 @@ class ScreenDetector:
         else:
             logging.debug("Browser close popup NOT detected")
 
-        return {
+        payload = {
             'found': result['found'],
             'position': result['position'],
-            'confidence': result['confidence']
+            'confidence': result['confidence'],
         }
+        if 'top_left' in result:
+            payload['top_left'] = result['top_left']
+        if 'size' in result:
+            payload['size'] = result['size']
+        return payload
 
     def detect_login_page(self, region: Optional[Tuple[int, int, int, int]] = None) -> Dict[str, Any]:
         """

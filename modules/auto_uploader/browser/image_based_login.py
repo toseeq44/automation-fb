@@ -38,6 +38,9 @@ except ImportError:
     logging.warning("pygetwindow not available. Install: pip install pygetwindow for window management.")
 
 from .screen_detector import ScreenDetector
+from .adaptive_timing import AdaptiveTiming, ActionType
+from .fallback_chain import FallbackChain, StrategyPriority, try_multiple
+from .retry_with_verification import RetryWithVerification, RetryConfig, VerificationMethod
 
 
 WINDOW_TITLE_FALLBACKS: Dict[str, Sequence[str]] = {
@@ -56,7 +59,7 @@ class ImageBasedLogin:
 
     def __init__(self, debug_port: int = 9223, chromedriver_path: Optional[str] = None):
         """
-        Initialize login automator.
+        Initialize login automator with bulletproof features.
 
         Args:
             debug_port: Browser debug port (not used in pure image-based approach)
@@ -65,14 +68,33 @@ class ImageBasedLogin:
         if not AUTOMATION_AVAILABLE:
             raise ImportError("pyautogui and opencv-python are required for login automation")
 
-        self.screen_detector = ScreenDetector()
+        # Enhanced modules for bulletproof automation
+        self.screen_detector = ScreenDetector(
+            enable_multiscale=True,  # Enable multi-scale detection
+            min_confidence=0.65,     # Minimum acceptable confidence
+            confidence=0.75          # Ideal confidence threshold
+        )
+        self.timing = AdaptiveTiming(enable_network_check=False)
+        self.retry_handler = RetryWithVerification(
+            config=RetryConfig(
+                max_attempts=3,
+                verification_method=VerificationMethod.CLIPBOARD,
+                screenshot_on_failure=True
+            )
+        )
+
+        # Timing parameters (can be adjusted by adaptive timing)
         self.type_interval = 0.05  # Natural typing speed (milliseconds between keystrokes)
         self.mouse_move_duration = 0.6
         self.post_move_pause = 0.25
         self.dropdown_settle_time = 1.3
         self._mouse_tween = getattr(pyautogui, "easeOutQuad", None)
 
-        logging.debug("ImageBasedLogin initialized (pure image-based automation)")
+        logging.info("ImageBasedLogin initialized with bulletproof Phase 1 enhancements")
+        logging.debug("  - Multi-scale image detection: ENABLED")
+        logging.debug("  - Adaptive timing: ENABLED")
+        logging.debug("  - Retry with verification: ENABLED")
+        logging.debug("  - Fallback chains: AVAILABLE")
 
     def _activate_browser_window(
         self,
@@ -153,26 +175,30 @@ class ImageBasedLogin:
 
     def _detect_login_status(self) -> str:
         """
-        Detect current login status using image recognition.
+        Detect current login status using enhanced image recognition with multi-template support.
 
         Returns:
             "logged_in", "logged_out", or "unknown"
         """
-        logging.info("Detecting login status...")
+        logging.info("Detecting login status with enhanced detection...")
 
-        # Check for user logged-in indicator
-        status_result = self.screen_detector.detect_user_status()
-        if status_result['logged_in']:
-            logging.info("✓ User is LOGGED IN")
+        # Check for user logged-in indicator (try variants)
+        status_result = self.screen_detector.detect_with_variants("check_user_status")
+        if status_result.get('found') or status_result.get('confidence', 0) >= 0.65:
+            confidence = status_result.get('confidence', 0)
+            logging.info("✓ User is LOGGED IN (confidence: %.2f)", confidence)
             return "logged_in"
 
-        # Check for login window
-        login_result = self.screen_detector.detect_custom_element("sample_login_window.png")
-        if login_result['found']:
-            logging.info("✓ Login window DETECTED - User is LOGGED OUT")
+        # Check for login window (try variants)
+        login_result = self.screen_detector.detect_with_variants("sample_login_window")
+        if login_result.get('found') or login_result.get('confidence', 0) >= 0.65:
+            confidence = login_result.get('confidence', 0)
+            logging.info("✓ Login window DETECTED - User is LOGGED OUT (confidence: %.2f)", confidence)
             return "logged_out"
 
-        logging.warning("⚠ Could not determine login status")
+        logging.warning("⚠ Could not determine login status (logged_in: %.2f, logged_out: %.2f)",
+                       status_result.get('confidence', 0),
+                       login_result.get('confidence', 0))
         return "unknown"
 
     def _locate_field_via_icon(
@@ -311,122 +337,213 @@ class ImageBasedLogin:
         time.sleep(pause_after if pause_after is not None else self.post_move_pause)
 
     def _fill_email_field(self, email: str) -> bool:
-        """Fill email field using intelligent coordinate detection."""
-        try:
-            logging.info("Filling email field...")
+        """
+        Fill email field using intelligent coordinate detection with retry and verification.
 
-            # Get exact coordinates
-            coords = self._find_field_coordinates('email')
-            if not coords:
-                logging.error("Could not find email field coordinates")
-                return False
+        This method now includes:
+        - Retry logic with exponential backoff
+        - Clipboard-based verification
+        - Coordinate adjustment on failure
+        - Detailed logging
+        """
+        logging.info("Filling email field with bulletproof verification...")
 
-            email_x, email_y = coords
-            logging.info("  Email field at: (%d, %d)", email_x, email_y)
+        # Use fallback chain for finding coordinates
+        coords_chain = FallbackChain("Find Email Field Coordinates")
+        coords_chain.add_strategy(
+            "Icon-based detection",
+            lambda: self._locate_field_via_icon("login_profile_icon.png", offset_x=60),
+            priority=StrategyPriority.PRIMARY
+        ).add_strategy(
+            "Window-relative position",
+            lambda: self._find_field_coordinates('email'),
+            priority=StrategyPriority.SECONDARY
+        )
 
-            logging.info("  → Clearing any existing value...")
-            self._clear_and_focus_field(email_x, email_y)
+        coords_result = coords_chain.execute()
 
-            logging.info("  → Typing email: %s", email)
-            pyautogui.typewrite(email, interval=self.type_interval)
-            time.sleep(0.5)
+        if not coords_result.success:
+            logging.error("Could not find email field coordinates after trying all strategies")
+            return False
 
-            logging.debug("  → Sending TAB to advance focus from email field.")
+        coords = coords_result.result_data
+        logging.info("  Email field detected at: (%d, %d)", coords[0], coords[1])
+
+        # Use retry handler with verification
+        result = self.retry_handler.fill_field_with_verification(
+            field_coords=coords,
+            value=email,
+            field_name="email",
+            verification_method="clipboard"
+        )
+
+        if result.success and result.verification_passed:
+            logging.info("✅ Email field filled and verified: %s", email)
+            # Send TAB to move to next field
+            self.timing.smart_wait(ActionType.FIELD_FILL)
             pyautogui.press('tab')
-            time.sleep(0.3)
-
-            logging.info("✓ Email filled: %s", email)
+            self.timing.smart_wait(ActionType.FIELD_FILL)
             return True
-
-        except Exception as e:
-            logging.error("Email fill error: %s", e, exc_info=True)
+        else:
+            logging.error("❌ Email field fill failed: %s", result.error_message)
             return False
 
     def _fill_password_field(self, password: str) -> bool:
-        """Fill password field using intelligent coordinate detection."""
-        try:
-            logging.info("Filling password field...")
+        """
+        Fill password field using intelligent coordinate detection with retry and verification.
 
-            # Get exact coordinates
-            coords = self._find_field_coordinates('password')
-            if not coords:
-                logging.error("Could not find password field coordinates")
-                return False
+        This method now includes:
+        - Retry logic with exponential backoff
+        - Clipboard-based verification
+        - Coordinate adjustment on failure
+        - Detailed logging
+        """
+        logging.info("Filling password field with bulletproof verification...")
 
-            password_x, password_y = coords
-            logging.info("  Password field at: (%d, %d)", password_x, password_y)
+        # Use fallback chain for finding coordinates
+        coords_chain = FallbackChain("Find Password Field Coordinates")
+        coords_chain.add_strategy(
+            "Icon-based detection",
+            lambda: self._locate_field_via_icon("login_password_icon.png", offset_x=60),
+            priority=StrategyPriority.PRIMARY
+        ).add_strategy(
+            "Window-relative position",
+            lambda: self._find_field_coordinates('password'),
+            priority=StrategyPriority.SECONDARY
+        )
 
-            logging.info("  → Clearing any existing value...")
-            self._clear_and_focus_field(password_x, password_y)
+        coords_result = coords_chain.execute()
 
-            logging.info("  → Typing password (length: %d)", len(password))
-            pyautogui.typewrite(password, interval=self.type_interval)
-            time.sleep(0.5)
+        if not coords_result.success:
+            logging.error("Could not find password field coordinates after trying all strategies")
+            return False
 
-            logging.info("✓ Password filled")
+        coords = coords_result.result_data
+        logging.info("  Password field detected at: (%d, %d)", coords[0], coords[1])
+
+        # Use retry handler with verification
+        result = self.retry_handler.fill_field_with_verification(
+            field_coords=coords,
+            value=password,
+            field_name="password",
+            verification_method="clipboard"
+        )
+
+        if result.success and result.verification_passed:
+            logging.info("✅ Password field filled and verified (length: %d)", len(password))
+            self.timing.smart_wait(ActionType.FIELD_FILL)
             return True
-
-        except Exception as e:
-            logging.error("Password fill error: %s", e, exc_info=True)
+        else:
+            logging.error("❌ Password field fill failed: %s", result.error_message)
             return False
 
     def _click_login_button(self) -> bool:
-        """Submit login by clicking the button (with keyboard fallback)."""
-        logging.info("Submitting login form...")
-        success = False
+        """
+        Submit login form using multiple fallback strategies.
 
-        try:
+        Strategies (in order):
+        1. Click explicit login button via image detection
+        2. Click button relative to login window
+        3. Press Enter key
+        4. Press Tab + Enter
+        """
+        logging.info("Submitting login form with fallback strategies...")
+
+        def click_explicit_button():
+            """Try to find and click the explicit login button."""
             button_result = self.screen_detector.detect_custom_element("login_submit_button.png")
-            if button_result.get('found'):
-                if button_result.get('top_left') and button_result.get('size'):
-                    bx, by = button_result['top_left']
-                    bw, bh = button_result['size']
-                    button_position = (bx + bw // 2, by + bh // 2)
-                else:
-                    button_position = button_result.get('position')
+            if not button_result.get('found'):
+                return False
 
-                if button_position:
-                    logging.debug("Clicking explicit login button at %s", button_position)
-                    self._move_cursor(button_position[0], button_position[1])
-                    pyautogui.click(button_position[0], button_position[1])
-                    time.sleep(1)
-                    success = True
+            button_position = None
+            if button_result.get('top_left') and button_result.get('size'):
+                bx, by = button_result['top_left']
+                bw, bh = button_result['size']
+                button_position = (bx + bw // 2, by + bh // 2)
+            elif button_result.get('position'):
+                button_position = button_result['position']
 
-            if not success:
-                login_window = self.screen_detector.detect_custom_element("sample_login_window.png")
-                if login_window.get('found'):
-                    button_position = None
-                    if login_window.get('top_left') and login_window.get('size'):
-                        top_left = login_window['top_left']
-                        size = login_window['size']
-                        button_x = int(top_left[0] + size[0] * 0.5)
-                        button_y = int(top_left[1] + size[1] * 0.68)
-                        button_position = (button_x, button_y)
+            if button_position:
+                logging.info("  Clicking explicit login button at %s", button_position)
+                self._move_cursor(button_position[0], button_position[1])
+                pyautogui.click(button_position[0], button_position[1])
+                self.timing.smart_wait(ActionType.BUTTON_CLICK)
+                return True
+            return False
 
-                    if button_position:
-                        logging.debug("Clicking login button at %s", button_position)
-                        self._move_cursor(button_position[0], button_position[1])
-                        pyautogui.click(button_position[0], button_position[1])
-                        time.sleep(1)
-                        success = True
+        def click_relative_to_window():
+            """Click button based on login window position."""
+            login_window = self.screen_detector.detect_custom_element("sample_login_window.png")
+            if not login_window.get('found'):
+                return False
 
-        except Exception as exc:
-            logging.debug("Login button click via image detection failed: %s", exc, exc_info=True)
+            if login_window.get('top_left') and login_window.get('size'):
+                top_left = login_window['top_left']
+                size = login_window['size']
+                button_x = int(top_left[0] + size[0] * 0.5)
+                button_y = int(top_left[1] + size[1] * 0.68)
 
-        logging.debug("Pressing Enter key to ensure form submission.")
-        pyautogui.press('enter')
-        time.sleep(1)
-        logging.info("✓ Login form submission attempted (mouse/keyboard).")
-        return True
+                logging.info("  Clicking button relative to window at (%d, %d)", button_x, button_y)
+                self._move_cursor(button_x, button_y)
+                pyautogui.click(button_x, button_y)
+                self.timing.smart_wait(ActionType.BUTTON_CLICK)
+                return True
+            return False
 
-    def _wait_for_login_window(self, timeout: int = 10) -> bool:
-        """Wait until the login window is visible."""
-        result = self.screen_detector.wait_for_element("sample_login_window.png", timeout=timeout)
-        if result.get('found'):
-            logging.info("✓ Login window visible.")
+        def press_enter():
+            """Press Enter to submit form."""
+            logging.info("  Pressing Enter key to submit form")
+            pyautogui.press('enter')
+            self.timing.smart_wait(ActionType.FORM_SUBMIT)
             return True
 
-        logging.warning("Login window not detected within %ds timeout.", timeout)
+        def press_tab_enter():
+            """Press Tab then Enter (in case focus is on password field)."""
+            logging.info("  Pressing Tab + Enter to submit form")
+            pyautogui.press('tab')
+            self.timing.smart_wait(ActionType.FIELD_FILL, custom_multiplier=0.5)
+            pyautogui.press('enter')
+            self.timing.smart_wait(ActionType.FORM_SUBMIT)
+            return True
+
+        # Use fallback chain
+        result = try_multiple(
+            "Submit Login Form",
+            [
+                ("Click Explicit Button", click_explicit_button),
+                ("Click Relative to Window", click_relative_to_window),
+                ("Press Enter", press_enter),
+                ("Press Tab+Enter", press_tab_enter),
+            ]
+        )
+
+        if result.success:
+            logging.info("✅ Login form submitted using: %s", result.strategy_used)
+            return True
+        else:
+            logging.error("❌ All login submission strategies failed")
+            return False
+
+    def _wait_for_login_window(self, timeout: int = 10) -> bool:
+        """Wait until the login window is visible using adaptive timing."""
+        logging.info("Waiting for login window (timeout: %ds)...", timeout)
+
+        def check_login_window():
+            result = self.screen_detector.detect_with_variants("sample_login_window")
+            return result.get('found') or result.get('confidence', 0) >= 0.65
+
+        success = self.timing.wait_for_condition(
+            check_login_window,
+            timeout=float(timeout),
+            check_interval=0.5,
+            action_name="login_window_detection"
+        )
+
+        if success:
+            logging.info("✓ Login window visible")
+            return True
+
+        logging.warning("Login window not detected within %ds timeout", timeout)
         return False
 
     def _open_user_dropdown(self, retries: int = 3) -> Optional[Dict[str, object]]:

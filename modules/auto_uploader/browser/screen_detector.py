@@ -27,26 +27,48 @@ except ImportError:
 
 
 class ScreenDetector:
-    """Detects UI elements using image recognition."""
+    """Detects UI elements using image recognition with multi-scale and multi-template support."""
 
-    def __init__(self, images_dir: Optional[Path] = None, confidence: float = 0.8):
+    def __init__(
+        self,
+        images_dir: Optional[Path] = None,
+        confidence: float = 0.75,
+        min_confidence: float = 0.65,
+        enable_multiscale: bool = True,
+        scales: Optional[list] = None
+    ):
         """
-        Initialize screen detector.
+        Initialize screen detector with enhanced detection capabilities.
 
         Args:
             images_dir: Directory containing reference images
-            confidence: Minimum confidence threshold for matching (0.0 to 1.0)
+            confidence: Ideal confidence threshold for matching (0.0 to 1.0)
+            min_confidence: Minimum acceptable confidence (for fallback)
+            enable_multiscale: Enable multi-scale template matching
+            scales: Custom scale factors (default: [0.8, 0.9, 1.0, 1.1, 1.2])
         """
         if not CV2_AVAILABLE:
             raise ImportError("OpenCV and pyautogui are required for screen detection")
 
         self.images_dir = images_dir or Path(__file__).parent.parent / "helper_images"
         self.confidence = confidence
+        self.min_confidence = min_confidence
+        self.enable_multiscale = enable_multiscale
+        self.scales = scales or [0.8, 0.9, 1.0, 1.1, 1.2]
 
         # Ensure images directory exists
         self.images_dir.mkdir(parents=True, exist_ok=True)
 
-        logging.debug("ScreenDetector initialized with images_dir: %s", self.images_dir)
+        # Cache for loaded templates
+        self._template_cache: Dict[str, np.ndarray] = {}
+
+        logging.debug(
+            "ScreenDetector initialized - dir: %s, confidence: %.2f-%.2f, multiscale: %s",
+            self.images_dir,
+            self.min_confidence,
+            self.confidence,
+            self.enable_multiscale
+        )
 
     def detect_user_status(self, region: Optional[Tuple[int, int, int, int]] = None) -> Dict[str, Any]:
         """
@@ -267,9 +289,186 @@ class ScreenDetector:
 
         return screenshot_cv
 
+    def _match_template_multiscale(
+        self,
+        template_path: Path,
+        screenshot: np.ndarray,
+        region: Optional[Tuple[int, int, int, int]] = None
+    ) -> Dict[str, Any]:
+        """
+        Perform multi-scale template matching for better detection.
+
+        Args:
+            template_path: Path to template image
+            screenshot: Screenshot image
+            region: Optional search region
+
+        Returns:
+            Best match result across all scales
+        """
+        # Load template (use cache if available)
+        template_key = str(template_path)
+        if template_key in self._template_cache:
+            template = self._template_cache[template_key]
+        else:
+            template = cv2.imread(str(template_path))
+            if template is None:
+                return {'found': False, 'position': None, 'confidence': 0.0}
+            self._template_cache[template_key] = template
+
+        best_match = None
+        best_confidence = 0.0
+
+        template_h, template_w = template.shape[:2]
+
+        for scale in self.scales:
+            # Skip scales that make template larger than screenshot
+            scaled_w = int(template_w * scale)
+            scaled_h = int(template_h * scale)
+
+            if scaled_w > screenshot.shape[1] or scaled_h > screenshot.shape[0]:
+                continue
+
+            # Resize template
+            scaled_template = cv2.resize(template, (scaled_w, scaled_h), interpolation=cv2.INTER_AREA)
+
+            # Perform matching
+            try:
+                result = cv2.matchTemplate(screenshot, scaled_template, cv2.TM_CCOEFF_NORMED)
+                min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+
+                # Update best match if this is better
+                if max_val > best_confidence:
+                    best_confidence = max_val
+                    center_x = max_loc[0] + scaled_w // 2
+                    center_y = max_loc[1] + scaled_h // 2
+
+                    # Adjust for region if specified
+                    if region:
+                        center_x += region[0]
+                        center_y += region[1]
+
+                    best_match = {
+                        'found': max_val >= self.min_confidence,
+                        'position': (center_x, center_y),
+                        'confidence': float(max_val),
+                        'top_left': max_loc,
+                        'size': (scaled_w, scaled_h),
+                        'scale': scale
+                    }
+
+                    logging.debug(
+                        "Scale %.2f: confidence=%.3f at (%d, %d)",
+                        scale, max_val, center_x, center_y
+                    )
+
+            except Exception as e:
+                logging.debug("Error matching at scale %.2f: %s", scale, e)
+                continue
+
+        if best_match and best_match['confidence'] >= self.min_confidence:
+            logging.debug(
+                "Best multiscale match: confidence=%.3f, scale=%.2f",
+                best_match['confidence'],
+                best_match.get('scale', 1.0)
+            )
+            return best_match
+        else:
+            return {'found': False, 'position': None, 'confidence': best_confidence}
+
+    def _find_template_variants(self, base_name: str) -> list:
+        """
+        Find all template variants for a base name.
+
+        For example, if base_name is "check_user_status", this will find:
+        - check_user_status.png
+        - check_user_status_v2.png
+        - check_user_status_light.png
+        etc.
+
+        Args:
+            base_name: Base template name (without .png extension)
+
+        Returns:
+            List of Path objects for found variants
+        """
+        # Remove .png if present
+        if base_name.endswith('.png'):
+            base_name = base_name[:-4]
+
+        variants = []
+
+        # Exact match
+        exact_path = self.images_dir / f"{base_name}.png"
+        if exact_path.exists():
+            variants.append(exact_path)
+
+        # Find numbered variants (v1, v2, v3, etc.)
+        for i in range(1, 10):
+            variant_path = self.images_dir / f"{base_name}_v{i}.png"
+            if variant_path.exists():
+                variants.append(variant_path)
+
+        # Find theme variants
+        for theme in ['light', 'dark', 'default']:
+            theme_path = self.images_dir / f"{base_name}_{theme}.png"
+            if theme_path.exists():
+                variants.append(theme_path)
+
+        logging.debug("Found %d variant(s) for '%s'", len(variants), base_name)
+        return variants
+
+    def detect_with_variants(
+        self,
+        template_name: str,
+        region: Optional[Tuple[int, int, int, int]] = None
+    ) -> Dict[str, Any]:
+        """
+        Detect element using multiple template variants.
+
+        Tries all available variants of a template and returns the best match.
+
+        Args:
+            template_name: Base template name
+            region: Optional search region
+
+        Returns:
+            Best match result across all variants
+        """
+        variants = self._find_template_variants(template_name)
+
+        if not variants:
+            logging.warning("No template variants found for '%s'", template_name)
+            return {'found': False, 'position': None, 'confidence': 0.0}
+
+        best_result = {'found': False, 'confidence': 0.0}
+
+        for variant_path in variants:
+            result = self._match_template(variant_path, region=region)
+
+            if result.get('confidence', 0) > best_result.get('confidence', 0):
+                best_result = result
+                best_result['template_used'] = variant_path.name
+
+            # If we found a good match, no need to try more variants
+            if result.get('found') and result.get('confidence', 0) >= self.confidence:
+                logging.debug("Strong match found with variant: %s", variant_path.name)
+                break
+
+        if best_result.get('found'):
+            logging.debug(
+                "Best variant match: %s (confidence: %.3f)",
+                best_result.get('template_used'),
+                best_result.get('confidence', 0)
+            )
+
+        return best_result
+
     def _match_template(self, template_path: Path, region: Optional[Tuple[int, int, int, int]] = None) -> Dict[str, Any]:
         """
-        Internal method to perform template matching.
+        Internal method to perform template matching with enhancements.
+
+        Now supports multi-scale matching if enabled.
 
         Args:
             template_path: Path to template image
@@ -286,6 +485,11 @@ class ScreenDetector:
             # Capture screenshot
             screenshot = self.capture_screen(region=region)
 
+            # Use multi-scale if enabled
+            if self.enable_multiscale:
+                return self._match_template_multiscale(template_path, screenshot, region)
+
+            # Standard single-scale matching
             # Load template
             template = cv2.imread(str(template_path))
             if template is None:
@@ -297,7 +501,7 @@ class ScreenDetector:
             min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
 
             # Check if match confidence exceeds threshold
-            if max_val >= self.confidence:
+            if max_val >= self.min_confidence:
                 # Get center of matched region
                 template_h, template_w = template.shape[:2]
                 center_x = max_loc[0] + template_w // 2
@@ -312,14 +516,14 @@ class ScreenDetector:
                             center_x, center_y, max_val)
 
                 return {
-                    'found': True,
+                    'found': max_val >= self.confidence,  # Use ideal confidence for 'found' flag
                     'position': (center_x, center_y),
                     'confidence': float(max_val),
                     'top_left': max_loc,
                     'size': (template_w, template_h)
                 }
             else:
-                logging.debug("Template match below threshold: %.2f < %.2f", max_val, self.confidence)
+                logging.debug("Template match below threshold: %.2f < %.2f", max_val, self.min_confidence)
                 return {'found': False, 'position': None, 'confidence': float(max_val)}
 
         except Exception as e:

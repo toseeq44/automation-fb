@@ -649,106 +649,240 @@ class ImageBasedLogin:
 
         return None
 
+    def _find_logout_button_in_dropdown(self, dropdown_info: Dict) -> Optional[tuple]:
+        """
+        Find logout button within dropdown using multi-level detection.
+
+        Tries multiple positions and confidence levels:
+        - 90% confidence (most reliable)
+        - 80% confidence (good match)
+        - 70% confidence (acceptable)
+        - Multiple vertical positions in dropdown
+        """
+        logging.info("Finding logout button in dropdown with multi-level detection...")
+
+        top_left = dropdown_info.get('top_left')
+        size = dropdown_info.get('size')
+        position = dropdown_info.get('position')
+
+        if not (top_left and size):
+            logging.warning("Dropdown size information not available, using position-based fallback")
+            if position:
+                # Try multiple offsets from position
+                candidates = [
+                    (position[0], position[1] + 80),
+                    (position[0], position[1] + 100),
+                    (position[0], position[1] + 120),
+                ]
+                return candidates
+            return None
+
+        # Calculate multiple candidate positions within dropdown
+        dx, dy = top_left
+        dw, dh = size
+
+        candidates = []
+
+        # Try bottom area (90%, 85%, 80%, 75%, 70% from top)
+        for ratio in [0.90, 0.85, 0.80, 0.75, 0.70]:
+            logout_x = int(dx + dw * 0.5)
+            logout_y = int(dy + dh * ratio)
+            candidates.append((logout_x, logout_y))
+
+        # Also try left and right sides (for different dropdown layouts)
+        logout_y_middle = int(dy + dh * 0.80)
+        candidates.append((int(dx + dw * 0.3), logout_y_middle))  # Left side
+        candidates.append((int(dx + dw * 0.7), logout_y_middle))  # Right side
+
+        logging.debug("Generated %d candidate positions for logout button", len(candidates))
+        return candidates
+
+    def _click_logout_with_retry(self, candidates: list) -> bool:
+        """
+        Try clicking each candidate position and verify logout happened.
+
+        Returns True if logout successful, False otherwise.
+        """
+        for idx, (x, y) in enumerate(candidates, 1):
+            logging.info("Attempt %d/%d: Clicking at (%d, %d)...", idx, len(candidates), x, y)
+
+            # Move and click
+            self._move_cursor(x, y)
+            pyautogui.click(x, y)
+
+            # Wait for page to respond
+            self.timing.smart_wait(ActionType.LOGOUT_VERIFY)
+
+            # Quick check: Did user icon disappear?
+            check = self.screen_detector.detect_with_variants("check_user_status", min_confidence_override=0.70)
+            after_confidence = check.get('confidence', 0)
+
+            if after_confidence < 0.50:
+                logging.info("✅ Logout successful at position (%d, %d) - user icon disappeared!", x, y)
+                return True
+            else:
+                logging.debug("Position (%d, %d) - user icon still visible (%.3f)", x, y, after_confidence)
+
+                # If not last attempt, reopen dropdown
+                if idx < len(candidates):
+                    logging.debug("Reopening dropdown for next attempt...")
+                    self._open_user_dropdown(retries=1)
+                    self.timing.smart_wait(ActionType.DROPDOWN_OPEN, custom_multiplier=0.5)
+
+        return False
+
     def _logout_user(self) -> bool:
         """
-        Handle logout process with multiple verification methods.
+        Handle logout process with robust multi-position detection and verification.
 
-        Verification methods (in order):
-        1. Check if user status icon disappeared (most reliable)
-        2. Check if login window appeared
-        3. Fallback: Assume success if logout clicked and user icon gone
+        Strategy:
+        1. Detect user status before logout
+        2. Open dropdown
+        3. Try multiple logout button positions (7+ candidates)
+        4. Verify after each click
+        5. Use multi-level verification (90%, 80%, 70% confidence)
         """
-        logging.info("Initiating logout...")
+        logging.info("")
+        logging.info("=" * 70)
+        logging.info("INITIATING LOGOUT WITH MULTI-LEVEL DETECTION")
+        logging.info("=" * 70)
 
         try:
             # Step 1: Detect current user status before logout
-            logging.debug("Checking user status before logout...")
-            before_status = self.screen_detector.detect_with_variants("check_user_status")
-            was_logged_in = before_status.get('found') or before_status.get('confidence', 0) >= 0.65
+            logging.info("Step 1/4: Checking user status before logout...")
+            before_status = self.screen_detector.detect_with_variants(
+                "check_user_status",
+                min_confidence_override=0.65
+            )
+            before_confidence = before_status.get('confidence', 0)
+            was_logged_in = before_confidence >= 0.65
+
+            logging.info("  User status before: %.3f (%s)",
+                        before_confidence,
+                        "LOGGED IN" if was_logged_in else "LOGGED OUT")
 
             if not was_logged_in:
-                logging.warning("User status not detected before logout (might already be logged out)")
-
-            # Step 2: Open dropdown and click logout
-            dropdown = self._open_user_dropdown()
-            if not dropdown:
-                logging.error("Unable to locate account dropdown for logout.")
-                return False
-
-            logging.info("✓ Account dropdown detected.")
-            top_left = dropdown.get('top_left')
-            size = dropdown.get('size')
-            position = dropdown.get('position')
-
-            if top_left and size:
-                logout_x = int(top_left[0] + size[0] * 0.5)
-                logout_y = int(top_left[1] + size[1] * 0.90)
-            elif position:
-                logout_x = position[0]
-                logout_y = position[1] + 90
-            else:
-                screen_width, screen_height = pyautogui.size()
-                logout_x = int(screen_width * 0.95)
-                logout_y = int(screen_height * 0.20)
-
-            logging.info("Clicking logout option at (%d, %d)...", logout_x, logout_y)
-            self._move_cursor(logout_x, logout_y)
-            pyautogui.click(logout_x, logout_y)
-
-            # Wait for page transition
-            logging.info("Waiting for logout to complete...")
-            self.timing.smart_wait(ActionType.LOGOUT_VERIFY)
-
-            # Step 3: Verify logout using multiple methods
-            logging.info("Verifying logout using multiple methods...")
-
-            # Method 1: Check if user status icon disappeared (BEST method)
-            logging.debug("Method 1: Checking if user icon disappeared...")
-            after_status = self.screen_detector.detect_with_variants("check_user_status")
-            user_icon_disappeared = not after_status.get('found') and after_status.get('confidence', 0) < 0.50
-
-            if user_icon_disappeared:
-                logging.info("✅ Logout verified: User status icon disappeared")
+                logging.warning("⚠ User may already be logged out (confidence: %.3f)", before_confidence)
                 return True
 
-            # Method 2: Check if login window appeared (with relaxed confidence)
-            logging.debug("Method 2: Checking if login window appeared...")
-            if self._wait_for_login_window(timeout=8, min_confidence=0.40):
+            # Step 2: Open dropdown
+            logging.info("Step 2/4: Opening account dropdown...")
+            dropdown = self._open_user_dropdown(retries=3)
+            if not dropdown:
+                logging.error("❌ Unable to locate account dropdown for logout")
+                return False
+
+            logging.info("✓ Account dropdown detected at confidence: %.3f",
+                        dropdown.get('confidence', 0))
+
+            # Step 3: Find logout button positions (multiple candidates)
+            logging.info("Step 3/4: Finding logout button candidates...")
+            candidates = self._find_logout_button_in_dropdown(dropdown)
+
+            if not candidates:
+                logging.error("❌ Could not generate logout button candidates")
+                return False
+
+            logging.info("  Generated %d candidate positions", len(candidates))
+
+            # Step 4: Try clicking each candidate with verification
+            logging.info("Step 4/4: Attempting logout with multi-position detection...")
+            logout_successful = self._click_logout_with_retry(candidates)
+
+            if not logout_successful:
+                logging.warning("⚠ Dropdown positions failed, trying full-screen search...")
+
+                # Full-screen fallback: Search entire screen for logout button
+                screen_width, screen_height = pyautogui.size()
+
+                # Divide screen into grid and try common logout positions
+                fullscreen_candidates = []
+
+                # Top-right area (most common)
+                for y_offset in range(100, 400, 50):
+                    for x_offset in range(-200, 0, 50):
+                        fullscreen_candidates.append((screen_width + x_offset, y_offset))
+
+                # Right side middle
+                for y in range(screen_height // 3, 2 * screen_height // 3, 100):
+                    fullscreen_candidates.append((screen_width - 100, y))
+
+                # Center-right
+                for y in range(200, screen_height - 200, 100):
+                    fullscreen_candidates.append((screen_width - 300, y))
+
+                logging.info("  Trying %d full-screen positions...", len(fullscreen_candidates))
+
+                # Reopen dropdown for full-screen search
+                self._open_user_dropdown(retries=2)
+                self.timing.smart_wait(ActionType.DROPDOWN_OPEN)
+
+                logout_successful = self._click_logout_with_retry(fullscreen_candidates)
+
+                if not logout_successful:
+                    logging.error("❌ All logout attempts failed (dropdown + full-screen)")
+                    return False
+
+            # Final verification with multiple confidence levels
+            logging.info("Performing final multi-level verification...")
+
+            # Level 1: 90% confidence (strict)
+            final_check_90 = self.screen_detector.detect_with_variants(
+                "check_user_status",
+                min_confidence_override=0.90
+            )
+
+            # Level 2: 80% confidence (medium)
+            final_check_80 = self.screen_detector.detect_with_variants(
+                "check_user_status",
+                min_confidence_override=0.80
+            )
+
+            # Level 3: 70% confidence (relaxed)
+            final_check_70 = self.screen_detector.detect_with_variants(
+                "check_user_status",
+                min_confidence_override=0.70
+            )
+
+            conf_90 = final_check_90.get('confidence', 0)
+            conf_80 = final_check_80.get('confidence', 0)
+            conf_70 = final_check_70.get('confidence', 0)
+
+            logging.info("Multi-level verification results:")
+            logging.info("  - 90%% threshold: %.3f %s", conf_90, "✅ PASS" if conf_90 < 0.50 else "❌ FAIL")
+            logging.info("  - 80%% threshold: %.3f %s", conf_80, "✅ PASS" if conf_80 < 0.50 else "❌ FAIL")
+            logging.info("  - 70%% threshold: %.3f %s", conf_70, "✅ PASS" if conf_70 < 0.50 else "❌ FAIL")
+
+            # Success if any level shows user icon disappeared
+            if conf_70 < 0.50:
+                logging.info("")
+                logging.info("=" * 70)
+                logging.info("✅ LOGOUT SUCCESSFUL - User icon disappeared")
+                logging.info("   Before: %.3f → After: %.3f (Drop: %.3f)",
+                            before_confidence, conf_70, before_confidence - conf_70)
+                logging.info("=" * 70)
+                logging.info("")
+                return True
+
+            # Check if login window appeared (alternative verification)
+            logging.info("Alternative check: Looking for login window...")
+            if self._wait_for_login_window(timeout=5, min_confidence=0.30):
                 logging.info("✅ Logout verified: Login window appeared")
                 return True
 
-            # Method 3: Compare before/after status (fallback)
-            logging.debug("Method 3: Comparing before/after user status...")
-            before_confidence = before_status.get('confidence', 0)
-            after_confidence = after_status.get('confidence', 0)
-
-            # If confidence dropped significantly, likely logged out
-            if was_logged_in and (before_confidence - after_confidence > 0.3):
-                logging.info(
-                    "✅ Logout verified: User status confidence dropped significantly (%.2f -> %.2f)",
-                    before_confidence,
-                    after_confidence
-                )
+            # If confidence dropped significantly (30%+), consider success
+            confidence_drop = before_confidence - conf_70
+            if confidence_drop > 0.30:
+                logging.warning("⚠ User icon confidence dropped %.3f - assuming logout successful", confidence_drop)
                 return True
 
-            # Method 4: Final fallback - if we clicked logout and user icon is weak, assume success
-            if after_confidence < 0.50:
-                logging.warning(
-                    "⚠ Logout verification inconclusive, but user icon weak (%.2f) - assuming success",
-                    after_confidence
-                )
-                return True
-
-            # If all methods fail
-            logging.error(
-                "❌ Logout verification failed:\n"
-                "  - User icon disappeared: %s\n"
-                "  - Login window appeared: False\n"
-                "  - Status confidence: %.2f -> %.2f",
-                user_icon_disappeared,
-                before_confidence,
-                after_confidence
-            )
+            logging.error("")
+            logging.error("=" * 70)
+            logging.error("❌ LOGOUT VERIFICATION FAILED")
+            logging.error("   User icon still visible: %.3f (before: %.3f)", conf_70, before_confidence)
+            logging.error("   All attempts exhausted")
+            logging.error("=" * 70)
+            logging.error("")
             return False
 
         except Exception as e:

@@ -714,14 +714,18 @@ class ImageBasedLogin:
             self.timing.smart_wait(ActionType.LOGOUT_VERIFY)
 
             # Quick check: Did user icon disappear?
-            check = self.screen_detector.detect_with_variants("check_user_status", min_confidence_override=0.70)
+            # STRICT check: Must be below 0.40 (not 0.50) to avoid false positives
+            check = self.screen_detector.detect_with_variants("check_user_status", min_confidence_override=0.60)
             after_confidence = check.get('confidence', 0)
 
-            if after_confidence < 0.50:
-                logging.info("✅ Logout successful at position (%d, %d) - user icon disappeared!", x, y)
+            # Very strict: confidence must drop to below 0.40
+            if after_confidence < 0.40:
+                logging.info("✅ Logout successful at position (%d, %d) - user icon disappeared (%.3f)!",
+                           x, y, after_confidence)
                 return True
             else:
-                logging.debug("Position (%d, %d) - user icon still visible (%.3f)", x, y, after_confidence)
+                logging.debug("Position (%d, %d) - user icon still present (%.3f) - NOT logged out",
+                            x, y, after_confidence)
 
                 # If not last attempt, reopen dropdown
                 if idx < len(candidates):
@@ -823,8 +827,8 @@ class ImageBasedLogin:
                     logging.error("❌ All logout attempts failed (dropdown + full-screen)")
                     return False
 
-            # Final verification with multiple confidence levels
-            logging.info("Performing final multi-level verification...")
+            # Final verification with STRICT multi-level checks
+            logging.info("Performing final multi-level STRICT verification...")
 
             # Level 1: 90% confidence (strict)
             final_check_90 = self.screen_detector.detect_with_variants(
@@ -838,42 +842,54 @@ class ImageBasedLogin:
                 min_confidence_override=0.80
             )
 
-            # Level 3: 70% confidence (relaxed)
-            final_check_70 = self.screen_detector.detect_with_variants(
+            # Level 3: 60% confidence (relaxed but still strict)
+            final_check_60 = self.screen_detector.detect_with_variants(
                 "check_user_status",
-                min_confidence_override=0.70
+                min_confidence_override=0.60
             )
 
             conf_90 = final_check_90.get('confidence', 0)
             conf_80 = final_check_80.get('confidence', 0)
-            conf_70 = final_check_70.get('confidence', 0)
+            conf_60 = final_check_60.get('confidence', 0)
 
             logging.info("Multi-level verification results:")
-            logging.info("  - 90%% threshold: %.3f %s", conf_90, "✅ PASS" if conf_90 < 0.50 else "❌ FAIL")
-            logging.info("  - 80%% threshold: %.3f %s", conf_80, "✅ PASS" if conf_80 < 0.50 else "❌ FAIL")
-            logging.info("  - 70%% threshold: %.3f %s", conf_70, "✅ PASS" if conf_70 < 0.50 else "❌ FAIL")
+            logging.info("  - 90%% detection: %.3f %s", conf_90, "✅ GONE" if conf_90 < 0.35 else "❌ STILL THERE")
+            logging.info("  - 80%% detection: %.3f %s", conf_80, "✅ GONE" if conf_80 < 0.35 else "❌ STILL THERE")
+            logging.info("  - 60%% detection: %.3f %s", conf_60, "✅ GONE" if conf_60 < 0.35 else "❌ STILL THERE")
 
-            # Success if any level shows user icon disappeared
-            if conf_70 < 0.50:
-                logging.info("")
-                logging.info("=" * 70)
-                logging.info("✅ LOGOUT SUCCESSFUL - User icon disappeared")
-                logging.info("   Before: %.3f → After: %.3f (Drop: %.3f)",
-                            before_confidence, conf_70, before_confidence - conf_70)
-                logging.info("=" * 70)
-                logging.info("")
-                return True
+            # STRICT: All levels must show icon disappeared (< 0.35)
+            all_levels_pass = conf_90 < 0.35 and conf_80 < 0.35 and conf_60 < 0.35
 
-            # Check if login window appeared (alternative verification)
-            logging.info("Alternative check: Looking for login window...")
+            if all_levels_pass:
+                # Additional check: Look for login window (MANDATORY)
+                logging.info("User icon checks passed, verifying login window appeared...")
+                if self._wait_for_login_window(timeout=8, min_confidence=0.25):
+                    logging.info("")
+                    logging.info("=" * 70)
+                    logging.info("✅ LOGOUT VERIFIED SUCCESSFUL")
+                    logging.info("   User icon: Before %.3f → After %.3f (Drop: %.3f)",
+                                before_confidence, conf_60, before_confidence - conf_60)
+                    logging.info("   Login window: APPEARED ✅")
+                    logging.info("=" * 70)
+                    logging.info("")
+                    return True
+                else:
+                    logging.warning("⚠ User icon disappeared BUT login window not detected")
+                    logging.warning("   This might be a false positive - logout may have failed")
+                    # Still check confidence drop
+                    confidence_drop = before_confidence - conf_60
+                    if confidence_drop > 0.55:
+                        logging.info("✅ Confidence dropped significantly (%.3f) - accepting logout", confidence_drop)
+                        return True
+                    else:
+                        logging.error("❌ Confidence drop too small (%.3f) - logout likely failed", confidence_drop)
+                        return False
+
+            # If icon still visible, check login window anyway
+            logging.warning("⚠ User icon still visible (60%% conf: %.3f)", conf_60)
+            logging.info("Checking if login window appeared anyway...")
             if self._wait_for_login_window(timeout=5, min_confidence=0.30):
-                logging.info("✅ Logout verified: Login window appeared")
-                return True
-
-            # If confidence dropped significantly (30%+), consider success
-            confidence_drop = before_confidence - conf_70
-            if confidence_drop > 0.30:
-                logging.warning("⚠ User icon confidence dropped %.3f - assuming logout successful", confidence_drop)
+                logging.info("✅ Login window appeared - logout successful despite icon detection")
                 return True
 
             logging.error("")
@@ -980,8 +996,25 @@ class ImageBasedLogin:
         logging.info("Waiting for browser to be ready...")
         time.sleep(2)
 
-        if not self._wait_for_login_window(timeout=8):
-            logging.warning("Proceeding without visual confirmation of login form.")
+        # MANDATORY: Login window MUST be visible before proceeding
+        logging.info("Verifying login page is ready (MANDATORY CHECK)...")
+        login_window_ready = self._wait_for_login_window(timeout=10, min_confidence=0.25)
+
+        if not login_window_ready:
+            logging.error("")
+            logging.error("=" * 70)
+            logging.error("❌ CRITICAL: Login window NOT detected!")
+            logging.error("   This means we are NOT on the login page.")
+            logging.error("   Possible reasons:")
+            logging.error("     1. Logout did not complete (still logged in)")
+            logging.error("     2. Page is loading slowly")
+            logging.error("     3. Wrong page/redirect issue")
+            logging.error("   STOPPING to prevent filling fields on wrong page!")
+            logging.error("=" * 70)
+            logging.error("")
+            return False
+
+        logging.info("✅ Login window confirmed - safe to proceed")
 
         # Fill credentials
         logging.info("Step 4/5: Filling login credentials...")

@@ -224,6 +224,10 @@ class UploadOrchestrator:
             creator_names = [entry.profile_name for entry in entries]
             logging.info("    → Creators: %s", ", ".join(creator_names))
 
+            profile_names_value = meta.get("profile_names")
+            if profile_names_value:
+                browser_config["ix_profile_names_raw"] = profile_names_value
+
             work_items.append(
                 AccountWorkItem(
                     account_name=account_dir.name,
@@ -234,6 +238,7 @@ class UploadOrchestrator:
                     shortcuts_root=paths.shortcuts_root,
                     browser_config=browser_config,
                     automation_mode=automation_mode,
+                    metadata=meta,
                 )
             )
 
@@ -250,20 +255,58 @@ class UploadOrchestrator:
         kv_pairs: Dict[str, str] = {}
 
         try:
-            lines = login_path.read_text(encoding="utf-8").splitlines()
+            content = login_path.read_text(encoding="utf-8")
         except OSError as exc:
             logging.error("Unable to read %s: %s", login_path, exc)
             return entries, kv_pairs
 
-        for idx, raw_line in enumerate(lines, start=1):
+        # First pass: handle multi-line values (like profile_names: { ... })
+        current_key: Optional[str] = None
+        current_value_lines: List[str] = []
+        in_multiline_block = False
+
+        lines = content.splitlines()
+        for raw_line in lines:
             line = raw_line.strip()
+
+            # Skip empty lines and comments
             if not line or line.startswith("#"):
                 continue
 
-            if "|" in line:
+            # Check if this line starts with a letter (actual key) vs a number/symbol (continuation)
+            # A key should start with a letter/word character
+            is_top_level_key = (
+                ":" in line
+                and not raw_line.startswith(" ")
+                and not raw_line.startswith("\t")
+                and line[0].isalpha()  # Key must start with a letter
+            )
+
+            if is_top_level_key:
+                # Save previous key-value pair if exists
+                if current_key and current_value_lines:
+                    combined_value = " ".join(v.strip() for v in current_value_lines if v.strip())
+                    kv_pairs[current_key] = combined_value
+                    current_value_lines = []
+
+                # Start new key-value pair
+                key_part, value_part = line.split(":", 1)
+                current_key = key_part.strip().lower().replace(" ", "_")
+                current_value_lines = [value_part.strip()]
+                # Track if we've just started a multi-line block (ends with "{")
+                in_multiline_block = value_part.strip().endswith("{") or value_part.strip() == "{"
+            elif current_key is not None:
+                # Continuation of previous value
+                if line:  # Only add non-empty lines
+                    current_value_lines.append(line)
+                # Check if this line ends the multi-line block
+                if line.endswith("}"):
+                    in_multiline_block = False
+            elif "|" in line:
+                # Handle pipe-separated entries (only if not in a multi-line block)
                 parts = [segment.strip() for segment in line.split("|")]
                 if len(parts) < 3:
-                    logging.warning("Skipping malformed line %d in %s", idx, login_path)
+                    logging.warning("Skipping malformed pipe line: %s", line)
                     continue
 
                 extras: Dict[str, str] = {}
@@ -281,39 +324,37 @@ class UploadOrchestrator:
                         extras=extras,
                     )
                 )
-                continue
 
-            if ":" in line:
-                key, value = line.split(":", 1)
-                kv_pairs[key.strip().lower().replace(" ", "_")] = value.strip()
-                continue
-
-            logging.warning("Skipping unrecognised line %d in %s", idx, login_path)
+        # Save last key-value pair
+        if current_key and current_value_lines:
+            combined_value = " ".join(v.strip() for v in current_value_lines if v.strip())
+            kv_pairs[current_key] = combined_value
 
         if not entries and kv_pairs:
             # No pipe-separated entries found, use account-based discovery
-            # Look for creators in the account's Creators subfolder
-            account_dir = login_path.parent
-            creators_subfolder = account_dir / "Creators"
+            # First, check if profile_names are defined in login_data.txt
+            profile_names_raw = kv_pairs.get("profile_names", "")
 
-            if creators_subfolder.exists():
-                # Discover creator folders from Creators subfolder
-                creator_dirs = [d for d in creators_subfolder.iterdir() if d.is_dir()]
-                logging.debug(
-                    "Found %d creator folder(s) in %s: %s",
-                    len(creator_dirs),
-                    creators_subfolder,
-                    ", ".join(d.name for d in creator_dirs)
-                )
+            if profile_names_raw:
+                # Parse profile_names from login_data.txt
+                from ..browser.profile_selector import IXProfileSelector
+                profile_names = IXProfileSelector.parse_profile_names(profile_names_raw)
 
-                # Create CreatorLogin entries for each discovered creator
-                for creator_dir in creator_dirs:
+                if profile_names:
+                    logging.info(
+                        "Found %d profile name(s) from login_data.txt: %s",
+                        len(profile_names),
+                        ", ".join(profile_names)
+                    )
+
+                    # Create CreatorLogin entries from profile_names in login_data.txt
                     extras = {
                         key: value
                         for key, value in kv_pairs.items()
                         if key
                         not in {
                             "profile_name",
+                            "profile_names",
                             "email",
                             "password",
                             "page_name",
@@ -323,19 +364,64 @@ class UploadOrchestrator:
                         }
                     }
 
-                    entries.append(
-                        CreatorLogin(
-                            profile_name=creator_dir.name,  # Use actual creator folder name
-                            email=kv_pairs.get("email", ""),
-                            password=kv_pairs.get("password", ""),
-                            page_name=kv_pairs.get("page_name", ""),
-                            page_id=kv_pairs.get("page_id", ""),
-                            extras=extras,
+                    for profile_name in profile_names:
+                        entries.append(
+                            CreatorLogin(
+                                profile_name=profile_name,  # Use profile name from login_data.txt
+                                email=kv_pairs.get("email", ""),
+                                password=kv_pairs.get("password", ""),
+                                page_name=kv_pairs.get("page_name", ""),
+                                page_id=kv_pairs.get("page_id", ""),
+                                extras=extras,
+                            )
                         )
+
+            # If no profile_names defined, fall back to Creators subfolder discovery
+            if not entries:
+                account_dir = login_path.parent
+                creators_subfolder = account_dir / "Creators"
+
+                if creators_subfolder.exists():
+                    # Discover creator folders from Creators subfolder
+                    creator_dirs = [d for d in creators_subfolder.iterdir() if d.is_dir()]
+                    logging.debug(
+                        "Found %d creator folder(s) in %s: %s",
+                        len(creator_dirs),
+                        creators_subfolder,
+                        ", ".join(d.name for d in creator_dirs)
                     )
-            else:
-                # Fallback to old behavior if no Creators subfolder
-                logging.debug("No Creators subfolder found, using account name as profile")
+
+                    # Create CreatorLogin entries for each discovered creator
+                    for creator_dir in creator_dirs:
+                        extras = {
+                            key: value
+                            for key, value in kv_pairs.items()
+                            if key
+                            not in {
+                                "profile_name",
+                                "email",
+                                "password",
+                                "page_name",
+                                "page_id",
+                                "browser",
+                                "browser_type",
+                            }
+                        }
+
+                        entries.append(
+                            CreatorLogin(
+                                profile_name=creator_dir.name,  # Use actual creator folder name
+                                email=kv_pairs.get("email", ""),
+                                password=kv_pairs.get("password", ""),
+                                page_name=kv_pairs.get("page_name", ""),
+                                page_id=kv_pairs.get("page_id", ""),
+                                extras=extras,
+                            )
+                        )
+
+            # If still no entries and no profile_names, fallback to single account entry
+            if not entries:
+                logging.debug("No profile_names or Creators subfolder found, using account name as profile")
                 profile_name = kv_pairs.get("profile_name") or account_name
                 extras = {
                     key: value
@@ -343,6 +429,7 @@ class UploadOrchestrator:
                     if key
                     not in {
                         "profile_name",
+                        "profile_names",
                         "email",
                         "password",
                         "page_name",

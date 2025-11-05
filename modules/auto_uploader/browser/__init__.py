@@ -51,4 +51,17 @@ __all__ = [
     "LoginManager",
     "FullscreenManager",
     "WorkflowController",
+    "AdvancedScreenAnalyzer",
+    "OCRDetector",
+    "HealthChecker",
+    "CoordinatePredictor",
+    "StrategyOrchestrator",
+    "IXProfileSelector",
 ]
+
+from .advanced_screen_analyzer import AdvancedScreenAnalyzer
+from .health_checker import HealthChecker
+from .ml_coordinate_predictor import CoordinatePredictor
+from .ocr_detector import OCRDetector
+from .strategy_orchestrator import StrategyOrchestrator
+from .profile_selector import IXProfileSelector

@@ -173,7 +173,6 @@ class UploadWorker(QThread):
 
 
 class AutoUploaderPage(QWidget):
-    """Modern replacement for the legacy AutoUploaderPage."""
 
     def __init__(self, back_callback: Optional[Callable[[], None]] = None, parent: Optional[QWidget] = None):
         # Backward compatibility: legacy code passed the callback as the first

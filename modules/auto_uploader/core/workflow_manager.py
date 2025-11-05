@@ -9,6 +9,8 @@ from typing import Dict, List, Optional, Sequence
 
 from ..browser.launcher import BrowserLauncher
 from ..browser.image_based_login import ImageBasedLogin
+from ..browser.profile_selector import IXProfileSelector
+from ..browser.screen_detector import ScreenDetector
 from ..upload.file_selector import FileSelector
 from ..upload.metadata_handler import MetadataHandler
 from ..upload.video_uploader import VideoUploader
@@ -39,6 +41,7 @@ class AccountWorkItem:
     shortcuts_root: Path
     browser_config: Dict[str, object]
     automation_mode: str
+    metadata: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -60,6 +63,7 @@ class WorkflowManager:
         self._file_selector = file_selector or FileSelector()
         self._metadata_handler = metadata_handler or MetadataHandler()
         self._uploader = uploader or VideoUploader()
+        self._ix_selector_cached: Optional[IXProfileSelector | bool] = None
         logging.debug("WorkflowManager initialized")
 
     def execute_account(self, work_item: AccountWorkItem, context: WorkflowContext) -> bool:
@@ -249,9 +253,38 @@ class WorkflowManager:
         tracker = UploadTracker(context.history_file)
         account_success = True
 
+        ix_profile_names: Sequence[str] = ()
+        last_ix_profile: Optional[str] = None
+        if work_item.browser_type == "ix":
+            ix_profile_names = self._get_ix_profile_names(work_item)
+            if ix_profile_names:
+                logging.info("[IX] Profile order for this account: %s", ", ".join(ix_profile_names))
+
         for idx, login in enumerate(work_item.login_entries, 1):
             logging.info("")
             logging.info("  → Creator %d/%d: %s", idx, len(work_item.login_entries), login.profile_name)
+
+            if work_item.browser_type == "ix":
+                target_profile: Optional[str] = None
+                if ix_profile_names and idx - 1 < len(ix_profile_names):
+                    target_profile = ix_profile_names[idx - 1]
+                if not target_profile:
+                    target_profile = login.profile_name
+
+                if target_profile and target_profile != last_ix_profile:
+                    logging.info(
+                        "[IX] Preparing to open profile '%s' for creator '%s'",
+                        target_profile,
+                        login.profile_name,
+                    )
+                    if self._open_ix_profile(target_profile):
+                        last_ix_profile = target_profile
+                    else:
+                        logging.warning(
+                            "[IX] Unable to switch to profile '%s'; continuing anyway.",
+                            target_profile,
+                        )
+
             creator_success = self._process_creator(login, work_item, tracker)
             account_success = account_success and creator_success
 
@@ -276,6 +309,55 @@ class WorkflowManager:
             logging.error("✗ Account '%s' had errors", work_item.account_name)
 
         return account_success
+
+    # ------------------------------------------------------------------ #
+    # ixBrowser profile selection                                       #
+    # ------------------------------------------------------------------ #
+    def _get_ix_selector(self) -> Optional[IXProfileSelector]:
+        if self._ix_selector_cached is False:
+            return None
+        if self._ix_selector_cached is None:
+            try:
+                screen_detector = ScreenDetector()
+                self._ix_selector_cached = IXProfileSelector(screen_detector)
+            except Exception as exc:  # pragma: no cover
+                logging.warning("[IX] Unable to initialise profile selector: %s", exc)
+                self._ix_selector_cached = False
+        if self._ix_selector_cached is False:
+            return None
+        return self._ix_selector_cached  # type: ignore[return-value]
+
+    def _open_ix_profile(self, profile_name: str) -> bool:
+        selector = self._get_ix_selector()
+        if not selector:
+            logging.warning("[IX] Profile selector unavailable; skipping ixBrowser profile selection.")
+            return False
+
+        if not profile_name:
+            logging.info("[IX] Empty profile name supplied; skipping.")
+            return False
+
+        logging.info("[IX] Attempting to open ixBrowser profile: %s", profile_name)
+        success = selector.open_profile(profile_name)
+        if success:
+            logging.info("[IX] Profile '%s' opened successfully.", profile_name)
+        else:
+            logging.warning("[IX] Failed to automate profile opening for '%s'.", profile_name)
+        return success
+
+    def _get_ix_profile_names(self, work_item: AccountWorkItem) -> Sequence[str]:
+        raw_value = (
+            work_item.browser_config.get("ix_profile_names_raw")
+            or work_item.metadata.get("profile_names")
+        )
+
+        if isinstance(raw_value, str):
+            names = IXProfileSelector.parse_profile_names(raw_value)
+            if names:
+                return names
+
+        return [entry.profile_name for entry in work_item.login_entries]
+
 
     def _process_creator(
         self,

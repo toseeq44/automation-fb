@@ -1,6 +1,6 @@
 {
   "automation": {
-    "mode": "ix",
+    "mode": "free_automation",
     "setup_completed": true,
     "paths": {
       "creators_root": "C:/Users/Fast Computers/Desktop/Toseeq Links Grabber/cretaers",

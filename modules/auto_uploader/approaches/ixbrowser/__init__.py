@@ -25,4 +25,6 @@ Usage:
     >>> result = approach.execute_workflow(work_item)
 """
 
-# Placeholder - will be implemented in STEP 3
+from .workflow import IXBrowserApproach
+
+__all__ = ["IXBrowserApproach"]

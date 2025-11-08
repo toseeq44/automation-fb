@@ -7,14 +7,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from ..approaches import ApproachConfig, ApproachFactory, CreatorData, WorkItem
 from ..auth.credential_manager import CredentialManager
 from ..config.settings_manager import SettingsManager
-from .workflow_manager import (
-    AccountWorkItem,
-    CreatorLogin,
-    WorkflowContext,
-    WorkflowManager,
-)
+from .workflow_manager import AccountWorkItem, CreatorLogin
 
 
 @dataclass(slots=True)
@@ -49,7 +45,6 @@ class UploadOrchestrator:
     ) -> None:
         self.settings = settings or SettingsManager()
         self.credentials = credentials or CredentialManager()
-        self.workflow_manager = WorkflowManager()
         logging.debug("UploadOrchestrator initialized")
 
     # ------------------------------------------------------------------ #
@@ -105,22 +100,46 @@ class UploadOrchestrator:
             logging.info("  %d. Account: %s | Browser: %s | Creators: %d",
                         idx, item.account_name, item.browser_type, len(item.login_entries))
 
+        approach_config = self._build_approach_config(automation_mode, paths)
+        approach_ready_items = [
+            self._convert_to_approach_work_item(item, approach_config)
+            for item in work_items
+        ]
+
+        approach = ApproachFactory.create(approach_config)
+        if approach is None:
+            logging.error("Unable to create automation approach for mode '%s'.", automation_mode)
+            logging.error("Please ensure the approach modules are implemented and registered.")
+            return False
+
         # Step 3: Execute workflow
-        logging.info("Step 4/5: Starting account processing...")
-        context = WorkflowContext(history_file=paths.history_file)
+        logging.info(
+            "Step 4/5: Starting account processing via approach: %s",
+            approach.__class__.__name__,
+        )
         overall_success = True
 
-        for idx, work_item in enumerate(work_items, 1):
+        for idx, work_item in enumerate(approach_ready_items, 1):
             logging.info("-"*60)
-            logging.info("Processing account %d/%d: %s", idx, len(work_items), work_item.account_name)
+            logging.info(
+                "Processing account %d/%d: %s",
+                idx,
+                len(approach_ready_items),
+                work_item.account_name,
+            )
             logging.info("-"*60)
-            result = self.workflow_manager.execute_account(work_item, context)
-            overall_success = overall_success and result
+            result = approach.execute_workflow(work_item)
+            overall_success = overall_success and result.success
 
-            if result:
-                logging.info("✓ Account '%s' processed successfully", work_item.account_name)
+            if result.success:
+                processed = result.creators_processed or len(work_item.creators)
+                logging.info("[OK] Account '%s' processed successfully (%d creator(s))",
+                             result.account_name, processed)
             else:
-                logging.error("✗ Account '%s' processing failed", work_item.account_name)
+                logging.error("[FAIL] Account '%s' processing failed", result.account_name)
+                if result.errors:
+                    for error in result.errors:
+                        logging.error("       - %s", error)
 
         # Step 4: Summary
         logging.info("="*60)
@@ -248,6 +267,76 @@ class UploadOrchestrator:
             logging.error("  → No valid accounts found with login_data.txt")
 
         return work_items
+
+    def _build_approach_config(self, automation_mode: str, paths: AutomationPaths) -> ApproachConfig:
+        """Assemble the configuration block passed to each approach instance."""
+        credentials = self._merge_mode_credentials(automation_mode)
+
+        return ApproachConfig(
+            mode=automation_mode,
+            credentials=credentials,
+            paths={
+                "creators_root": paths.creators_root,
+                "shortcuts_root": paths.shortcuts_root,
+                "history_file": paths.history_file,
+            },
+            browser_type=automation_mode,
+            settings={},
+        )
+
+    def _convert_to_approach_work_item(
+        self,
+        account_item: AccountWorkItem,
+        config: ApproachConfig,
+    ) -> WorkItem:
+        """Convert legacy AccountWorkItem objects to the unified WorkItem format."""
+        creators = [
+            CreatorData(
+                profile_name=entry.profile_name,
+                email=entry.email,
+                password=entry.password,
+                page_name=entry.page_name,
+                page_id=entry.page_id,
+                extras=dict(entry.extras),
+            )
+            for entry in account_item.login_entries
+        ]
+
+        raw_metadata = account_item.metadata if isinstance(account_item.metadata, dict) else {}
+        browser_config = (
+            dict(account_item.browser_config)
+            if isinstance(account_item.browser_config, dict)
+            else {}
+        )
+
+        metadata = {
+            "account_work_item": account_item,
+            "login_metadata": dict(raw_metadata),
+            "login_data_path": account_item.login_data_path,
+            "browser_config": browser_config,
+        }
+
+        return WorkItem(
+            account_name=account_item.account_name,
+            browser_type=account_item.browser_type,
+            creators=creators,
+            config=config,
+            metadata=metadata,
+        )
+
+    def _merge_mode_credentials(self, mode: str) -> Dict[str, Any]:
+        """Merge settings-based credentials with secrets stored via CredentialManager."""
+        stored = self.settings.get_credentials(mode) or {}
+        secure = self.credentials.load_credentials(f"approach:{mode}") or {}
+
+        merged = dict(stored)
+
+        for key, value in secure.items():
+            if key.startswith("_"):
+                continue
+            merged[key] = value
+
+        return merged
 
     def _parse_login_file(self, login_path: Path, account_name: str) -> Tuple[List[CreatorLogin], Dict[str, str]]:
         """Parse login_data.txt into creator login entries and raw metadata."""

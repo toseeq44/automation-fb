@@ -16,4 +16,6 @@ Usage:
     >>> result = approach.execute_workflow(work_item)
 """
 
-# Placeholder - will be implemented in STEP 2
+from .workflow import FreeAutomationApproach
+
+__all__ = ["FreeAutomationApproach"]

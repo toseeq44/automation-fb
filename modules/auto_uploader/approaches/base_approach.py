@@ -63,11 +63,13 @@ class WorkItem:
         browser_type: Browser to use
         creators: List of creator accounts to process
         config: Approach configuration
+        metadata: Additional per-account context (paths, raw configs, etc.)
     """
     account_name: str
     browser_type: str
     creators: List[CreatorData]
     config: ApproachConfig
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

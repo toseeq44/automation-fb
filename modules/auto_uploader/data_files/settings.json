@@ -1,6 +1,6 @@
 {
   "automation": {
-    "mode": "free_automation",
+    "mode": "ix",
     "setup_completed": true,
     "paths": {
       "creators_root": "C:/Users/Fast Computers/Desktop/Toseeq Links Grabber/cretaers",
@@ -9,7 +9,10 @@
     },
     "credentials": {
       "gologin": {},
-      "ix": {},
+      "ix": {
+        "api_key": "http://127.0.0.1:53200",
+        "email": "Sheikh1001733@gmail.com"
+      },
       "vpn": {},
       "free_automation": {}
     }

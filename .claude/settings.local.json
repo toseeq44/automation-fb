@@ -5,7 +5,8 @@
       "Bash(python:*)",
       "Bash(rm:*)",
       "Bash(ls:*)",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "Bash(dir:*)"
     ],
     "deny": [],
     "ask": []

@@ -11,6 +11,7 @@ from ..browser.launcher import BrowserLauncher
 from ..browser.image_based_login import ImageBasedLogin
 from ..browser.profile_selector import IXProfileSelector
 from ..browser.screen_detector import ScreenDetector
+from ..browser.video_upload_workflow import UploadWorkflowOrchestrator
 from ..upload.file_selector import FileSelector
 from ..upload.metadata_handler import MetadataHandler
 from ..upload.video_uploader import VideoUploader
@@ -279,6 +280,11 @@ class WorkflowManager:
                     )
                     if self._open_ix_profile(target_profile):
                         last_ix_profile = target_profile
+
+                        # Run video upload workflow after profile opens
+                        logging.info("")
+                        logging.info("[WORKFLOW] Starting video upload workflow for profile: %s", target_profile)
+                        self._run_upload_workflow(target_profile, work_item)
                     else:
                         logging.warning(
                             "[IX] Unable to switch to profile '%s'; continuing anyway.",
@@ -405,6 +411,95 @@ class WorkflowManager:
         # For now, return True since we're only logging shortcut discovery
         # Actual upload functionality will be added in next phase
         return True
+
+    def _run_upload_workflow(self, profile_id: str, work_item: AccountWorkItem) -> None:
+        """
+        Run video upload workflow after profile opens.
+
+        Coordinates:
+        - Phase 2: Extract page names from folders
+        - Phase 1: Open fresh tab and navigate bookmarks
+        - Phase 4: Find and click Add Videos button
+        """
+        try:
+            logging.info("")
+            logging.info("[WORKFLOW] ═════════════════════════════════════════════")
+            logging.info("[WORKFLOW] VIDEO UPLOAD WORKFLOW")
+            logging.info("[WORKFLOW] ═════════════════════════════════════════════")
+            logging.info("")
+
+            # Build profiles root from creators_root with intelligent path detection
+            # Actual folder structure (real):
+            # .../creator_shortcuts/IX/email@domain.com/Creators/Profiles/[ProfileName]/Pages/[PageName]/
+
+            profiles_root = None
+
+            # Try multiple path configurations in order of likelihood
+            candidates = [
+                # Option 1: creators_root/Profiles (if creators_root points to Creators folder)
+                work_item.creators_root / "Profiles",
+                # Option 2: creators_root/Creators/Profiles (if creators_root points to email folder)
+                work_item.creators_root / "Creators" / "Profiles",
+                # Option 3: parent/Creators/Profiles (if creators_root is inside Creators)
+                work_item.creators_root.parent / "Creators" / "Profiles",
+            ]
+
+            for i, candidate in enumerate([c for c in candidates if c], 1):
+                if candidate and candidate.exists():
+                    profiles_root = candidate
+                    logging.info("[WORKFLOW] Found Profiles at attempt %d: %s", i, profiles_root)
+                    break
+
+            # Last resort: try to find the actual creator_shortcuts structure
+            if not profiles_root or not profiles_root.exists():
+                try:
+                    # If creators_root is in Desktop/Toseeq, look for creator_shortcuts instead
+                    if "Toseeq" in str(work_item.creators_root):
+                        desktop = Path(work_item.creators_root).resolve().parents[1]  # go up to Desktop
+                        creator_shortcuts = desktop / "creator_shortcuts" / "IX"
+
+                        # Find the email folder
+                        if creator_shortcuts.exists():
+                            email_folders = list(creator_shortcuts.iterdir())
+                            if email_folders:
+                                profiles_root = email_folders[0] / "Creators" / "Profiles"
+                                if profiles_root.exists():
+                                    logging.info("[WORKFLOW] Found Profiles in creator_shortcuts: %s", profiles_root)
+                except Exception as e:
+                    logging.warning("[WORKFLOW] Error searching creator_shortcuts: %s", str(e))
+
+            if not profiles_root or not profiles_root.exists():
+                logging.error("[WORKFLOW] Could not find Profiles folder")
+                logging.error("[WORKFLOW] Checked locations:")
+                for candidate in [c for c in candidates if c]:
+                    logging.error("[WORKFLOW]   - %s", candidate)
+                return
+
+            logging.info("[WORKFLOW] Using profiles root: %s", profiles_root)
+            logging.info("[WORKFLOW] Profiles folder verified: %s", profiles_root.exists())
+
+            # Initialize orchestrator with correct path
+            orchestrator = UploadWorkflowOrchestrator(profiles_root=profiles_root)
+
+            # Execute workflow
+            success = orchestrator.execute_workflow(profile_id)
+
+            if success:
+                logging.info("")
+                logging.info("[WORKFLOW] ✅ Workflow completed successfully")
+                logging.info("[WORKFLOW] Ready to proceed with uploads")
+            else:
+                logging.warning("")
+                logging.warning("[WORKFLOW] ⚠️ Workflow encountered issues")
+                logging.warning("[WORKFLOW] Check logs for details")
+
+            logging.info("[WORKFLOW] ═════════════════════════════════════════════")
+            logging.info("")
+
+        except Exception as e:
+            logging.error("[WORKFLOW] ❌ Unexpected error in upload workflow: %s", str(e))
+            import traceback
+            logging.debug("[WORKFLOW] Traceback: %s", traceback.format_exc())
 
     @staticmethod
     def _resolve_window_title_hint(work_item: AccountWorkItem, login: CreatorLogin) -> Optional[str]:

@@ -11,9 +11,18 @@ Features:
 
 Usage:
     >>> from .workflow import FreeAutomationApproach
-    >>> config = ApproachConfig(mode='free_automation', ...)
+    >>> from ..base_approach import ApproachConfig
+    >>>
+    >>> config = ApproachConfig(
+    ...     mode='free_automation',
+    ...     credentials={'email': 'user@example.com', 'password': 'xxx'},
+    ...     paths={'creators_root': Path('/path/to/creators')},
+    ...     browser_type='chrome'
+    ... )
     >>> approach = FreeAutomationApproach(config)
     >>> result = approach.execute_workflow(work_item)
 """
 
-# Placeholder - will be implemented in STEP 2
+from .workflow import FreeAutomationApproach
+
+__all__ = ['FreeAutomationApproach']

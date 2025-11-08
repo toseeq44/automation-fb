@@ -490,12 +490,9 @@ class UploadOrchestrator:
             if normalized:
                 return normalized
 
-        # If automation_mode is explicitly set (including 'free_automation'), use it
-        # This ensures user's choice is respected regardless of folder name
-        if automation_mode and automation_mode != "":
+        if automation_mode and automation_mode not in {"", "free_automation"}:
             return automation_mode
 
-        # Fallback: Infer from folder name only if automation_mode not set
         name_lower = folder_name.lower()
         if "gologin" in name_lower or "orbita" in name_lower:
             return "gologin"

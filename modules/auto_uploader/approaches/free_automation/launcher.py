@@ -251,7 +251,6 @@ class BrowserLauncher:
         account_dir: Union[str, Path, None] = None,
         search_paths: Optional[Union[str, Path, Iterable[Union[str, Path]]]] = None,
         explicit_path: Optional[Union[str, Path]] = None,
-        use_fallback: bool = False,
     ) -> Optional[Path]:
         """
         Search for browser shortcut within configured shortcut directories.
@@ -261,7 +260,6 @@ class BrowserLauncher:
             account_dir: Optional account-specific shortcut directory
             search_paths: Optional collection of directories to search
             explicit_path: Optional explicit shortcut path or relative filename
-            use_fallback: If True, use first found .lnk as fallback when no match found
 
         Returns:
             Path to shortcut if found, None otherwise
@@ -294,8 +292,7 @@ class BrowserLauncher:
             logging.info("Shortcut match found: %s", match)
             return match
 
-        # Only use fallback if explicitly allowed (useful for free_automation mode)
-        if use_fallback and fallback:
+        if fallback:
             logging.warning("No shortcut matched '%s'. Using fallback: %s", browser_name, fallback)
             return fallback
 
@@ -582,25 +579,21 @@ class BrowserLauncher:
                 account_dir=account_dir,
                 search_paths=search_paths,
                 explicit_path=explicit_shortcut,
-                use_fallback=False,  # Don't use fallback yet, try alternatives first
             )
 
             if not shortcut_path:
                 # Try alternative browser names
                 logging.info("   ❌ Not found. Trying alternative browsers...")
                 alternative_names = ['chrome', 'firefox', 'edge', 'brave', 'opera']
-                for idx, alt_name in enumerate(alternative_names):
+                for alt_name in alternative_names:
                     if alt_name.lower() == browser_name.lower():
                         continue
                     logging.info("   → Trying: %s", alt_name.upper())
-                    # Use fallback on the last attempt
-                    is_last_attempt = (idx == len(alternative_names) - 1)
                     shortcut_path = self.find_browser_on_desktop(
                         alt_name,
                         account_dir=account_dir,
                         search_paths=search_paths,
                         explicit_path=explicit_shortcut,
-                        use_fallback=is_last_attempt,  # Use fallback only on last try
                     )
                     if shortcut_path:
                         logging.info("   ✅ Found alternative: %s", alt_name.upper())

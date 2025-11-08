@@ -16,6 +16,10 @@ from .workflow_manager import (
     WorkflowManager,
 )
 
+# Import approach-based architecture
+from ..approaches.approach_factory import ApproachFactory
+from ..approaches.base_approach import ApproachConfig, WorkItem, CreatorData
+
 
 @dataclass(slots=True)
 class AutomationPaths:
@@ -49,7 +53,8 @@ class UploadOrchestrator:
     ) -> None:
         self.settings = settings or SettingsManager()
         self.credentials = credentials or CredentialManager()
-        self.workflow_manager = WorkflowManager()
+        self.workflow_manager = WorkflowManager()  # Keep for backward compatibility
+        self.use_approach_factory = True  # Toggle to use new approach-based system
         logging.debug("UploadOrchestrator initialized")
 
     # ------------------------------------------------------------------ #
@@ -107,20 +112,40 @@ class UploadOrchestrator:
 
         # Step 3: Execute workflow
         logging.info("Step 4/5: Starting account processing...")
-        context = WorkflowContext(history_file=paths.history_file)
-        overall_success = True
 
-        for idx, work_item in enumerate(work_items, 1):
-            logging.info("-"*60)
-            logging.info("Processing account %d/%d: %s", idx, len(work_items), work_item.account_name)
-            logging.info("-"*60)
-            result = self.workflow_manager.execute_account(work_item, context)
-            overall_success = overall_success and result
+        if self.use_approach_factory:
+            # NEW: Use approach-based system
+            logging.info("")
+            logging.info("="*60)
+            logging.info("USING APPROACH-BASED ARCHITECTURE")
+            logging.info("="*60)
+            logging.info("Mode: %s", automation_mode)
+            logging.info("="*60)
+            logging.info("")
 
-            if result:
-                logging.info("✓ Account '%s' processed successfully", work_item.account_name)
-            else:
-                logging.error("✗ Account '%s' processing failed", work_item.account_name)
+            overall_success = self._execute_with_approach(work_items, paths, automation_mode)
+        else:
+            # OLD: Use legacy workflow manager
+            logging.info("")
+            logging.info("="*60)
+            logging.info("USING LEGACY WORKFLOW MANAGER")
+            logging.info("="*60)
+            logging.info("")
+
+            context = WorkflowContext(history_file=paths.history_file)
+            overall_success = True
+
+            for idx, work_item in enumerate(work_items, 1):
+                logging.info("-"*60)
+                logging.info("Processing account %d/%d: %s", idx, len(work_items), work_item.account_name)
+                logging.info("-"*60)
+                result = self.workflow_manager.execute_account(work_item, context)
+                overall_success = overall_success and result
+
+                if result:
+                    logging.info("✓ Account '%s' processed successfully", work_item.account_name)
+                else:
+                    logging.error("✗ Account '%s' processing failed", work_item.account_name)
 
         # Step 4: Summary
         logging.info("="*60)
@@ -504,3 +529,139 @@ class UploadOrchestrator:
             return candidate
 
         return candidate
+
+    # ------------------------------------------------------------------ #
+    # New approach-based execution                                       #
+    # ------------------------------------------------------------------ #
+    def _execute_with_approach(
+        self,
+        work_items: List[AccountWorkItem],
+        paths: AutomationPaths,
+        automation_mode: str
+    ) -> bool:
+        """
+        Execute workflow using approach factory pattern
+
+        Args:
+            work_items: List of account work items
+            paths: Automation paths
+            automation_mode: Automation mode (free_automation, ix, etc.)
+
+        Returns:
+            True if all accounts processed successfully
+        """
+        logging.info("")
+        logging.info("="*60)
+        logging.info("CREATING APPROACH INSTANCE")
+        logging.info("="*60)
+
+        # Step 1: Create approach configuration
+        logging.info("📋 Step 1/3: Building approach configuration...")
+
+        # Get credentials from settings
+        creds = self.settings.get_credentials(automation_mode) or {}
+
+        # Get password from secure keyring
+        password_data = self.credentials.load_credentials(f'approach:{automation_mode}')
+        if password_data:
+            creds['password'] = password_data.get('password', '')
+
+        approach_config = ApproachConfig(
+            mode=automation_mode,
+            credentials=creds,
+            paths={
+                'creators_root': paths.creators_root,
+                'shortcuts_root': paths.shortcuts_root,
+                'history_file': paths.history_file,
+            },
+            browser_type=work_items[0].browser_type if work_items else 'chrome',
+            settings={}
+        )
+
+        logging.info(f"   Mode: {automation_mode}")
+        logging.info(f"   Browser: {approach_config.browser_type}")
+        logging.info(f"   Creators Root: {paths.creators_root}")
+        logging.info(f"   Shortcuts Root: {paths.shortcuts_root}")
+
+        # Step 2: Create approach instance via factory
+        logging.info("")
+        logging.info("📋 Step 2/3: Creating approach via factory...")
+
+        approach = ApproachFactory.create(approach_config)
+
+        if not approach:
+            logging.error("")
+            logging.error("❌ FAILED TO CREATE APPROACH")
+            logging.error("="*60)
+            logging.error(f"Mode '{automation_mode}' is not registered")
+            logging.error("")
+            logging.error("AVAILABLE MODES:")
+            for mode in ApproachFactory.get_registered_approaches().keys():
+                logging.error(f"  - {mode}")
+            logging.error("="*60)
+            return False
+
+        logging.info(f"   ✓ Approach created: {approach}")
+        logging.info("")
+        logging.info("="*60)
+        logging.info("")
+
+        # Step 3: Execute workflow for each account
+        logging.info("📋 Step 3/3: Processing accounts with approach...")
+        logging.info("")
+
+        overall_success = True
+
+        for idx, work_item in enumerate(work_items, 1):
+            logging.info("")
+            logging.info("="*60)
+            logging.info(f"PROCESSING ACCOUNT {idx}/{len(work_items)}")
+            logging.info("="*60)
+            logging.info(f"Account: {work_item.account_name}")
+            logging.info(f"Browser: {work_item.browser_type}")
+            logging.info(f"Creators: {len(work_item.login_entries)}")
+            logging.info("="*60)
+            logging.info("")
+
+            # Convert AccountWorkItem to approach WorkItem
+            creators_data = [
+                CreatorData(
+                    profile_name=login.profile_name,
+                    email=login.email,
+                    password=login.password,
+                    page_name=login.page_name,
+                    page_id=login.page_id,
+                    extras=login.extras
+                )
+                for login in work_item.login_entries
+            ]
+
+            approach_work_item = WorkItem(
+                account_name=work_item.account_name,
+                browser_type=work_item.browser_type,
+                creators=creators_data,
+                config=approach_config
+            )
+
+            # Execute workflow using approach
+            result = approach.execute_workflow(approach_work_item)
+
+            # Log result
+            logging.info("")
+            logging.info("="*60)
+            if result.success:
+                logging.info(f"✅ ACCOUNT '{work_item.account_name}' SUCCEEDED")
+                logging.info(f"   Creators Processed: {result.creators_processed}/{len(creators_data)}")
+                logging.info(f"   Videos Uploaded: {result.videos_uploaded}")
+            else:
+                logging.error(f"❌ ACCOUNT '{work_item.account_name}' FAILED")
+                logging.error(f"   Creators Processed: {result.creators_processed}/{len(creators_data)}")
+                logging.error(f"   Errors: {len(result.errors)}")
+                for error in result.errors:
+                    logging.error(f"     - {error}")
+                overall_success = False
+
+            logging.info("="*60)
+            logging.info("")
+
+        return overall_success

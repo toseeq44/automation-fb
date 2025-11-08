@@ -555,8 +555,8 @@ class UploadOrchestrator:
         logging.info("CREATING APPROACH INSTANCE")
         logging.info("="*60)
 
-        # Step 1: Create approach configuration
-        logging.info("📋 Step 1/3: Building approach configuration...")
+        # Step 1: Get global credentials
+        logging.info("📋 Step 1/3: Loading global credentials...")
 
         # Get credentials from settings
         creds = self.settings.get_credentials(automation_mode) or {}
@@ -566,7 +566,16 @@ class UploadOrchestrator:
         if password_data:
             creds['password'] = password_data.get('password', '')
 
-        approach_config = ApproachConfig(
+        logging.info(f"   Mode: {automation_mode}")
+        logging.info(f"   Creators Root: {paths.creators_root}")
+        logging.info(f"   Shortcuts Root: {paths.shortcuts_root}")
+
+        # Step 2: Create approach instance (will be reused for all accounts)
+        logging.info("")
+        logging.info("📋 Step 2/3: Creating approach via factory...")
+
+        # Create a temporary config just to create the approach instance
+        temp_config = ApproachConfig(
             mode=automation_mode,
             credentials=creds,
             paths={
@@ -578,16 +587,7 @@ class UploadOrchestrator:
             settings={}
         )
 
-        logging.info(f"   Mode: {automation_mode}")
-        logging.info(f"   Browser: {approach_config.browser_type}")
-        logging.info(f"   Creators Root: {paths.creators_root}")
-        logging.info(f"   Shortcuts Root: {paths.shortcuts_root}")
-
-        # Step 2: Create approach instance via factory
-        logging.info("")
-        logging.info("📋 Step 2/3: Creating approach via factory...")
-
-        approach = ApproachFactory.create(approach_config)
+        approach = ApproachFactory.create(temp_config)
 
         if not approach:
             logging.error("")
@@ -620,8 +620,26 @@ class UploadOrchestrator:
             logging.info(f"Account: {work_item.account_name}")
             logging.info(f"Browser: {work_item.browser_type}")
             logging.info(f"Creators: {len(work_item.login_entries)}")
+
+            # Show browser_name if available from login_data.txt
+            if 'browser_name' in work_item.browser_config:
+                logging.info(f"Browser Name (from login_data.txt): {work_item.browser_config['browser_name']}")
+
             logging.info("="*60)
             logging.info("")
+
+            # Create per-account ApproachConfig with that account's browser_config
+            approach_config = ApproachConfig(
+                mode=automation_mode,
+                credentials=creds,
+                paths={
+                    'creators_root': paths.creators_root,
+                    'shortcuts_root': paths.shortcuts_root,
+                    'history_file': paths.history_file,
+                },
+                browser_type=work_item.browser_type,
+                settings=work_item.browser_config  # ✅ Pass browser_config (contains browser_name from login_data.txt)
+            )
 
             # Convert AccountWorkItem to approach WorkItem
             creators_data = [
@@ -640,7 +658,7 @@ class UploadOrchestrator:
                 account_name=work_item.account_name,
                 browser_type=work_item.browser_type,
                 creators=creators_data,
-                config=approach_config
+                config=approach_config  # ✅ Now includes browser_config in settings
             )
 
             # Execute workflow using approach

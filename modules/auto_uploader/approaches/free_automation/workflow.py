@@ -138,13 +138,23 @@ class FreeAutomationApproach(BaseApproach):
             logging.info(f"🚀 Browser Type: {browser_type.upper()}")
             logging.info(f"📋 Account: {account_name}")
 
+            # Get browser_name from config.settings (comes from login_data.txt)
+            browser_name = self.config.settings.get('browser_name')
+            if browser_name:
+                logging.info(f"📝 Browser Name (from login_data.txt): {browser_name}")
+
             # Launch browser using desktop shortcut
             logging.info("")
             logging.info("Step 1/3: Searching for browser shortcut on desktop...")
 
+            # Pass browser_name to launcher if available
+            launch_kwargs = {'show_popup': True}
+            if browser_name:
+                launch_kwargs['browser_name'] = browser_name
+
             result = self.browser_launcher.launch_generic(
                 browser_type,
-                show_popup=True
+                **launch_kwargs
             )
 
             if not result:

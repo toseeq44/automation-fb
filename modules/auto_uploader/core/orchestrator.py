@@ -20,6 +20,7 @@ class AutomationPaths:
     creators_root: Path
     shortcuts_root: Path
     history_file: Path
+    ix_data_root: Path
 
 
 BROWSER_ALIASES = {
@@ -76,23 +77,31 @@ class UploadOrchestrator:
             return False
 
         # Step 2: Build work items
-        logging.info("Step 3/5: Scanning shortcuts folder for accounts...")
-        logging.info("→ Scanning: %s", paths.shortcuts_root)
+        if automation_mode == "ix":
+            logging.info("Step 3/5: Preparing ixBrowser workspace at %s...", paths.ix_data_root)
+        else:
+            logging.info("Step 3/5: Scanning shortcuts folder for accounts...")
+            logging.info("→ Scanning: %s", paths.shortcuts_root)
         work_items = self._build_work_items(paths, automation_mode)
 
         if not work_items:
             logging.error("="*60)
             logging.error("✗ NO ACCOUNTS FOUND!")
             logging.error("="*60)
-            logging.error("Reason: No folders with login_data.txt found in shortcuts folder")
-            logging.error("Location checked: %s", paths.shortcuts_root)
-            logging.error("")
-            logging.error("HOW TO FIX:")
-            logging.error("1. Create a folder inside shortcuts_root (e.g., 'Account1')")
-            logging.error("2. Inside that folder, create 'login_data.txt' file")
-            logging.error("3. Format: Creator1|email@gmail.com|password|PageName|PageID")
-            logging.error("4. Optional: Add 'browser: chrome' at top of file")
+            if automation_mode == "ix":
+                logging.error("Reason: IX approach is missing credentials.")
+                logging.error("Open the Approaches dialog and provide the IX email/password.")
+            else:
+                logging.error("Reason: No folders with login_data.txt found in shortcuts folder")
+                logging.error("Location checked: %s", paths.shortcuts_root)
+                logging.error("")
+                logging.error("HOW TO FIX:")
+                logging.error("1. Create a folder inside shortcuts_root (e.g., 'Account1')")
+                logging.error("2. Inside that folder, create 'login_data.txt' file")
+                logging.error("3. Format: Creator1|email@gmail.com|password|PageName|PageID")
+                logging.error("4. Optional: Add 'browser: chrome' at top of file")
             logging.error("="*60)
+            return False
             return False
 
         logging.info("✓ Found %d account(s) to process:", len(work_items))
@@ -166,6 +175,12 @@ class UploadOrchestrator:
         history_value = path_config.get("history_file")
         history_file = Path(history_value).expanduser().resolve() if history_value else default_history
 
+        ix_data_value = path_config.get("ix_data_root")
+        if ix_data_value:
+            ix_data_root = Path(ix_data_value).expanduser().resolve()
+        else:
+            ix_data_root = Path(__file__).resolve().parents[1] / "ix_data"
+
         missing: List[str] = []
         if not creators_root.exists():
             missing.append(f"Creators folder not found: {creators_root}")
@@ -176,11 +191,13 @@ class UploadOrchestrator:
             raise ValueError("; ".join(missing))
 
         history_file.parent.mkdir(parents=True, exist_ok=True)
+        ix_data_root.mkdir(parents=True, exist_ok=True)
 
         logging.debug(
-            "Resolved paths | creators: %s | shortcuts: %s | history: %s",
+            "Resolved paths | creators: %s | shortcuts: %s | ix_data: %s | history: %s",
             creators_root,
             shortcuts_root,
+            ix_data_root,
             history_file,
         )
 
@@ -188,10 +205,14 @@ class UploadOrchestrator:
             creators_root=creators_root,
             shortcuts_root=shortcuts_root,
             history_file=history_file,
+            ix_data_root=ix_data_root,
         )
 
     def _build_work_items(self, paths: AutomationPaths, automation_mode: str) -> List[AccountWorkItem]:
         """Scan shortcut folders and prepare account work items."""
+        if automation_mode == "ix":
+            return self._build_ix_work_items(paths)
+
         work_items: List[AccountWorkItem] = []
 
         # List all directories in shortcuts folder
@@ -268,6 +289,73 @@ class UploadOrchestrator:
 
         return work_items
 
+    def _build_ix_work_items(self, paths: AutomationPaths) -> List[AccountWorkItem]:
+        """Prepare ixBrowser-specific work items (no legacy login_data parsing)."""
+        ix_creds = self.settings.get_credentials("ix") or {}
+        secure = self.credentials.load_credentials("approach:ix") or {}
+
+        username = (ix_creds.get("username") or ix_creds.get("email") or secure.get("username") or secure.get("email") or "").strip()
+        password = secure.get("password") or ix_creds.get("password", "")
+        profile_hint = ix_creds.get("profile_name") or ix_creds.get("profile_id") or username
+
+        if not username:
+            logging.error("IX approach requires an email/username configured in the Approaches dialog.")
+            return []
+
+        account_label = self._slugify_account_name(username)
+        account_root = paths.ix_data_root / account_label
+        creators_root = account_root / "creators"
+        shortcuts_root = account_root / "shortcuts"
+        creators_root.mkdir(parents=True, exist_ok=True)
+        shortcuts_root.mkdir(parents=True, exist_ok=True)
+
+        login_entries = (
+            CreatorLogin(
+                profile_name=profile_hint or username,
+                email=username,
+                password=password or "",
+            ),
+        )
+
+        metadata = {
+            "ix_account_root": account_root,
+            "profile_name": profile_hint,
+            "login_metadata": {
+                "profile_name": profile_hint or username,
+                "email": username,
+            },
+        }
+
+        logging.info(
+            "IX approach configured for account '%s' (workspace: %s)",
+            username,
+            account_root,
+        )
+
+        return [
+            AccountWorkItem(
+                account_name=username,
+                browser_type="ix",
+                login_entries=login_entries,
+                login_data_path=account_root / "ix_account.json",
+                creators_root=creators_root,
+                shortcuts_root=shortcuts_root,
+                browser_config={
+                    "ix_account_root": str(account_root),
+                    "browser_name": ix_creds.get("browser_name") or "ixbrowser",
+                    "shortcuts_root": str(paths.shortcuts_root),
+                },
+                automation_mode="ix",
+                metadata=metadata,
+            )
+        ]
+
+    @staticmethod
+    def _slugify_account_name(value: str) -> str:
+        sanitized = "".join(ch if ch.isalnum() or ch in {"@", "-", "_", "."} else "_" for ch in value.strip())
+        sanitized = sanitized.replace("@", "_at_").replace(".", "_")
+        return sanitized or "ix_account"
+
     def _build_approach_config(self, automation_mode: str, paths: AutomationPaths) -> ApproachConfig:
         """Assemble the configuration block passed to each approach instance."""
         credentials = self._merge_mode_credentials(automation_mode)
@@ -279,6 +367,7 @@ class UploadOrchestrator:
                 "creators_root": paths.creators_root,
                 "shortcuts_root": paths.shortcuts_root,
                 "history_file": paths.history_file,
+                "ix_data_root": paths.ix_data_root,
             },
             browser_type=automation_mode,
             settings={},
@@ -314,6 +403,7 @@ class UploadOrchestrator:
             "login_metadata": dict(raw_metadata),
             "login_data_path": account_item.login_data_path,
             "browser_config": browser_config,
+            "ix_account_root": raw_metadata.get("ix_account_root") or browser_config.get("ix_account_root"),
         }
 
         return WorkItem(

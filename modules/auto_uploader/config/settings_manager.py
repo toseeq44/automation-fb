@@ -68,12 +68,18 @@ class SettingsManager:
         return self.get("automation.paths", {})
 
     def update_automation_paths(self, creators_root: str, shortcuts_root: str, history_file: str = "") -> None:
+        existing = self.get_automation_paths() or {}
+        ix_data_root = existing.get("ix_data_root") or str(
+            (self._base_dir / "ix_data").resolve()
+        )
+
         self.set(
             "automation.paths",
             {
                 "creators_root": creators_root,
                 "shortcuts_root": shortcuts_root,
                 "history_file": history_file,
+                "ix_data_root": ix_data_root,
             },
         )
 

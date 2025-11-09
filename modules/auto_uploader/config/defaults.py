@@ -12,6 +12,7 @@ DEFAULT_CONFIG = {
             "creators_root": str((_BASE_PATH / "creators").resolve()),
             "shortcuts_root": str((_BASE_PATH / "creator_shortcuts").resolve()),
             "history_file": str((_BASE_PATH / "data" / "history.json").resolve()),
+            "ix_data_root": str((_BASE_PATH / "ix_data").resolve()),
         },
         "credentials": {
             "gologin": {},

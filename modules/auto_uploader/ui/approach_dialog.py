@@ -49,6 +49,9 @@ class ApproachDialog(QDialog):
         self._settings = settings_manager
         self._credentials = credential_manager
         self._input_fields: Dict[str, Dict[str, QLineEdit]] = {}
+        self._optional_fields: Dict[str, set[str]] = {
+            "ix": {"api_url", "profile_id", "profile_name"},
+        }
         self._free_fields: Dict[str, QLineEdit] = {}
         self._free_labels: Dict[str, str] = {
             "creators_root": "Creators Folder",
@@ -103,24 +106,32 @@ class ApproachDialog(QDialog):
         free_layout.addStretch()
         self._stack.addWidget(free_widget)
 
-        # GoLogin / IX share similar credential requirements
+        mode_field_map = {
+            "gologin": {
+                "api_key": ("API Key", False, ""),
+                "email": ("Account Email", False, ""),
+                "password": ("Account Password", True, ""),
+            },
+            "ix": {
+                "api_url": ("Local API URL", False, "http://127.0.0.1:53200/v2"),
+                "profile_id": ("Profile ID (optional)", False, ""),
+                "profile_name": ("Profile Name (optional)", False, ""),
+                "email": ("Account Email", False, ""),
+                "password": ("Account Password", True, ""),
+            },
+        }
+
         for mode in ("gologin", "ix"):
-            widget, fields = self._build_account_form(
-                {
-                    "api_key": ("API Key", False),
-                    "email": ("Account Email", False),
-                    "password": ("Account Password", True),
-                }
-            )
+            widget, fields = self._build_account_form(mode_field_map[mode])
             self._input_fields[mode] = fields
             self._stack.addWidget(widget)
 
         # VPN credentials
         vpn_widget, vpn_fields = self._build_account_form(
             {
-                "username": ("VPN Username", False),
-                "password": ("VPN Password", True),
-                "location": ("Preferred Location", False),
+                "username": ("VPN Username", False, ""),
+                "password": ("VPN Password", True, ""),
+                "location": ("Preferred Location", False, ""),
             }
         )
         self._input_fields["vpn"] = vpn_fields
@@ -131,16 +142,24 @@ class ApproachDialog(QDialog):
         self._button_box.rejected.connect(self.reject)
         layout.addWidget(self._button_box)
 
-    def _build_account_form(self, field_map: Dict[str, tuple]) -> QWidget:
+    def _build_account_form(
+        self,
+        field_map: Dict[str, tuple[str, bool, str]],
+    ) -> tuple[QWidget, Dict[str, QLineEdit]]:
         widget = QWidget()
         form_layout = QFormLayout(widget)
         form_layout.setSpacing(8)
         form_layout.setLabelAlignment(Qt.AlignLeft)
 
         fields: Dict[str, QLineEdit] = {}
-        for key, (label, is_secret) in field_map.items():
+        for key, descriptor in field_map.items():
+            if len(descriptor) == 2:
+                label, is_secret = descriptor
+                placeholder = ""
+            else:
+                label, is_secret, placeholder = descriptor[:3]
             line_edit = QLineEdit()
-            line_edit.setPlaceholderText(label)
+            line_edit.setPlaceholderText(placeholder or label)
             if is_secret:
                 line_edit.setEchoMode(QLineEdit.Password)
             form_layout.addRow(QLabel(label), line_edit)
@@ -240,15 +259,17 @@ class ApproachDialog(QDialog):
 
         fields = self._input_fields.get(mode, {})
         payload: Dict[str, str] = {}
+        optional_keys = self._optional_fields.get(mode, set())
         for key, widget in fields.items():
             text = widget.text().strip()
-            if not text:
+            if not text and key not in optional_keys and key != "password":
                 widget.setFocus()
                 human_label = widget.placeholderText() or key.replace("_", " ").title()
                 QMessageBox.warning(self, "Missing Information", f"{human_label} is required for {mode.title()}.")
                 logging.warning("Field '%s' is required for mode '%s'", key, mode)
                 return False
-            payload[key] = text
+            if text:
+                payload[key] = text
 
         # Persist credentials (password handled via credential manager)
         password = payload.pop("password", "")
@@ -271,4 +292,3 @@ class ApproachDialog(QDialog):
         directory = QFileDialog.getExistingDirectory(self, "Select Folder", start_dir)
         if directory:
             target.setText(directory)
-

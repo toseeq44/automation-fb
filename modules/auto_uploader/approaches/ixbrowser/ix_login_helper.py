@@ -241,44 +241,58 @@ class IXBrowserLoginHelper:
 
                 # Step 3: Clear field and type email
                 logger.info("[IXLogin] Step 2: Clearing field and typing email...")
-                time.sleep(0.3)  # Wait for field to be ready
+                time.sleep(0.5)  # Wait for field to be ready
 
                 # Select all existing text (Ctrl+A)
                 pyautogui.hotkey('ctrl', 'a')
-                time.sleep(0.2)
+                time.sleep(0.3)
 
                 # Delete selected text
                 pyautogui.press('delete')
-                time.sleep(0.2)
+                time.sleep(0.3)
 
                 # Type new email
                 pyautogui.write(self.email, interval=0.05)
                 logger.info("[IXLogin] ✓ Email entered: %s", self.email)
-                time.sleep(0.5)
+                time.sleep(1.0)  # Longer wait before moving to password field
 
-                # Step 4: Click password field
+                # Step 4: Click password field (with retry)
                 logger.info("[IXLogin] Step 3: Activating password field...")
-                if not self.find_and_click_field(self.password_icon_img, offset_x=5):
-                    logger.error("[IXLogin] Failed to find password field")
+
+                password_field_activated = False
+                for password_attempt in range(3):  # Try 3 times to activate password field
+                    if password_attempt > 0:
+                        logger.info("[IXLogin] Retry %d: Looking for password field...", password_attempt + 1)
+                        time.sleep(0.5)
+
+                    if self.find_and_click_field(self.password_icon_img, offset_x=5):
+                        # Verify click worked by waiting and checking
+                        time.sleep(0.5)
+                        password_field_activated = True
+                        logger.info("[IXLogin] ✓ Password field activated")
+                        break
+
+                if not password_field_activated:
+                    logger.error("[IXLogin] ✗ Failed to activate password field after 3 attempts")
                     time.sleep(2)
                     continue
 
                 # Step 5: Clear field and type password
                 logger.info("[IXLogin] Step 4: Clearing field and typing password...")
-                time.sleep(0.3)  # Wait for field to be ready
+                time.sleep(0.5)  # Wait for field to be ready
 
                 # Select all existing text (Ctrl+A)
                 pyautogui.hotkey('ctrl', 'a')
-                time.sleep(0.2)
+                time.sleep(0.3)
 
                 # Delete selected text
                 pyautogui.press('delete')
-                time.sleep(0.2)
+                time.sleep(0.3)
 
                 # Type new password
                 pyautogui.write(self.password, interval=0.05)
                 logger.info("[IXLogin] ✓ Password entered")
-                time.sleep(0.5)
+                time.sleep(1.0)  # Wait before pressing enter
 
                 # Step 6: Press Enter
                 logger.info("[IXLogin] Step 5: Submitting login...")

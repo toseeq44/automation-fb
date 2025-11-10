@@ -101,13 +101,20 @@ class IXBrowserApproach(BaseApproach):
 
         # Get configuration
         base_url = self._config_handler.get_base_url()
+        email = self._config_handler.get_email()
+        password = self._config_handler.get_password()
 
         logger.info("[IXApproach] Connecting to: %s", base_url)
 
-        # Initialize connection manager (with auto-launch)
-        self._connection_manager = ConnectionManager(base_url, auto_launch=True)
+        # Initialize connection manager (with auto-launch and auto-login)
+        self._connection_manager = ConnectionManager(
+            base_url=base_url,
+            auto_launch=True,
+            email=email,
+            password=password
+        )
 
-        # Attempt connection (will auto-launch ixBrowser if needed)
+        # Attempt connection (will auto-launch ixBrowser and auto-login if needed)
         if not self._connection_manager.connect():
             logger.error("[IXApproach] Failed to connect to ixBrowser API!")
             return False
@@ -225,33 +232,57 @@ class IXBrowserApproach(BaseApproach):
 
             logger.info("[IXApproach] ✓ Selenium attached successfully!")
 
-            # Step 3: Get current session info (informational only)
+            # Step 3: Enumerate tabs and URLs
             logger.info("[IXApproach] ═══════════════════════════════════════════")
-            logger.info("[IXApproach] STEP 3: Session Information")
+            logger.info("[IXApproach] STEP 3: Enumerate Browser Tabs")
             logger.info("[IXApproach] ═══════════════════════════════════════════")
 
             try:
-                current_url = driver.current_url
-                logger.info("[IXApproach] Current URL: %s", current_url)
+                # Get all window handles (tabs)
+                all_tabs = driver.window_handles
+                tab_count = len(all_tabs)
 
-                # Check if on Facebook (informational only - NO login/logout)
-                if "facebook.com" in current_url:
-                    logger.info("[IXApproach] Checking Facebook login status (informational only)...")
+                logger.info("[IXApproach] Total tabs open: %d", tab_count)
+
+                # Store current tab to return to it later
+                original_tab = driver.current_window_handle
+
+                # Enumerate each tab
+                for idx, tab_handle in enumerate(all_tabs, 1):
                     try:
-                        # Simple check: look for profile/account indicators
-                        profile_indicators = driver.find_elements("css selector",
-                            "div[aria-label*='Account'], div[aria-label*='Your profile'], svg[aria-label='Your profile']")
-                        if profile_indicators:
-                            logger.info("[IXApproach] ✓ Facebook user appears to be logged in")
-                            logger.info("[IXApproach]   (Note: ixBrowser credentials are for API, not Facebook)")
-                        else:
-                            logger.info("[IXApproach] ℹ Facebook login status: Not detected or logged out")
+                        # Switch to tab
+                        driver.switch_to.window(tab_handle)
+
+                        # Get URL
+                        url = driver.current_url
+                        title = driver.title
+
+                        logger.info("[IXApproach] Tab %d/%d:", idx, tab_count)
+                        logger.info("[IXApproach]   URL: %s", url)
+                        logger.info("[IXApproach]   Title: %s", title)
+
+                        # Check if it's Facebook
+                        if "facebook.com" in url:
+                            logger.info("[IXApproach]   Type: Facebook")
+                            try:
+                                # Simple check: look for profile/account indicators
+                                profile_indicators = driver.find_elements("css selector",
+                                    "div[aria-label*='Account'], div[aria-label*='Your profile'], svg[aria-label='Your profile']")
+                                if profile_indicators:
+                                    logger.info("[IXApproach]   Status: User logged in")
+                                else:
+                                    logger.info("[IXApproach]   Status: Not logged in or unknown")
+                            except Exception as e:
+                                logger.debug("[IXApproach]   Could not check login status: %s", str(e))
                     except Exception as e:
-                        logger.debug("[IXApproach] Could not check Facebook login: %s", str(e))
-                else:
-                    logger.info("[IXApproach] Not on Facebook page")
+                        logger.warning("[IXApproach] Tab %d: Error accessing - %s", idx, str(e))
+
+                # Return to original tab
+                driver.switch_to.window(original_tab)
+                logger.info("[IXApproach] ✓ Tab enumeration complete!")
+
             except Exception as e:
-                logger.debug("[IXApproach] Could not get session info: %s", str(e))
+                logger.error("[IXApproach] Failed to enumerate tabs: %s", str(e))
 
             # Create context
             self._current_context = IXAutomationContext(

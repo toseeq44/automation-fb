@@ -27,16 +27,21 @@ from .desktop_launcher import DesktopAppLauncher
 class ConnectionManager:
     """Manages connection to ixBrowser Local API."""
 
-    def __init__(self, base_url: str = "http://127.0.0.1:53200", auto_launch: bool = True):
+    def __init__(self, base_url: str = "http://127.0.0.1:53200", auto_launch: bool = True,
+                 email: Optional[str] = None, password: Optional[str] = None):
         """
         Initialize connection manager.
 
         Args:
             base_url: ixBrowser API base URL
             auto_launch: Automatically launch ixBrowser if not running
+            email: ixBrowser login email (for auto-login)
+            password: ixBrowser login password (for auto-login)
         """
         self.base_url = base_url
         self.auto_launch = auto_launch
+        self.email = email
+        self.password = password
         self._client: Optional[Any] = None
         self._is_connected = False
 
@@ -46,13 +51,20 @@ class ConnectionManager:
         # Initialize desktop launcher
         self._desktop_launcher: Optional[DesktopAppLauncher] = None
         if auto_launch:
-            self._desktop_launcher = DesktopAppLauncher(host=self._host, port=self._port)
+            self._desktop_launcher = DesktopAppLauncher(
+                host=self._host,
+                port=self._port,
+                email=email,
+                password=password
+            )
 
         logger.info("[IXConnection] Initializing connection manager...")
         logger.info("[IXConnection]   Base URL: %s", base_url)
         logger.info("[IXConnection]   Host: %s", self._host)
         logger.info("[IXConnection]   Port: %s", self._port)
         logger.info("[IXConnection]   Auto-launch: %s", auto_launch)
+        if email:
+            logger.info("[IXConnection]   Auto-login enabled: Yes (email: %s)", email)
 
     def _parse_base_url(self, base_url: str) -> tuple[str, int]:
         """

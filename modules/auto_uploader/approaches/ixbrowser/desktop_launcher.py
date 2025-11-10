@@ -34,16 +34,21 @@ class DesktopAppLauncher:
         Path("C:/Program Files (x86)/Incogniton/Incogniton.exe"),
     ]
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 53200):
+    def __init__(self, host: str = "127.0.0.1", port: int = 53200,
+                 email: Optional[str] = None, password: Optional[str] = None):
         """
         Initialize desktop app launcher.
 
         Args:
             host: API host to check
             port: API port to check
+            email: ixBrowser login email (for auto-login)
+            password: ixBrowser login password (for auto-login)
         """
         self.host = host
         self.port = port
+        self.email = email
+        self.password = password
         self.process: Optional[subprocess.Popen] = None
         self.app_path: Optional[Path] = None
 
@@ -216,6 +221,7 @@ class DesktopAppLauncher:
         Ensure ixBrowser application is running and API is available.
 
         If not running, launches the application and waits for API.
+        If API doesn't become available, attempts auto-login if credentials provided.
 
         Args:
             timeout: Maximum time to wait for API
@@ -237,13 +243,58 @@ class DesktopAppLauncher:
         if not self.launch_application():
             return False
 
-        # Wait for API to be ready
-        if not self.wait_for_api(timeout=timeout):
-            logger.error("[DesktopLauncher] ✗ Failed to start ixBrowser API")
-            return False
+        # Wait for API to be ready (initial attempt - 20 seconds with 2 sec interval)
+        logger.info("[DesktopLauncher] Initial API check (20 seconds)...")
+        if self.wait_for_api(timeout=20, check_interval=2):
+            logger.info("[DesktopLauncher] ✓ ixBrowser launched successfully!")
+            return True
 
-        logger.info("[DesktopLauncher] ✓ ixBrowser launched successfully!")
-        return True
+        # API not available - might need login
+        logger.warning("[DesktopLauncher] ⚠ API not available after launch")
+        logger.warning("[DesktopLauncher] Possible reasons:")
+        logger.warning("[DesktopLauncher]   1. ixBrowser is logged out")
+        logger.warning("[DesktopLauncher]   2. Startup is taking longer than usual")
+
+        # Try auto-login if credentials provided
+        if self.email and self.password:
+            logger.info("[DesktopLauncher] ═══════════════════════════════════════════")
+            logger.info("[DesktopLauncher] Attempting Auto-Login")
+            logger.info("[DesktopLauncher] ═══════════════════════════════════════════")
+
+            try:
+                from .ix_login_helper import IXBrowserLoginHelper
+
+                login_helper = IXBrowserLoginHelper(self.email, self.password)
+
+                if login_helper.perform_login():
+                    logger.info("[DesktopLauncher] ✓ Login sequence completed")
+                    logger.info("[DesktopLauncher] Waiting for API (checking every 7 seconds)...")
+
+                    # Retry API check with 7-second intervals
+                    remaining_timeout = max(timeout - 20, 30)  # At least 30 more seconds
+                    if self.wait_for_api(timeout=remaining_timeout, check_interval=7):
+                        logger.info("[DesktopLauncher] ✓ ixBrowser ready after login!")
+                        return True
+                    else:
+                        logger.error("[DesktopLauncher] ✗ API still not available after login")
+                        logger.error("[DesktopLauncher] Please check:")
+                        logger.error("[DesktopLauncher]   - Login credentials are correct")
+                        logger.error("[DesktopLauncher]   - ixBrowser accepted the login")
+                        logger.error("[DesktopLauncher]   - No popup blocking API startup")
+                        return False
+                else:
+                    logger.error("[DesktopLauncher] ✗ Auto-login failed")
+                    return False
+
+            except Exception as e:
+                logger.error("[DesktopLauncher] Auto-login error: %s", str(e))
+                return False
+        else:
+            logger.error("[DesktopLauncher] ✗ No credentials provided for auto-login")
+            logger.error("[DesktopLauncher] Please either:")
+            logger.error("[DesktopLauncher]   1. Login to ixBrowser manually, or")
+            logger.error("[DesktopLauncher]   2. Provide email/password for auto-login")
+            return False
 
     def get_process_info(self) -> dict:
         """

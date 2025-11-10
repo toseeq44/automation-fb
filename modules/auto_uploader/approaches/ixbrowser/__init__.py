@@ -9,6 +9,7 @@ from .connection_manager import ConnectionManager
 from .browser_launcher import BrowserLauncher
 from .login_manager import LoginManager
 from .desktop_launcher import DesktopAppLauncher
+from .ix_login_helper import IXBrowserLoginHelper
 
 __all__ = [
     "IXBrowserApproach",
@@ -18,4 +19,5 @@ __all__ = [
     "BrowserLauncher",
     "LoginManager",
     "DesktopAppLauncher",
+    "IXBrowserLoginHelper",
 ]

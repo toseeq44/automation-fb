@@ -8,9 +8,22 @@ from __future__ import annotations
 
 import logging
 import time
+import platform
 from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
+
+# Windows-specific imports for window management
+if platform.system() == "Windows":
+    try:
+        import win32gui
+        import win32con
+        HAS_WIN32 = True
+    except ImportError:
+        HAS_WIN32 = False
+        logger.debug("[IXLauncher] pywin32 not available - parent window hiding disabled")
+else:
+    HAS_WIN32 = False
 
 # Try to import Selenium
 try:
@@ -43,6 +56,89 @@ class BrowserLauncher:
         self.session_info: Optional[Dict[str, Any]] = None
 
         logger.info("[IXLauncher] Browser launcher initialized")
+
+    def _hide_ixbrowser_parent_window(self) -> bool:
+        """
+        Hide ixBrowser parent window to make it look like manual opening.
+
+        Returns:
+            True if parent window was found and hidden
+        """
+        if not HAS_WIN32:
+            logger.debug("[IXLauncher] Win32 API not available, cannot hide parent window")
+            return False
+
+        try:
+            # Find ixBrowser main window
+            def find_ixbrowser_window(hwnd, windows):
+                if win32gui.IsWindowVisible(hwnd):
+                    title = win32gui.GetWindowText(hwnd)
+                    # Look for ixBrowser main application window
+                    if "ixBrowser" in title and "facebook.com" not in title.lower():
+                        windows.append(hwnd)
+                return True
+
+            windows = []
+            win32gui.EnumWindows(find_ixbrowser_window, windows)
+
+            if windows:
+                for hwnd in windows:
+                    # Minimize the window instead of hiding (less disruptive)
+                    win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
+                    logger.info("[IXLauncher] ✓ ixBrowser parent window minimized")
+                return True
+            else:
+                logger.debug("[IXLauncher] ixBrowser parent window not found")
+                return False
+
+        except Exception as e:
+            logger.debug("[IXLauncher] Error hiding parent window: %s", str(e))
+            return False
+
+    def _normalize_browser_window_title(self) -> bool:
+        """
+        Normalize browser window title to remove proxy information.
+        Changes title from "[US.Proxy]65.195.110.75|ergergd facebook.com"
+        to "ergergd facebook.com"
+
+        Returns:
+            True if title was normalized
+        """
+        if not HAS_WIN32:
+            logger.debug("[IXLauncher] Win32 API not available, cannot normalize title")
+            return False
+
+        try:
+            # Find browser window with proxy information in title
+            def find_browser_window_with_proxy(hwnd, windows):
+                if win32gui.IsWindowVisible(hwnd):
+                    title = win32gui.GetWindowText(hwnd)
+                    # Look for proxy pattern in title: [Location.Proxy]IP|ProfileName
+                    if "].Proxy]" in title or "[" in title and "|" in title:
+                        windows.append((hwnd, title))
+                return True
+
+            windows = []
+            win32gui.EnumWindows(find_browser_window_with_proxy, windows)
+
+            if windows:
+                for hwnd, old_title in windows:
+                    # Extract clean title: remove "[Location.Proxy]IP|" prefix
+                    # Pattern: [US.Proxy]65.195.110.75|ergergd facebook.com -> ergergd facebook.com
+                    if "|" in old_title:
+                        clean_title = old_title.split("|", 1)[1].strip()
+                        win32gui.SetWindowText(hwnd, clean_title)
+                        logger.info("[IXLauncher] ✓ Browser window title normalized")
+                        logger.info("[IXLauncher]   From: %s", old_title)
+                        logger.info("[IXLauncher]   To: %s", clean_title)
+                return True
+            else:
+                logger.debug("[IXLauncher] No browser window with proxy info found")
+                return False
+
+        except Exception as e:
+            logger.debug("[IXLauncher] Error normalizing title: %s", str(e))
+            return False
 
     def launch_profile(
         self,
@@ -109,6 +205,16 @@ class BrowserLauncher:
             # Wait for browser to fully start
             logger.info("[IXLauncher] Waiting for browser to start...")
             time.sleep(2)
+
+            # Normalize browser experience to mimic manual opening
+            logger.info("[IXLauncher] Normalizing browser window appearance...")
+
+            # 1. Minimize ixBrowser parent window
+            self._hide_ixbrowser_parent_window()
+
+            # 2. Clean up browser window title (remove proxy info)
+            time.sleep(0.5)  # Small delay to ensure window is ready
+            self._normalize_browser_window_title()
 
             return True
 

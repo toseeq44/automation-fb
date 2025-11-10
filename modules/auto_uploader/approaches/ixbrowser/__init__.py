@@ -1,30 +1,19 @@
 """
-IX Browser Approach
-===================
-API-based browser automation with IX Browser Cloud API.
-
-Features:
-- Cloud API for profile management
-- Selenium-based automation
-- Remote browser control
-- Team collaboration support
-
-Usage:
-    >>> from .workflow import IXBrowserApproach
-    >>> config = ApproachConfig(
-    ...     mode='ixbrowser',
-    ...     credentials={
-    ...         'api_key': 'your-api-key',
-    ...         'email': 'user@example.com',
-    ...         'password': 'xxx',
-    ...         'profile_name': 'MyProfile1'
-    ...     },
-    ...     ...
-    ... )
-    >>> approach = IXBrowserApproach(config)
-    >>> result = approach.execute_workflow(work_item)
+ixBrowser automation approach package.
+Uses official ixbrowser-local-api library for programmatic browser control.
 """
 
-from .workflow import IXBrowserApproach
+from .workflow import IXBrowserApproach, IXAutomationContext
+from .config_handler import IXBrowserConfig
+from .connection_manager import ConnectionManager
+from .browser_launcher import BrowserLauncher
+from .login_manager import LoginManager
 
-__all__ = ["IXBrowserApproach"]
+__all__ = [
+    "IXBrowserApproach",
+    "IXAutomationContext",
+    "IXBrowserConfig",
+    "ConnectionManager",
+    "BrowserLauncher",
+    "LoginManager",
+]

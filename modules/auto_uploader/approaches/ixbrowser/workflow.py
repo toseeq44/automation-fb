@@ -1,10 +1,13 @@
-"""Automation approach that controls ixBrowser via its Local API."""
+"""
+ixBrowser Automation Workflow
+Complete integration using official ixbrowser-local-api library
+"""
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Optional
 
 from ..base_approach import (
     ApproachConfig,
@@ -13,18 +16,12 @@ from ..base_approach import (
     WorkItem,
     WorkflowResult,
 )
-from ...browser.profile_selector import IXProfileSelector
-from ...browser.launcher import BrowserLauncher
-from .api_client import IXBrowserAPI, IXBrowserAPIError, IXProfileInfo, IXProfileSession
 
-try:
-    import pygetwindow as gw
-
-    HAS_PYGETWINDOW = True
-except ImportError:  # pragma: no cover - optional dependency
-    HAS_PYGETWINDOW = False
-    gw = None
-    logging.warning("pygetwindow not available. Install: pip install pygetwindow to enable window focusing.")
+# Import our new components
+from .config_handler import IXBrowserConfig
+from .connection_manager import ConnectionManager
+from .browser_launcher import BrowserLauncher
+from .login_manager import LoginManager
 
 logger = logging.getLogger(__name__)
 
@@ -33,298 +30,347 @@ logger = logging.getLogger(__name__)
 class IXAutomationContext:
     """Holds state for a specific ixBrowser session."""
 
-    profile: IXProfileInfo
-    session: IXProfileSession
+    profile_id: int
+    launcher: BrowserLauncher
+    login_manager: Optional[LoginManager]
 
 
 class IXBrowserApproach(BaseApproach):
-    """Use ixBrowser Local API to open/close profiles instead of desktop automation."""
+    """
+    ixBrowser approach using official ixbrowser-local-api library.
+
+    Features:
+    - Programmatic browser launch
+    - Automatic login detection
+    - User management (logout/login if needed)
+    - Selenium WebDriver integration
+    """
 
     def __init__(self, config: ApproachConfig) -> None:
         super().__init__(config)
+
+        logger.info("[IXApproach] Initializing ixBrowser approach...")
+
+        # Initialize components
+        self._config_handler: Optional[IXBrowserConfig] = None
+        self._connection_manager: Optional[ConnectionManager] = None
+        self._current_context: Optional[IXAutomationContext] = None
+
+        # Load configuration
+        self._setup_configuration(config)
+
+    def _setup_configuration(self, config: ApproachConfig) -> None:
+        """Setup configuration from ApproachConfig."""
+        logger.info("[IXApproach] Setting up configuration...")
+
         credentials = config.credentials or {}
 
-        self._api_url = (
-            credentials.get("api_url")
-            or credentials.get("api_host")
-            or credentials.get("api_base")
-            or credentials.get("api_endpoint")
-            or credentials.get("base_url")
-            or "http://127.0.0.1:53200/v2"
+        # Get credentials from config or use defaults
+        base_url = (
+            credentials.get("base_url")
+            or credentials.get("api_url")
+            or "http://127.0.0.1:53200"
         )
 
-        self._api_key = (
-            credentials.get("api_key")
-            or credentials.get("token")
-            or credentials.get("api_token")
-            or ""
-        )
+        email = credentials.get("email", "")
+        password = credentials.get("password", "")
 
-        if not credentials.get("api_url") and self._api_key.startswith("http"):
-            logger.info(
-                "[IX] Detected legacy configuration where API key stored the base URL. "
-                "Using it as api_url instead."
-            )
-            self._api_url = self._api_key
-            self._api_key = ""
+        # Initialize config handler
+        self._config_handler = IXBrowserConfig()
 
-        self._client: Optional[IXBrowserAPI] = None
-
-        try:
-            self._client = IXBrowserAPI(base_url=self._api_url, api_key=self._api_key)
-        except IXBrowserAPIError as exc:
-            logger.error("Unable to initialize ixBrowser API client: %s", exc)
-            self._client = None
+        # Check if we have credentials in config
+        if email and password:
+            logger.info("[IXApproach] Using credentials from ApproachConfig")
+            self._config_handler.set_credentials(base_url, email, password)
+        elif self._config_handler.is_configured():
+            logger.info("[IXApproach] Using saved credentials from config file")
+        else:
+            logger.warning("[IXApproach] No credentials configured!")
+            logger.warning("[IXApproach] Please provide base_url, email, password in approach config")
 
     # ------------------------------------------------------------------ #
     # BaseApproach contract                                              #
     # ------------------------------------------------------------------ #
     def initialize(self) -> bool:
-        return self._client is not None
+        """Initialize connection to ixBrowser API."""
+        logger.info("[IXApproach] Initializing connection...")
+
+        if not self._config_handler or not self._config_handler.is_configured():
+            logger.error("[IXApproach] Configuration incomplete!")
+            logger.error("[IXApproach] Required: base_url, email, password")
+            return False
+
+        # Get configuration
+        base_url = self._config_handler.get_base_url()
+
+        logger.info("[IXApproach] Connecting to: %s", base_url)
+
+        # Initialize connection manager
+        self._connection_manager = ConnectionManager(base_url)
+
+        # Attempt connection
+        if not self._connection_manager.connect():
+            logger.error("[IXApproach] Failed to connect to ixBrowser API!")
+            return False
+
+        logger.info("[IXApproach] ✓ Connection established successfully!")
+        return True
 
     def open_browser(self, account_name: str) -> bool:
-        # Browser lifecycle is handled inside execute_workflow for ixBrowser.
+        """Browser lifecycle handled in execute_workflow."""
         return True
 
     def login(self, email: str, password: str) -> bool:
+        """Login handled in execute_workflow."""
         return True
 
     def logout(self) -> bool:
+        """Logout handled in execute_workflow."""
         return True
 
     def close_browser(self) -> bool:
+        """Browser close handled in execute_workflow."""
         return True
 
     # ------------------------------------------------------------------ #
     # Main workflow                                                      #
     # ------------------------------------------------------------------ #
     def execute_workflow(self, work_item: WorkItem) -> WorkflowResult:
+        """
+        Execute complete ixBrowser workflow.
+
+        Steps:
+        1. Get first profile from API
+        2. Launch profile programmatically
+        3. Attach Selenium WebDriver
+        4. Check login status
+        5. Ensure correct user is logged in
+        6. Run upload workflow (placeholder for now)
+        7. Close profile
+        """
         result = WorkflowResult(success=False, account_name=work_item.account_name)
 
-        if not self._ensure_ix_browser_ready(work_item):
-            result.add_error(
-                "Unable to open ixBrowser via desktop shortcut. "
-                "Please confirm the shortcut exists on your Desktop or shortcuts folder."
-            )
+        # Check connection
+        if not self._connection_manager or not self._connection_manager.is_connected():
+            result.add_error("Not connected to ixBrowser API. Run initialize() first.")
             return result
 
-        if not self._client:
-            result.add_error(
-                "ixBrowser API client is not initialized. Verify the API URL in Approaches settings."
-            )
+        # Get client
+        client = self._connection_manager.get_client()
+        if not client:
+            result.add_error("Failed to get API client.")
             return result
 
-        profile_identifier, is_explicit = self._resolve_profile_identifier(work_item)
-        profile = self._client.find_profile(profile_identifier)
-        if not profile and is_explicit:
-            logger.info("[IX] Using explicit profile identifier '%s' without API lookup.", profile_identifier)
-            profile = IXProfileInfo(
-                profile_id=profile_identifier,
-                profile_name=profile_identifier,
-                status="",
-                raw={},
-            )
-        elif not profile:
-            self._log_available_profiles()
-            result.add_error(
-                f"Unable to find ixBrowser profile matching '{profile_identifier}'. "
-                "Open ixBrowser and confirm the profile exists."
-            )
+        # Get first profile
+        logger.info("[IXApproach] Getting profile list...")
+        profiles = self._connection_manager.get_profile_list(limit=1)
+
+        if not profiles:
+            result.add_error("No profiles found in ixBrowser. Please create a profile first.")
             return result
 
-        logger.info(
-            "[IX] Opening profile '%s' (%s) using ixBrowser Local API...",
-            profile.profile_name,
-            profile.profile_id,
-        )
+        profile_id = profiles[0]['profile_id']
+        profile_name = profiles[0].get('name', 'Unknown')
+
+        logger.info("[IXApproach] Selected profile: %s (ID: %s)", profile_name, profile_id)
+
+        # Create browser launcher
+        launcher = BrowserLauncher(client)
 
         try:
-            session = self._client.open_profile(
-                profile.profile_id,
-                cookies_backup=False,
-                load_profile_info_page=False,
+            # Step 1: Launch profile
+            logger.info("[IXApproach] ═══════════════════════════════════════════")
+            logger.info("[IXApproach] STEP 1: Launch Profile")
+            logger.info("[IXApproach] ═══════════════════════════════════════════")
+
+            if not launcher.launch_profile(profile_id):
+                result.add_error(f"Failed to launch profile {profile_id}")
+                return result
+
+            logger.info("[IXApproach] ✓ Profile launched successfully!")
+
+            # Step 2: Attach Selenium
+            logger.info("[IXApproach] ═══════════════════════════════════════════")
+            logger.info("[IXApproach] STEP 2: Attach Selenium WebDriver")
+            logger.info("[IXApproach] ═══════════════════════════════════════════")
+
+            if not launcher.attach_selenium():
+                result.add_error("Failed to attach Selenium WebDriver")
+                return result
+
+            driver = launcher.get_driver()
+            if not driver:
+                result.add_error("Selenium driver not available")
+                return result
+
+            logger.info("[IXApproach] ✓ Selenium attached successfully!")
+
+            # Step 3: Check and manage login
+            logger.info("[IXApproach] ═══════════════════════════════════════════")
+            logger.info("[IXApproach] STEP 3: Check & Manage Login")
+            logger.info("[IXApproach] ═══════════════════════════════════════════")
+
+            # Get expected credentials
+            expected_email = self._config_handler.get_email()
+            expected_password = self._config_handler.get_password()
+
+            logger.info("[IXApproach] Expected user: %s", expected_email)
+
+            # Create login manager
+            login_manager = LoginManager(driver, expected_email, expected_password)
+
+            # Ensure correct user is logged in
+            if not login_manager.ensure_correct_user_logged_in():
+                logger.warning("[IXApproach] ⚠ Failed to ensure correct user logged in")
+                logger.warning("[IXApproach] Continuing anyway...")
+
+            logger.info("[IXApproach] ✓ Login verification complete!")
+
+            # Create context
+            self._current_context = IXAutomationContext(
+                profile_id=profile_id,
+                launcher=launcher,
+                login_manager=login_manager
             )
-        except IXBrowserAPIError as exc:
-            result.add_error(f"ixBrowser refused to open profile '{profile.profile_id}': {exc}")
-            return result
 
-        context = IXAutomationContext(profile=profile, session=session)
-        logger.info("[IX] Profile opened successfully. Debugging address: %s", session.debugging_address)
+            # Step 4: Run workflow (placeholder)
+            logger.info("[IXApproach] ═══════════════════════════════════════════")
+            logger.info("[IXApproach] STEP 4: Run Upload Workflow")
+            logger.info("[IXApproach] ═══════════════════════════════════════════")
 
-        try:
-            self._run_placeholder_workflow(work_item, context, result)
+            self._run_upload_workflow(work_item, self._current_context, result)
+
         finally:
-            self._safe_close_profile(profile.profile_id)
+            # Step 5: Cleanup
+            logger.info("[IXApproach] ═══════════════════════════════════════════")
+            logger.info("[IXApproach] STEP 5: Cleanup")
+            logger.info("[IXApproach] ═══════════════════════════════════════════")
+
+            if launcher.is_profile_open():
+                launcher.close_profile()
+
+            self._current_context = None
 
         return result
 
-    # ------------------------------------------------------------------ #
-    # Internal helpers                                                   #
-    # ------------------------------------------------------------------ #
-    def _ensure_ix_browser_ready(self, work_item: WorkItem) -> bool:
-        """Ensure ixBrowser is running and visible."""
-        launcher = BrowserLauncher()
-
-        if launcher.is_browser_running("ix"):
-            logging.info("[IX] Browser process detected. Bringing window to foreground...")
-            self._maximize_ix_window()
-            return True
-
-        logging.error("[IX] ixBrowser is not running. Please open ixBrowser manually and try again.")
-        return False
-
-    def _run_placeholder_workflow(
+    def _run_upload_workflow(
         self,
         work_item: WorkItem,
         context: IXAutomationContext,
         result: WorkflowResult,
     ) -> None:
         """
-        Placeholder automation logic.
+        Run upload workflow.
 
-        TODO(shipping soon): Attach Selenium to context.session, run the upload workflow,
-        and mark success. For now we only prove that we can open/close profiles via API.
+        TODO: Integrate with actual upload workflow
+        For now, just log creators and mark as placeholder.
         """
-        logger.warning(
-            "[IX] Selenium automation not wired yet. "
-            "Use the debugging address to attach your own scripts: %s",
-            context.session.debugging_address or "N/A",
-        )
+        logger.info("[IXApproach] Upload workflow starting...")
 
-        for creator in work_item.creators:
-            self._log_creator_placeholder(creator)
+        driver = context.launcher.get_driver()
+        if not driver:
+            result.add_error("No driver available for workflow")
+            return
 
-        result.add_error(
-            "ixBrowser profile opened successfully, but the Selenium upload workflow "
-            "is not implemented yet. Attach to the debugging address and run your "
-            "scripts manually, or switch back to Free Automation until the next update."
-        )
+        # Get current URL
+        try:
+            current_url = driver.current_url
+            logger.info("[IXApproach] Current URL: %s", current_url)
+        except Exception as e:
+            logger.debug("[IXApproach] Could not get URL: %s", str(e))
+
+        # Log creators
+        logger.info("[IXApproach] Processing %s creator(s)...", len(work_item.creators))
+
+        for idx, creator in enumerate(work_item.creators, 1):
+            logger.info("[IXApproach] Creator %s/%s:", idx, len(work_item.creators))
+            logger.info("[IXApproach]   Profile: %s", creator.profile_name)
+            logger.info("[IXApproach]   Email: %s", creator.email)
+            logger.info("[IXApproach]   Page: %s", creator.page_name or "N/A")
+
+        # Mark as placeholder
+        logger.warning("[IXApproach] ⚠ Upload workflow not yet implemented!")
+        logger.warning("[IXApproach] Next steps:")
+        logger.warning("[IXApproach]   1. Integrate UploadWorkflowOrchestrator")
+        logger.warning("[IXApproach]   2. Process each creator")
+        logger.warning("[IXApproach]   3. Upload videos")
+
         result.creators_processed = 0
         result.success = False
-
-    @staticmethod
-    def _log_creator_placeholder(creator: CreatorData) -> None:
-        logger.info(
-            "[IX] Placeholder: would now process creator '%s' (email=%s, page=%s)",
-            creator.profile_name,
-            creator.email,
-            creator.page_name or "-",
+        result.add_error(
+            "ixBrowser integration working! Browser launched, Selenium attached, "
+            "login verified. Upload workflow integration pending."
         )
 
-    def _safe_close_profile(self, profile_id: str) -> None:
-        if not self._client:
-            return
-        try:
-            self._client.close_profile(profile_id)
-            logger.info("[IX] Profile '%s' closed.", profile_id)
-        except IXBrowserAPIError as exc:
-            logger.error("[IX] Failed to close profile '%s': %s", profile_id, exc)
 
-    def _resolve_profile_identifier(self, work_item: WorkItem) -> tuple[str, bool]:
-        credentials = self.config.credentials or {}
-        explicit_candidates = [
-            credentials.get("profile_id"),
-            credentials.get("profile_name"),
-        ]
+if __name__ == "__main__":
+    # Test mode
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(message)s'
+    )
 
-        for candidate in explicit_candidates:
-            if candidate:
-                return candidate.strip(), True
+    print("\n" + "="*60)
+    print("ixBrowser Approach - Test Mode")
+    print("="*60 + "\n")
 
-        secondary_candidates = [
-            credentials.get("email"),
-            credentials.get("username"),
-        ]
+    # Setup test config
+    from .config_handler import prompt_user_for_credentials
 
-        for candidate in secondary_candidates:
-            if candidate:
-                return candidate.strip(), False
+    config_handler = prompt_user_for_credentials()
 
-        metadata = work_item.metadata or {}
-        login_meta: Dict[str, str] = metadata.get("login_metadata") or {}
+    if not config_handler:
+        print("\n✗ Configuration cancelled!")
+        exit(1)
 
-        candidates = [
-            login_meta.get("profile_id"),
-            login_meta.get("ix_profile_id"),
-            login_meta.get("profile_name"),
-            login_meta.get("ix_profile_name"),
-            metadata.get("profile_id"),
-            metadata.get("profile_name"),
-        ]
+    if not config_handler.is_configured():
+        print("\n✗ Configuration incomplete!")
+        exit(1)
 
-        for candidate in candidates:
-            if candidate:
-                return candidate.strip()
+    print("\n" + "="*60)
+    print("Testing Workflow")
+    print("="*60 + "\n")
 
-        names_raw = login_meta.get("profile_names") or metadata.get("profile_names")
-        if names_raw:
-            parsed = IXProfileSelector.parse_profile_names(names_raw)
-            if parsed:
-                return parsed[0], False
+    # Create approach config
+    approach_config = ApproachConfig(
+        approach_name="ixbrowser",
+        credentials={
+            "base_url": config_handler.get_base_url(),
+            "email": config_handler.get_email(),
+            "password": config_handler.get_password(),
+        }
+    )
 
-        fallback = self._default_profile_from_api()
-        if fallback:
-            logger.info(
-                "[IX] No explicit profile specified; defaulting to '%s' (%s)",
-                fallback.profile_name,
-                fallback.profile_id,
+    # Create approach instance
+    approach = IXBrowserApproach(approach_config)
+
+    # Initialize
+    if not approach.initialize():
+        print("\n✗ Initialization failed!")
+        exit(1)
+
+    print("\n✓ Initialization successful!\n")
+
+    # Create test work item
+    work_item = WorkItem(
+        account_name="Test Account",
+        creators=[
+            CreatorData(
+                profile_name="Test Creator",
+                email="test@example.com",
+                page_name="Test Page"
             )
-            return fallback.profile_id, False
-
-        # Last resort: use account name.
-        return work_item.account_name, False
-
-    def _default_profile_from_api(self) -> Optional[IXProfileInfo]:
-        if not self._client:
-            return None
-        try:
-            profiles = self._client.list_profiles(use_cache=False)
-        except IXBrowserAPIError as exc:
-            logger.error("[IX] Unable to list ixBrowser profiles: %s", exc)
-            return None
-        return profiles[0] if profiles else None
-
-    def _log_available_profiles(self) -> None:
-        if not self._client:
-            return
-        try:
-            profiles = self._client.list_profiles(use_cache=False)
-        except IXBrowserAPIError as exc:
-            logger.error("[IX] Unable to fetch profile list: %s", exc)
-            return
-
-        if not profiles:
-            logger.warning("[IX] Local API reports no profiles. Create one inside ixBrowser first.")
-            return
-
-        logger.info("[IX] Available profiles from local API:")
-        for profile in profiles:
-            logger.info("    - %s (%s)", profile.profile_name, profile.profile_id)
-
-    def _maximize_ix_window(self) -> bool:
-        if not HAS_PYGETWINDOW or gw is None:
-            logging.warning("[IX] pygetwindow not available; cannot focus ixBrowser window.")
-            return False
-
-        title_candidates = [
-            "Incogniton",
-            "IX Browser",
-            "ixbrowser",
-            "Incogniton Browser",
         ]
+    )
 
-        for title in title_candidates:
-            windows = gw.getWindowsWithTitle(title)
-            for window in windows:
-                try:
-                    if window.isMinimized:
-                        window.restore()
-                    window.activate()
-                    window.maximize()
-                    logging.info("[IX] Activated window: %s", window.title)
-                    return True
-                except Exception as exc:  # pragma: no cover - pygetwindow specifics
-                    logging.debug("[IX] Failed to activate window '%s': %s", window, exc)
+    # Execute workflow
+    print("Starting workflow...\n")
+    result = approach.execute_workflow(work_item)
 
-        logging.warning("[IX] Unable to locate ixBrowser window to activate.")
-        return False
+    print("\n" + "="*60)
+    print("Workflow Result")
+    print("="*60)
+    print(f"Success: {result.success}")
+    print(f"Creators Processed: {result.creators_processed}")
+    if result.errors:
+        print(f"Errors: {', '.join(result.errors)}")

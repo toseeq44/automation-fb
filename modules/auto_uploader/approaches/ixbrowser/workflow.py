@@ -140,19 +140,33 @@ class IXBrowserApproach(BaseApproach):
         Execute complete ixBrowser workflow.
 
         Steps:
-        1. Get first profile from API
-        2. Launch profile programmatically
-        3. Attach Selenium WebDriver
-        4. Check login status
-        5. Ensure correct user is logged in
-        6. Run upload workflow (placeholder for now)
-        7. Close profile
+        1. Initialize connection (if not done)
+        2. Get first profile from API
+        3. Launch profile programmatically
+        4. Attach Selenium WebDriver
+        5. Check login status
+        6. Ensure correct user is logged in
+        7. Run upload workflow (placeholder for now)
+        8. Close profile
         """
         result = WorkflowResult(success=False, account_name=work_item.account_name)
 
+        # Step 0: Initialize if not already done
+        if not self._initialized:
+            logger.info("[IXApproach] ═══════════════════════════════════════════")
+            logger.info("[IXApproach] STEP 0: Initializing Approach")
+            logger.info("[IXApproach] ═══════════════════════════════════════════")
+
+            if not self.initialize():
+                result.add_error("Initialization failed")
+                return result
+
+            self._initialized = True
+            logger.info("[IXApproach] ✓ Initialization successful!")
+
         # Check connection
         if not self._connection_manager or not self._connection_manager.is_connected():
-            result.add_error("Not connected to ixBrowser API. Run initialize() first.")
+            result.add_error("Not connected to ixBrowser API.")
             return result
 
         # Get client

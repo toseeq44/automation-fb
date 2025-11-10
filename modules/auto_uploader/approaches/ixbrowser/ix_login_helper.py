@@ -239,9 +239,21 @@ class IXBrowserLoginHelper:
                     time.sleep(2)
                     continue
 
-                # Step 3: Type email
-                logger.info("[IXLogin] Step 2: Typing email...")
+                # Step 3: Clear field and type email
+                logger.info("[IXLogin] Step 2: Clearing field and typing email...")
+                time.sleep(0.3)  # Wait for field to be ready
+
+                # Select all existing text (Ctrl+A)
+                pyautogui.hotkey('ctrl', 'a')
+                time.sleep(0.2)
+
+                # Delete selected text
+                pyautogui.press('delete')
+                time.sleep(0.2)
+
+                # Type new email
                 pyautogui.write(self.email, interval=0.05)
+                logger.info("[IXLogin] ✓ Email entered: %s", self.email)
                 time.sleep(0.5)
 
                 # Step 4: Click password field
@@ -251,9 +263,21 @@ class IXBrowserLoginHelper:
                     time.sleep(2)
                     continue
 
-                # Step 5: Type password
-                logger.info("[IXLogin] Step 4: Typing password...")
+                # Step 5: Clear field and type password
+                logger.info("[IXLogin] Step 4: Clearing field and typing password...")
+                time.sleep(0.3)  # Wait for field to be ready
+
+                # Select all existing text (Ctrl+A)
+                pyautogui.hotkey('ctrl', 'a')
+                time.sleep(0.2)
+
+                # Delete selected text
+                pyautogui.press('delete')
+                time.sleep(0.2)
+
+                # Type new password
                 pyautogui.write(self.password, interval=0.05)
+                logger.info("[IXLogin] ✓ Password entered")
                 time.sleep(0.5)
 
                 # Step 6: Press Enter

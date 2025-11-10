@@ -8,6 +8,7 @@ from .config_handler import IXBrowserConfig
 from .connection_manager import ConnectionManager
 from .browser_launcher import BrowserLauncher
 from .login_manager import LoginManager
+from .desktop_launcher import DesktopAppLauncher
 
 __all__ = [
     "IXBrowserApproach",
@@ -16,4 +17,5 @@ __all__ = [
     "ConnectionManager",
     "BrowserLauncher",
     "LoginManager",
+    "DesktopAppLauncher",
 ]

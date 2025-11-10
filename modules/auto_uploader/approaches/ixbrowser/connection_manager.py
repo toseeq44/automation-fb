@@ -20,28 +20,39 @@ except ImportError:
     logger.error("[IXConnection] Official library not installed!")
     logger.error("[IXConnection] Please install: pip install ixbrowser-local-api")
 
+# Import desktop launcher
+from .desktop_launcher import DesktopAppLauncher
+
 
 class ConnectionManager:
     """Manages connection to ixBrowser Local API."""
 
-    def __init__(self, base_url: str = "http://127.0.0.1:53200"):
+    def __init__(self, base_url: str = "http://127.0.0.1:53200", auto_launch: bool = True):
         """
         Initialize connection manager.
 
         Args:
             base_url: ixBrowser API base URL
+            auto_launch: Automatically launch ixBrowser if not running
         """
         self.base_url = base_url
+        self.auto_launch = auto_launch
         self._client: Optional[Any] = None
         self._is_connected = False
 
         # Extract host and port from base_url
         self._host, self._port = self._parse_base_url(base_url)
 
+        # Initialize desktop launcher
+        self._desktop_launcher: Optional[DesktopAppLauncher] = None
+        if auto_launch:
+            self._desktop_launcher = DesktopAppLauncher(host=self._host, port=self._port)
+
         logger.info("[IXConnection] Initializing connection manager...")
         logger.info("[IXConnection]   Base URL: %s", base_url)
         logger.info("[IXConnection]   Host: %s", self._host)
         logger.info("[IXConnection]   Port: %s", self._port)
+        logger.info("[IXConnection]   Auto-launch: %s", auto_launch)
 
     def _parse_base_url(self, base_url: str) -> tuple[str, int]:
         """
@@ -79,6 +90,9 @@ class ConnectionManager:
         """
         Establish connection to ixBrowser API.
 
+        If auto_launch is enabled and API is not available,
+        automatically launches ixBrowser desktop application.
+
         Returns:
             True if connection successful
         """
@@ -86,6 +100,17 @@ class ConnectionManager:
             logger.error("[IXConnection] Cannot connect - official library not installed!")
             logger.error("[IXConnection] Install with: pip install ixbrowser-local-api")
             return False
+
+        # Auto-launch ixBrowser if enabled
+        if self.auto_launch and self._desktop_launcher:
+            logger.info("[IXConnection] ═══════════════════════════════════════════")
+            logger.info("[IXConnection] Auto-Launch Check")
+            logger.info("[IXConnection] ═══════════════════════════════════════════")
+
+            if not self._desktop_launcher.ensure_running(timeout=60):
+                logger.error("[IXConnection] ✗ Failed to ensure ixBrowser is running!")
+                logger.error("[IXConnection] Please start ixBrowser manually or check installation")
+                return False
 
         logger.info("[IXConnection] Connecting to ixBrowser API...")
         logger.info("[IXConnection]   Target: %s:%s", self._host, self._port)

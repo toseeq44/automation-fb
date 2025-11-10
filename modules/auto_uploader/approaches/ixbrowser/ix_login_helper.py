@@ -129,62 +129,78 @@ class IXBrowserLoginHelper:
 
         return max_val >= confidence
 
-    def find_and_click_field(self, icon_img: Path, offset_x: int = 5) -> bool:
+    def find_and_click_field(self, icon_img: Path, offset_x: int = 5, search_region: Optional[Tuple[int, int, int, int]] = None) -> Tuple[bool, Optional[Tuple[int, int]]]:
         """
         Find icon and click to the right of it.
 
         Args:
             icon_img: Path to icon image
             offset_x: Pixels to offset right from icon (default 5)
+            search_region: Optional (left, top, width, height) to restrict search area
 
         Returns:
-            True if found and clicked
+            Tuple of (success, icon_location_xy) where icon_location_xy is (x, y) of icon center
         """
         logger.info("[IXLogin] Looking for: %s", icon_img.name)
+        if search_region:
+            logger.info("[IXLogin]   Search region: left=%d, top=%d, width=%d, height=%d",
+                       search_region[0], search_region[1], search_region[2], search_region[3])
 
         # Try PyAutoGUI first
         try:
-            location = pyautogui.locateOnScreen(str(icon_img), confidence=0.7)
+            if search_region:
+                location = pyautogui.locateOnScreen(str(icon_img), confidence=0.7, region=search_region)
+            else:
+                location = pyautogui.locateOnScreen(str(icon_img), confidence=0.7)
+
             if location:
                 # Click to the right of the icon
                 click_x = location.left + location.width + offset_x
                 click_y = location.top + (location.height // 2)
 
+                icon_center_y = location.top + (location.height // 2)
+
                 logger.info("[IXLogin] ✓ Found icon (PyAutoGUI)")
+                logger.info("[IXLogin]   Icon location: left=%d, top=%d, width=%d, height=%d",
+                           location.left, location.top, location.width, location.height)
                 logger.info("[IXLogin]   Clicking at: (%d, %d)", click_x, click_y)
 
                 pyautogui.click(click_x, click_y)
                 time.sleep(0.5)  # Wait for field to activate
-                return True
+                return True, (location.left, icon_center_y)
         except Exception as e:
             logger.debug("[IXLogin] PyAutoGUI failed: %s", str(e))
 
         # Fallback to OpenCV
         try:
-            location = self._find_with_opencv(icon_img)
+            location = self._find_with_opencv(icon_img, search_region)
             if location:
                 x, y, w, h = location
                 click_x = x + w + offset_x
                 click_y = y + (h // 2)
 
+                icon_center_y = y + (h // 2)
+
                 logger.info("[IXLogin] ✓ Found icon (OpenCV)")
+                logger.info("[IXLogin]   Icon location: x=%d, y=%d, w=%d, h=%d", x, y, w, h)
                 logger.info("[IXLogin]   Clicking at: (%d, %d)", click_x, click_y)
 
                 pyautogui.click(click_x, click_y)
                 time.sleep(0.5)
-                return True
+                return True, (x, icon_center_y)
         except Exception as e:
             logger.debug("[IXLogin] OpenCV failed: %s", str(e))
 
         logger.error("[IXLogin] ✗ Could not find: %s", icon_img.name)
-        return False
+        return False, None
 
-    def _find_with_opencv(self, template_path: Path) -> Optional[Tuple[int, int, int, int]]:
+    def _find_with_opencv(self, template_path: Path, search_region: Optional[Tuple[int, int, int, int]] = None) -> Optional[Tuple[int, int, int, int]]:
         """
         Find image location using OpenCV.
 
         Args:
             template_path: Path to template image
+            search_region: Optional (left, top, width, height) to restrict search area
 
         Returns:
             Tuple of (x, y, width, height) or None
@@ -192,6 +208,12 @@ class IXBrowserLoginHelper:
         # Take screenshot
         screenshot = pyautogui.screenshot()
         screenshot_np = np.array(screenshot)
+
+        # Crop to search region if specified
+        if search_region:
+            left, top, width, height = search_region
+            screenshot_np = screenshot_np[top:top+height, left:left+width]
+
         screenshot_gray = cv2.cvtColor(screenshot_np, cv2.COLOR_RGB2GRAY)
 
         # Load template
@@ -206,6 +228,12 @@ class IXBrowserLoginHelper:
         if max_val >= 0.7:
             h, w = template.shape
             x, y = max_loc
+
+            # Adjust coordinates if we searched in a region
+            if search_region:
+                x += search_region[0]
+                y += search_region[1]
+
             return (x, y, w, h)
 
         return None
@@ -234,7 +262,8 @@ class IXBrowserLoginHelper:
 
                 # Step 2: Click email field
                 logger.info("[IXLogin] Step 1: Activating email field...")
-                if not self.find_and_click_field(self.profile_icon_img, offset_x=5):
+                email_success, email_icon_location = self.find_and_click_field(self.profile_icon_img, offset_x=5)
+                if not email_success:
                     logger.error("[IXLogin] Failed to find email field")
                     time.sleep(2)
                     continue
@@ -259,13 +288,28 @@ class IXBrowserLoginHelper:
                 # Step 4: Click password field (with retry)
                 logger.info("[IXLogin] Step 3: Activating password field...")
 
+                # Create search region BELOW email field to avoid detecting email icon again
+                screen_width, screen_height = pyautogui.size()
+                if email_icon_location:
+                    email_x, email_y = email_icon_location
+                    # Search in region below email field (starting 30 pixels below)
+                    search_region = (0, email_y + 30, screen_width, screen_height - (email_y + 30))
+                    logger.info("[IXLogin] Searching for password field BELOW email field (y > %d)", email_y + 30)
+                else:
+                    search_region = None
+
                 password_field_activated = False
                 for password_attempt in range(3):  # Try 3 times to activate password field
                     if password_attempt > 0:
                         logger.info("[IXLogin] Retry %d: Looking for password field...", password_attempt + 1)
                         time.sleep(0.5)
 
-                    if self.find_and_click_field(self.password_icon_img, offset_x=5):
+                    pwd_success, pwd_location = self.find_and_click_field(
+                        self.password_icon_img,
+                        offset_x=5,  # 4-6 pixels to the right as requested
+                        search_region=search_region
+                    )
+                    if pwd_success:
                         # Verify click worked by waiting and checking
                         time.sleep(0.5)
                         password_field_activated = True

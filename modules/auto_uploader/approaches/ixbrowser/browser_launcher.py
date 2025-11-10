@@ -73,16 +73,11 @@ class BrowserLauncher:
         if startup_args is None:
             startup_args = []
 
-        # Add recommended args
-        recommended_args = [
-            '--disable-blink-features=AutomationControlled',
-        ]
-
-        for arg in recommended_args:
-            if arg not in startup_args:
-                startup_args.append(arg)
-
-        logger.info("[IXLauncher] Startup args: %s", startup_args)
+        # Log startup args (if any)
+        if startup_args:
+            logger.info("[IXLauncher] Startup args: %s", startup_args)
+        else:
+            logger.info("[IXLauncher] Launching with default browser settings (no custom args)")
 
         try:
             # Open profile using official API

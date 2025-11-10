@@ -210,7 +210,8 @@ class IXBrowserApproach(BaseApproach):
             logger.info("[IXApproach] STEP 1: Launch Profile")
             logger.info("[IXApproach] ═══════════════════════════════════════════")
 
-            if not launcher.launch_profile(profile_id):
+            # Launch profile with minimal args to open normally
+            if not launcher.launch_profile(profile_id, startup_args=[]):
                 result.add_error(f"Failed to launch profile {profile_id}")
                 return result
 
@@ -260,20 +261,6 @@ class IXBrowserApproach(BaseApproach):
                         logger.info("[IXApproach] Tab %d/%d:", idx, tab_count)
                         logger.info("[IXApproach]   URL: %s", url)
                         logger.info("[IXApproach]   Title: %s", title)
-
-                        # Check if it's Facebook
-                        if "facebook.com" in url:
-                            logger.info("[IXApproach]   Type: Facebook")
-                            try:
-                                # Simple check: look for profile/account indicators
-                                profile_indicators = driver.find_elements("css selector",
-                                    "div[aria-label*='Account'], div[aria-label*='Your profile'], svg[aria-label='Your profile']")
-                                if profile_indicators:
-                                    logger.info("[IXApproach]   Status: User logged in")
-                                else:
-                                    logger.info("[IXApproach]   Status: Not logged in or unknown")
-                            except Exception as e:
-                                logger.debug("[IXApproach]   Could not check login status: %s", str(e))
                     except Exception as e:
                         logger.warning("[IXApproach] Tab %d: Error accessing - %s", idx, str(e))
 

@@ -304,7 +304,9 @@ class IXBrowserApproach(BaseApproach):
 
 
 if __name__ == "__main__":
-    # Test mode
+    # Test mode - uses saved credentials from ix_config.json
+    from pathlib import Path
+
     logging.basicConfig(
         level=logging.INFO,
         format='%(message)s'
@@ -314,31 +316,41 @@ if __name__ == "__main__":
     print("ixBrowser Approach - Test Mode")
     print("="*60 + "\n")
 
-    # Setup test config
-    from .config_handler import prompt_user_for_credentials
+    # Check if config exists
+    from .config_handler import IXBrowserConfig
 
-    config_handler = prompt_user_for_credentials()
-
-    if not config_handler:
-        print("\n✗ Configuration cancelled!")
-        exit(1)
+    config_handler = IXBrowserConfig()
 
     if not config_handler.is_configured():
-        print("\n✗ Configuration incomplete!")
+        print("✗ No configuration found!")
+        print("\nPlease configure credentials first using one of these methods:")
+        print("1. Through the main app's Approaches settings dialog")
+        print("2. Run the config_handler test: python -m modules.auto_uploader.approaches.ixbrowser.config_handler")
         exit(1)
+
+    print("✓ Using saved configuration:")
+    print(f"  Base URL: {config_handler.get_base_url()}")
+    print(f"  Email: {config_handler.get_email()}")
 
     print("\n" + "="*60)
     print("Testing Workflow")
     print("="*60 + "\n")
 
-    # Create approach config
+    # Create approach config using saved credentials
     approach_config = ApproachConfig(
-        approach_name="ixbrowser",
+        mode="ixbrowser",
         credentials={
             "base_url": config_handler.get_base_url(),
             "email": config_handler.get_email(),
             "password": config_handler.get_password(),
-        }
+        },
+        paths={
+            "creators_root": Path.cwd() / "test_data" / "creators",
+            "shortcuts_root": Path.cwd() / "test_data" / "shortcuts",
+            "history_file": Path.cwd() / "test_data" / "history.json",
+            "ix_data_root": Path.cwd() / "test_data" / "ix_data",
+        },
+        browser_type="ix"
     )
 
     # Create approach instance
@@ -354,13 +366,16 @@ if __name__ == "__main__":
     # Create test work item
     work_item = WorkItem(
         account_name="Test Account",
+        browser_type="ix",
         creators=[
             CreatorData(
                 profile_name="Test Creator",
                 email="test@example.com",
+                password="test_password",
                 page_name="Test Page"
             )
-        ]
+        ],
+        config=approach_config
     )
 
     # Execute workflow

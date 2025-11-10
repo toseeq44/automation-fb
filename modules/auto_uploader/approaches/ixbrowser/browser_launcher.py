@@ -161,6 +161,13 @@ class BrowserLauncher:
 
             logger.info("[IXLauncher] ✓ Selenium attached successfully!")
 
+            # Maximize browser window
+            try:
+                self.driver.maximize_window()
+                logger.info("[IXLauncher] ✓ Browser window maximized")
+            except Exception as e:
+                logger.debug("[IXLauncher] Could not maximize window: %s", str(e))
+
             # Get current URL to verify
             try:
                 current_url = self.driver.current_url

@@ -195,27 +195,21 @@ class IXBrowserApproach(BaseApproach):
         for idx, p in enumerate(all_profiles, 1):
             logger.info("[IXApproach]   %d. %s (ID: %s)", idx, p.get('name', 'Unknown'), p.get('profile_id'))
 
-        # Select first profile for now
-        profile_id = all_profiles[0]['profile_id']
-        profile_name = all_profiles[0].get('name', 'Unknown')
-
-        logger.info("[IXApproach] Selected profile for launch: %s (ID: %s)", profile_name, profile_id)
-
         # Create browser launcher
         launcher = BrowserLauncher(client)
 
         try:
-            # Step 1: Launch profile
+            # Step 1: Wait for manual profile opening
             logger.info("[IXApproach] ═══════════════════════════════════════════")
-            logger.info("[IXApproach] STEP 1: Launch Profile")
+            logger.info("[IXApproach] STEP 1: Waiting for Manual Profile Opening")
             logger.info("[IXApproach] ═══════════════════════════════════════════")
 
-            # Launch profile with minimal args to open normally
-            if not launcher.launch_profile(profile_id, startup_args=[]):
-                result.add_error(f"Failed to launch profile {profile_id}")
+            # Wait for user to manually open profile 1
+            if not launcher.wait_for_manual_profile_open(timeout=300):
+                result.add_error("User did not open profile within timeout (5 minutes)")
                 return result
 
-            logger.info("[IXApproach] ✓ Profile launched successfully!")
+            logger.info("[IXApproach] ✓ Profile opened by user!")
 
             # Step 2: Attach Selenium
             logger.info("[IXApproach] ═══════════════════════════════════════════")
@@ -271,9 +265,10 @@ class IXBrowserApproach(BaseApproach):
             except Exception as e:
                 logger.error("[IXApproach] Failed to enumerate tabs: %s", str(e))
 
-            # Create context
+            # Create context with detected profile
+            detected_profile_id = launcher.current_profile_id
             self._current_context = IXAutomationContext(
-                profile_id=profile_id,
+                profile_id=detected_profile_id,
                 launcher=launcher,
                 login_manager=None  # Not using Facebook login management
             )
@@ -285,16 +280,17 @@ class IXBrowserApproach(BaseApproach):
 
             self._run_upload_workflow(work_item, self._current_context, result)
 
-        finally:
-            # Step 5: Cleanup
+            # Step 5: Keep profile open
             logger.info("[IXApproach] ═══════════════════════════════════════════")
-            logger.info("[IXApproach] STEP 5: Cleanup")
+            logger.info("[IXApproach] STEP 5: Workflow Complete")
             logger.info("[IXApproach] ═══════════════════════════════════════════")
+            logger.info("[IXApproach] ✓ Profile remains open")
+            logger.info("[IXApproach] ✓ Browser session active")
+            logger.info("[IXApproach] User can continue working in the browser")
 
-            if launcher.is_profile_open():
-                launcher.close_profile()
-
-            self._current_context = None
+        except Exception as e:
+            logger.error("[IXApproach] Workflow error: %s", str(e))
+            result.add_error(str(e))
 
         return result
 

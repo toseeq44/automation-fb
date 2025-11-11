@@ -140,6 +140,76 @@ class BrowserLauncher:
             logger.debug("[IXLauncher] Error normalizing title: %s", str(e))
             return False
 
+    def wait_for_manual_profile_open(self, timeout: int = 300) -> bool:
+        """
+        Wait for user to manually open a profile in ixBrowser.
+        Polls API to detect when a profile becomes active.
+
+        Args:
+            timeout: Maximum seconds to wait (default: 300 = 5 minutes)
+
+        Returns:
+            True if profile detected and attached
+        """
+        logger.info("[IXLauncher] ═══════════════════════════════════════════")
+        logger.info("[IXLauncher] Waiting for Manual Profile Opening")
+        logger.info("[IXLauncher] ═══════════════════════════════════════════")
+        logger.info("[IXLauncher] Please open Profile 1 in ixBrowser:")
+        logger.info("[IXLauncher]   1. Switch to ixBrowser application window")
+        logger.info("[IXLauncher]   2. Click the first profile to open it")
+        logger.info("[IXLauncher]   3. Code will detect and attach automatically")
+        logger.info("[IXLauncher] ")
+        logger.info("[IXLauncher] Monitoring... (timeout: %d seconds)", timeout)
+
+        start_time = time.time()
+        check_interval = 3  # Check every 3 seconds
+        last_log_time = 0
+
+        while (time.time() - start_time) < timeout:
+            try:
+                # Get profile list and check for open profiles
+                profiles = self.client.get_profile_list(page_size=100)
+
+                if profiles:
+                    for profile in profiles:
+                        # Check if profile has debugging_address (means it's open)
+                        if 'debugging_address' in profile and profile['debugging_address']:
+                            profile_id = profile.get('profile_id')
+                            profile_name = profile.get('name', 'Unknown')
+                            debugging_address = profile.get('debugging_address')
+                            webdriver_path = profile.get('webdriver')
+
+                            logger.info("[IXLauncher] ✓ Opened profile detected!")
+                            logger.info("[IXLauncher]   Profile: %s (ID: %s)", profile_name, profile_id)
+                            logger.info("[IXLauncher]   Debug Address: %s", debugging_address)
+
+                            # Store session info
+                            self.session_info = {
+                                'debugging_address': debugging_address,
+                                'webdriver': webdriver_path,
+                                'profile_id': profile_id,
+                                'profile_name': profile_name
+                            }
+                            self.current_profile_id = profile_id
+
+                            return True
+
+            except Exception as e:
+                logger.debug("[IXLauncher] Error checking profiles: %s", str(e))
+
+            # Show progress every 15 seconds
+            elapsed = int(time.time() - start_time)
+            if elapsed - last_log_time >= 15:
+                remaining = timeout - elapsed
+                logger.info("[IXLauncher] Still waiting... (%d seconds remaining)", remaining)
+                last_log_time = elapsed
+
+            # Wait before next check
+            time.sleep(check_interval)
+
+        logger.error("[IXLauncher] ✗ Timeout: No profile opened within %d seconds", timeout)
+        return False
+
     def launch_profile(
         self,
         profile_id: int,

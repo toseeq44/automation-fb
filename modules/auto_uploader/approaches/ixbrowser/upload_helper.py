@@ -70,17 +70,25 @@ class VideoUploadHelper:
     def debug_page_content(self, bookmark_name: str) -> None:
         """Debug helper to see what's on the page."""
         try:
-            # Get all buttons on page
+            # Get all clickable elements (buttons, divs with role=button, etc)
             all_buttons = self.driver.find_elements("xpath", "//button")
-            logger.info("[Upload] DEBUG: Found %d buttons on page", len(all_buttons))
+            all_divs_button = self.driver.find_elements("xpath", "//div[@role='button']")
+            all_clickable = self.driver.find_elements("xpath", "//*[@onclick or @role='button']")
 
-            # Show first 10 buttons with their text
-            for idx, btn in enumerate(all_buttons[:10], 1):
+            logger.info("[Upload] DEBUG: Found %d <button> tags", len(all_buttons))
+            logger.info("[Upload] DEBUG: Found %d <div role='button'> elements", len(all_divs_button))
+            logger.info("[Upload] DEBUG: Found %d total clickable elements", len(all_clickable))
+
+            # Show first 15 clickable elements
+            for idx, elem in enumerate(all_clickable[:15], 1):
                 try:
-                    text = btn.text[:50] if btn.text else "(no text)"
-                    aria_label = btn.get_attribute("aria-label")
+                    tag = elem.tag_name
+                    text = elem.text[:50] if elem.text else "(no text)"
+                    aria_label = elem.get_attribute("aria-label")
                     aria_label = aria_label[:50] if aria_label else "(no aria-label)"
-                    logger.info("[Upload] DEBUG: Button %d - Text: '%s', Aria: '%s'", idx, text, aria_label)
+                    role = elem.get_attribute("role") or "(no role)"
+                    logger.info("[Upload] DEBUG: Element %d - Tag: %s, Role: %s, Text: '%s', Aria: '%s'",
+                               idx, tag, role, text, aria_label)
                 except:
                     pass
 
@@ -97,6 +105,91 @@ class VideoUploadHelper:
 
         except Exception as e:
             logger.error("[Upload] DEBUG: Failed - %s", str(e))
+
+    def find_add_videos_button_text(self, retries: int = 3) -> Optional[Any]:
+        """
+        Find 'Add Videos' button using text-based detection.
+        Checks buttons, divs, spans, and all clickable elements.
+
+        Args:
+            retries: Number of retry attempts
+
+        Returns:
+            WebElement or None
+        """
+        logger.info("[Upload] Looking for 'Add Videos' button (text-based detection)...")
+
+        for attempt in range(1, retries + 1):
+            try:
+                if attempt > 1:
+                    logger.info("[Upload] Retry %d/%d", attempt, retries)
+                    time.sleep(2)
+
+                # Method 1: ANY element containing "Add Videos" text (divs, spans, buttons, etc)
+                try:
+                    elements = self.driver.find_elements("xpath",
+                        "//*[contains(text(), 'Add Videos') or contains(text(), 'Add videos')]")
+                    if elements:
+                        logger.info("[Upload] ✓ Found button (broad text search) - %d match(es)", len(elements))
+                        # Return the first visible element
+                        for elem in elements:
+                            if elem.is_displayed():
+                                logger.info("[Upload]   Using element: tag=%s", elem.tag_name)
+                                return elem
+                except Exception as e:
+                    logger.debug("[Upload] Broad text search failed: %s", str(e))
+
+                # Method 2: Divs with role=button containing text
+                try:
+                    elements = self.driver.find_elements("xpath",
+                        "//div[@role='button' and contains(., 'Add Videos')]")
+                    if elements:
+                        logger.info("[Upload] ✓ Found button (div role=button)")
+                        return elements[0]
+                except Exception as e:
+                    logger.debug("[Upload] Div role=button search failed: %s", str(e))
+
+                # Method 3: Spans containing text
+                try:
+                    elements = self.driver.find_elements("xpath",
+                        "//span[contains(text(), 'Add Videos')]")
+                    if elements:
+                        # Get the parent element (likely the clickable container)
+                        parent = elements[0].find_element("xpath", "..")
+                        logger.info("[Upload] ✓ Found button (span parent)")
+                        return parent
+                except Exception as e:
+                    logger.debug("[Upload] Span search failed: %s", str(e))
+
+                # Method 4: Case-insensitive search
+                try:
+                    elements = self.driver.find_elements("xpath",
+                        "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'add videos')]")
+                    if elements:
+                        logger.info("[Upload] ✓ Found button (case-insensitive)")
+                        for elem in elements:
+                            if elem.is_displayed():
+                                return elem
+                except Exception as e:
+                    logger.debug("[Upload] Case-insensitive search failed: %s", str(e))
+
+                # Method 5: Aria-label search
+                try:
+                    elements = self.driver.find_elements("xpath",
+                        "//*[contains(@aria-label, 'Add Videos') or contains(@aria-label, 'Add videos')]")
+                    if elements:
+                        logger.info("[Upload] ✓ Found button (aria-label)")
+                        return elements[0]
+                except Exception as e:
+                    logger.debug("[Upload] Aria-label search failed: %s", str(e))
+
+                logger.warning("[Upload] Button not found in attempt %d", attempt)
+
+            except Exception as e:
+                logger.debug("[Upload] Search error: %s", str(e))
+
+        logger.warning("[Upload] ✗ Text-based detection failed after %d retries", retries)
+        return None
 
     def find_add_videos_button_image(self, retries: int = 3) -> Optional[Tuple[int, int]]:
         """
@@ -177,17 +270,33 @@ class VideoUploadHelper:
         logger.error("[Upload] ✗ Add Videos button not found after %d retries", retries)
         return None
 
-    def find_add_videos_button(self, retries: int = 3) -> Optional[Tuple[int, int]]:
+    def find_add_videos_button(self, retries: int = 3):
         """
-        Find 'Add Videos' button - wrapper for image recognition.
+        Find 'Add Videos' button using multiple detection methods.
+        Tries text-based detection first, then falls back to image recognition.
 
         Args:
             retries: Number of retry attempts
 
         Returns:
-            (x, y) coordinates or None
+            WebElement (text-based) or (x, y) coordinates tuple (image-based) or None
         """
-        return self.find_add_videos_button_image(retries)
+        # Try text-based detection first (faster and more reliable if it works)
+        logger.info("[Upload] Attempting text-based button detection...")
+        text_result = self.find_add_videos_button_text(retries=2)
+        if text_result:
+            logger.info("[Upload] ✓ Text-based detection successful")
+            return text_result
+
+        # Fallback to image recognition
+        logger.info("[Upload] Text-based detection failed, trying image recognition...")
+        image_result = self.find_add_videos_button_image(retries=retries)
+        if image_result:
+            logger.info("[Upload] ✓ Image recognition successful")
+            return image_result
+
+        logger.error("[Upload] ✗ All detection methods failed")
+        return None
 
     def get_first_video_from_folder(self, folder_path: str) -> Optional[str]:
         """
@@ -422,18 +531,25 @@ class VideoUploadHelper:
                         continue
                     raise Exception("Failed to navigate to bookmark")
 
-                # Step 2: Find Add Videos button (image recognition)
-                button_coords = self.find_add_videos_button()
-                if not button_coords:
+                # Step 2: Find Add Videos button (text-based or image recognition)
+                button_result = self.find_add_videos_button()
+                if not button_result:
                     if attempt < max_retries:
                         logger.warning("[Upload] Button not found, retrying...")
                         continue
                     raise Exception("Add Videos button not found")
 
-                # Click the button
-                button_x, button_y = button_coords
-                logger.info("[Upload] Clicking button at (%d, %d)...", button_x, button_y)
-                pyautogui.click(button_x, button_y)
+                # Click the button (handle both WebElement and coordinates)
+                if isinstance(button_result, tuple):
+                    # Image recognition result - use PyAutoGUI
+                    button_x, button_y = button_result
+                    logger.info("[Upload] Clicking button at (%d, %d) using PyAutoGUI...", button_x, button_y)
+                    pyautogui.click(button_x, button_y)
+                else:
+                    # Text-based result - use Selenium click
+                    logger.info("[Upload] Clicking button using Selenium (tag: %s)...", button_result.tag_name)
+                    button_result.click()
+
                 time.sleep(2)  # Wait for click response
                 logger.info("[Upload] ✓ Button clicked")
 

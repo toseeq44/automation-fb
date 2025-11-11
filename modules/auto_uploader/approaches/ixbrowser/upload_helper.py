@@ -7,10 +7,14 @@ import logging
 import os
 import time
 import glob
-from typing import Optional, List, Dict, Any
+import pyautogui
+from typing import Optional, List, Dict, Any, Tuple
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Image path for Add Videos button
+ADD_VIDEOS_BUTTON_IMAGE = "/home/user/automation-fb/modules/auto_uploader/helper_images/add_videos_button.png"
 
 
 class VideoUploadHelper:
@@ -94,17 +98,31 @@ class VideoUploadHelper:
         except Exception as e:
             logger.error("[Upload] DEBUG: Failed - %s", str(e))
 
-    def find_add_videos_button(self, retries: int = 3) -> Optional[Any]:
+    def find_add_videos_button_image(self, retries: int = 3) -> Optional[Tuple[int, int]]:
         """
-        Find 'Add Videos' button with multiple methods and retry.
+        Find 'Add Videos' button using image recognition.
+        Prioritizes middle-screen button (90% important).
 
         Args:
             retries: Number of retry attempts
 
         Returns:
-            WebElement or None
+            (x, y) coordinates of button center or None
         """
-        logger.info("[Upload] Looking for 'Add Videos' button...")
+        logger.info("[Upload] Looking for 'Add Videos' button (image recognition)...")
+
+        # Check if image file exists
+        if not os.path.exists(ADD_VIDEOS_BUTTON_IMAGE):
+            logger.error("[Upload] ✗ Button image not found: %s", ADD_VIDEOS_BUTTON_IMAGE)
+            return None
+
+        # Get screen dimensions
+        screen_width, screen_height = pyautogui.size()
+        middle_y_min = int(screen_height * 0.30)  # 30% from top
+        middle_y_max = int(screen_height * 0.70)  # 70% from top
+
+        logger.info("[Upload] Screen size: %dx%d", screen_width, screen_height)
+        logger.info("[Upload] Middle screen range: y=%d to y=%d", middle_y_min, middle_y_max)
 
         for attempt in range(1, retries + 1):
             try:
@@ -112,49 +130,64 @@ class VideoUploadHelper:
                     logger.info("[Upload] Retry %d/%d", attempt, retries)
                     time.sleep(2)
 
-                # Method 1: Text-based search
-                try:
-                    buttons = self.driver.find_elements("xpath", "//button[contains(text(), 'Add Videos')]")
-                    if buttons:
-                        logger.info("[Upload] ✓ Found button (text-based)")
-                        return buttons[0]
-                except:
-                    pass
+                # Find all matches on screen
+                logger.info("[Upload] Searching for button image...")
+                matches = list(pyautogui.locateAllOnScreen(
+                    ADD_VIDEOS_BUTTON_IMAGE,
+                    confidence=0.8
+                ))
 
-                # Method 2: Case-insensitive text
-                try:
-                    buttons = self.driver.find_elements("xpath", "//button[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'add videos')]")
-                    if buttons:
-                        logger.info("[Upload] ✓ Found button (case-insensitive)")
-                        return buttons[0]
-                except:
-                    pass
+                if not matches:
+                    logger.warning("[Upload] No button matches found in attempt %d", attempt)
+                    continue
 
-                # Method 3: Aria-label
-                try:
-                    buttons = self.driver.find_elements("xpath", "//button[contains(@aria-label, 'Add Videos')]")
-                    if buttons:
-                        logger.info("[Upload] ✓ Found button (aria-label)")
-                        return buttons[0]
-                except:
-                    pass
+                logger.info("[Upload] Found %d button match(es)", len(matches))
 
-                # Method 4: Any element with text
-                try:
-                    elements = self.driver.find_elements("xpath", "//*[contains(text(), 'Add Videos')]")
-                    if elements:
-                        logger.info("[Upload] ✓ Found element (broad search)")
-                        return elements[0]
-                except:
-                    pass
+                # Filter for middle-screen buttons
+                middle_buttons = []
+                for idx, match in enumerate(matches, 1):
+                    center_x = match.left + match.width // 2
+                    center_y = match.top + match.height // 2
 
-                logger.warning("[Upload] Button not found in attempt %d", attempt)
+                    is_middle = middle_y_min <= center_y <= middle_y_max
+                    logger.info("[Upload]   Match %d: x=%d, y=%d (middle=%s)",
+                               idx, center_x, center_y, "YES" if is_middle else "NO")
+
+                    if is_middle:
+                        middle_buttons.append((center_x, center_y))
+
+                # Prioritize middle-screen button (90% important)
+                if middle_buttons:
+                    button_x, button_y = middle_buttons[0]
+                    logger.info("[Upload] ✓ Found middle-screen button at (%d, %d)", button_x, button_y)
+                    return (button_x, button_y)
+
+                # Fallback: use first match if no middle button found
+                if matches:
+                    match = matches[0]
+                    button_x = match.left + match.width // 2
+                    button_y = match.top + match.height // 2
+                    logger.warning("[Upload] ⚠ No middle button, using first match at (%d, %d)",
+                                 button_x, button_y)
+                    return (button_x, button_y)
 
             except Exception as e:
-                logger.debug("[Upload] Search error: %s", str(e))
+                logger.error("[Upload] Image search error: %s", str(e))
 
         logger.error("[Upload] ✗ Add Videos button not found after %d retries", retries)
         return None
+
+    def find_add_videos_button(self, retries: int = 3) -> Optional[Tuple[int, int]]:
+        """
+        Find 'Add Videos' button - wrapper for image recognition.
+
+        Args:
+            retries: Number of retry attempts
+
+        Returns:
+            (x, y) coordinates or None
+        """
+        return self.find_add_videos_button_image(retries)
 
     def get_first_video_from_folder(self, folder_path: str) -> Optional[str]:
         """
@@ -389,13 +422,20 @@ class VideoUploadHelper:
                         continue
                     raise Exception("Failed to navigate to bookmark")
 
-                # Step 2: Find Add Videos button
-                button = self.find_add_videos_button()
-                if not button:
+                # Step 2: Find Add Videos button (image recognition)
+                button_coords = self.find_add_videos_button()
+                if not button_coords:
                     if attempt < max_retries:
                         logger.warning("[Upload] Button not found, retrying...")
                         continue
                     raise Exception("Add Videos button not found")
+
+                # Click the button
+                button_x, button_y = button_coords
+                logger.info("[Upload] Clicking button at (%d, %d)...", button_x, button_y)
+                pyautogui.click(button_x, button_y)
+                time.sleep(2)  # Wait for click response
+                logger.info("[Upload] ✓ Button clicked")
 
                 # Step 3: Get video file
                 video_file = self.get_first_video_from_folder(folder_path)

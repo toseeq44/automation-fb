@@ -6,6 +6,7 @@ Complete integration using official ixbrowser-local-api library
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -271,53 +272,129 @@ class IXBrowserApproach(BaseApproach):
             except Exception as e:
                 logger.error("[IXApproach] Failed to enumerate tabs: %s", str(e))
 
-            # Step 4: Open New Tab & Enumerate Bookmarks
+            # Step 4: Bookmark-Folder Comparison
             logger.info("[IXApproach] ═══════════════════════════════════════════")
-            logger.info("[IXApproach] STEP 4: Open New Tab & Enumerate Bookmarks")
+            logger.info("[IXApproach] STEP 4: Bookmark-Folder Comparison")
             logger.info("[IXApproach] ═══════════════════════════════════════════")
 
             try:
-                # Open new tab
+                # 1. Get Desktop path
+                desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
+                creators_base = os.path.join(desktop_path, "creators data")
+                profile_folder = os.path.join(creators_base, profile_name)
+
+                logger.info("[IXApproach] Checking folders...")
+                logger.info("[IXApproach]   Desktop: %s", desktop_path)
+                logger.info("[IXApproach]   Creators base: %s", creators_base)
+                logger.info("[IXApproach]   Profile folder: %s", profile_folder)
+
+                # 2. Check if folders exist
+                if not os.path.exists(creators_base):
+                    error_msg = f"'creators data' folder not found on Desktop: {creators_base}"
+                    logger.error("[IXApproach] %s", error_msg)
+                    raise FileNotFoundError(error_msg)
+
+                if not os.path.exists(profile_folder):
+                    error_msg = f"Profile folder not found: {profile_folder}"
+                    logger.error("[IXApproach] %s", error_msg)
+                    logger.error("[IXApproach] Please create: Desktop/creators data/%s/", profile_name)
+                    raise FileNotFoundError(error_msg)
+
+                # 3. Get all creator folders (subfolders)
+                creator_folders = [
+                    f for f in os.listdir(profile_folder)
+                    if os.path.isdir(os.path.join(profile_folder, f))
+                ]
+                logger.info("[IXApproach] ✓ Found %d creator folder(s)", len(creator_folders))
+
+                # 4. Open new tab for bookmarks
                 logger.info("[IXApproach] Opening new tab...")
                 driver.execute_script("window.open('about:blank', '_blank');")
-
-                # Switch to new tab
                 driver.switch_to.window(driver.window_handles[-1])
                 logger.info("[IXApproach] ✓ New tab opened")
 
-                # Navigate to bookmarks URL (Chrome bookmarks manager)
+                # 5. Navigate to bookmarks
                 logger.info("[IXApproach] Accessing bookmarks...")
                 driver.get("chrome://bookmarks/")
-                time.sleep(2)  # Wait for bookmarks page to load
+                time.sleep(2)
 
-                # Get bookmark count via JavaScript
-                # Chrome bookmarks are stored in the bookmarks API
+                # 6. Get all bookmarks with titles and URLs
                 bookmark_script = """
                     return new Promise((resolve) => {
                         chrome.bookmarks.getTree((tree) => {
-                            let count = 0;
-                            function countBookmarks(nodes) {
+                            let bookmarks = [];
+                            function extractBookmarks(nodes) {
                                 nodes.forEach(node => {
-                                    if (node.url) count++;  // It's a bookmark (has URL)
-                                    if (node.children) countBookmarks(node.children);
+                                    if (node.url) {
+                                        bookmarks.push({
+                                            title: node.title,
+                                            url: node.url
+                                        });
+                                    }
+                                    if (node.children) {
+                                        extractBookmarks(node.children);
+                                    }
                                 });
                             }
-                            countBookmarks(tree);
-                            resolve(count);
+                            extractBookmarks(tree);
+                            resolve(bookmarks);
                         });
                     });
                 """
 
-                try:
-                    bookmark_count = driver.execute_script(bookmark_script)
-                    logger.info("[IXApproach] ✓ Bookmarks enumerated")
-                    logger.info("[IXApproach] Total bookmarks: %d", bookmark_count)
-                except Exception as e:
-                    logger.warning("[IXApproach] Could not count bookmarks via API: %s", str(e))
-                    logger.info("[IXApproach] Bookmarks page opened successfully")
+                all_bookmarks = driver.execute_script(bookmark_script)
+                logger.info("[IXApproach] ✓ Retrieved %d total bookmark(s)", len(all_bookmarks))
 
+                # 7. Filter Facebook bookmarks only
+                facebook_bookmarks = [
+                    b for b in all_bookmarks
+                    if "facebook.com" in b['url']
+                ]
+                logger.info("[IXApproach] ✓ Filtered %d Facebook bookmark(s)", len(facebook_bookmarks))
+
+                # 8. Extract bookmark titles (creator names)
+                bookmark_names = [b['title'] for b in facebook_bookmarks]
+
+                # 9. Compare bookmarks with folders
+                matched = [name for name in bookmark_names if name in creator_folders]
+                missing = [name for name in bookmark_names if name not in creator_folders]
+                extra = [folder for folder in creator_folders if folder not in bookmark_names]
+
+                # 10. Console Output - Summary
+                logger.info("[IXApproach] ═══════════════════════════════════════════")
+                logger.info("[IXApproach] Bookmark-Folder Comparison Result")
+                logger.info("[IXApproach] ═══════════════════════════════════════════")
+                logger.info("[IXApproach] Profile: %s", profile_name)
+                logger.info("[IXApproach] Creator Folder: %s", profile_folder)
+                logger.info("[IXApproach] ")
+                logger.info("[IXApproach] Total bookmarks: %d", len(all_bookmarks))
+                logger.info("[IXApproach] Facebook bookmarks: %d", len(facebook_bookmarks))
+                logger.info("[IXApproach] Matched folders: %d", len(matched))
+                logger.info("[IXApproach] Missing folders: %d", len(missing))
+                logger.info("[IXApproach] Extra folders: %d", len(extra))
+                logger.info("[IXApproach] ")
+                logger.info("[IXApproach] Details:")
+
+                # Show matched
+                for name in matched:
+                    logger.info("[IXApproach] ✓ %s - Folder exists", name)
+
+                # Show missing
+                for name in missing:
+                    logger.info("[IXApproach] ✗ %s - Folder missing", name)
+
+                # Show extra
+                for name in extra:
+                    logger.info("[IXApproach] ⚠ %s - Extra folder (no bookmark)", name)
+
+                logger.info("[IXApproach] ═══════════════════════════════════════════")
+
+            except FileNotFoundError as e:
+                logger.error("[IXApproach] %s", str(e))
+                result.add_error(str(e))
             except Exception as e:
-                logger.error("[IXApproach] Failed to open new tab or enumerate bookmarks: %s", str(e))
+                logger.error("[IXApproach] Bookmark-folder comparison failed: %s", str(e))
+                result.add_error(f"Comparison failed: {str(e)}")
 
             # Create context
             self._current_context = IXAutomationContext(

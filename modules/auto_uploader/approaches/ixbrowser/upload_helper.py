@@ -45,7 +45,7 @@ class VideoUploadHelper:
             logger.info("[Upload]   URL: %s", url)
 
             self.driver.get(url)
-            time.sleep(3)  # Wait for page load
+            time.sleep(5)  # Wait for page load (increased to 5 seconds)
 
             # Verify loaded
             if "facebook.com" not in self.driver.current_url:
@@ -53,11 +53,46 @@ class VideoUploadHelper:
                 return False
 
             logger.info("[Upload] ✓ Page loaded successfully")
+
+            # Debug: See what's on the page
+            self.debug_page_content(title)
+
             return True
 
         except Exception as e:
             logger.error("[Upload] Navigation failed: %s", str(e))
             return False
+
+    def debug_page_content(self, bookmark_name: str) -> None:
+        """Debug helper to see what's on the page."""
+        try:
+            # Get all buttons on page
+            all_buttons = self.driver.find_elements("xpath", "//button")
+            logger.info("[Upload] DEBUG: Found %d buttons on page", len(all_buttons))
+
+            # Show first 10 buttons with their text
+            for idx, btn in enumerate(all_buttons[:10], 1):
+                try:
+                    text = btn.text[:50] if btn.text else "(no text)"
+                    aria_label = btn.get_attribute("aria-label")
+                    aria_label = aria_label[:50] if aria_label else "(no aria-label)"
+                    logger.info("[Upload] DEBUG: Button %d - Text: '%s', Aria: '%s'", idx, text, aria_label)
+                except:
+                    pass
+
+            # Take screenshot
+            screenshot_path = f"/tmp/debug_{bookmark_name.replace(' ', '_')}.png"
+            self.driver.save_screenshot(screenshot_path)
+            logger.info("[Upload] DEBUG: Screenshot saved to %s", screenshot_path)
+
+            # Save page source
+            source_path = f"/tmp/debug_{bookmark_name.replace(' ', '_')}.html"
+            with open(source_path, 'w', encoding='utf-8') as f:
+                f.write(self.driver.page_source)
+            logger.info("[Upload] DEBUG: Page source saved to %s", source_path)
+
+        except Exception as e:
+            logger.error("[Upload] DEBUG: Failed - %s", str(e))
 
     def find_add_videos_button(self, retries: int = 3) -> Optional[Any]:
         """

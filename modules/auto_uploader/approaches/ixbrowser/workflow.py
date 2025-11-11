@@ -6,6 +6,7 @@ Complete integration using official ixbrowser-local-api library
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -195,21 +196,26 @@ class IXBrowserApproach(BaseApproach):
         for idx, p in enumerate(all_profiles, 1):
             logger.info("[IXApproach]   %d. %s (ID: %s)", idx, p.get('name', 'Unknown'), p.get('profile_id'))
 
+        # Select first profile
+        profile_id = all_profiles[0]['profile_id']
+        profile_name = all_profiles[0].get('name', 'Unknown')
+        logger.info("[IXApproach] Selected profile: %s (ID: %s)", profile_name, profile_id)
+
         # Create browser launcher
         launcher = BrowserLauncher(client)
 
         try:
-            # Step 1: Wait for manual profile opening
+            # Step 1: Launch Profile via API
             logger.info("[IXApproach] ═══════════════════════════════════════════")
-            logger.info("[IXApproach] STEP 1: Waiting for Manual Profile Opening")
+            logger.info("[IXApproach] STEP 1: Launch Profile")
             logger.info("[IXApproach] ═══════════════════════════════════════════")
 
-            # Wait for user to manually open profile 1
-            if not launcher.wait_for_manual_profile_open(timeout=300):
-                result.add_error("User did not open profile within timeout (5 minutes)")
+            # Launch profile with no custom args (clean opening)
+            if not launcher.launch_profile(profile_id, startup_args=[]):
+                result.add_error(f"Failed to launch profile {profile_id}")
                 return result
 
-            logger.info("[IXApproach] ✓ Profile opened by user!")
+            logger.info("[IXApproach] ✓ Profile launched successfully!")
 
             # Step 2: Attach Selenium
             logger.info("[IXApproach] ═══════════════════════════════════════════")
@@ -265,22 +271,62 @@ class IXBrowserApproach(BaseApproach):
             except Exception as e:
                 logger.error("[IXApproach] Failed to enumerate tabs: %s", str(e))
 
-            # Create context with detected profile
-            detected_profile_id = launcher.current_profile_id
+            # Step 4: Open New Tab & Enumerate Bookmarks
+            logger.info("[IXApproach] ═══════════════════════════════════════════")
+            logger.info("[IXApproach] STEP 4: Open New Tab & Enumerate Bookmarks")
+            logger.info("[IXApproach] ═══════════════════════════════════════════")
+
+            try:
+                # Open new tab
+                logger.info("[IXApproach] Opening new tab...")
+                driver.execute_script("window.open('about:blank', '_blank');")
+
+                # Switch to new tab
+                driver.switch_to.window(driver.window_handles[-1])
+                logger.info("[IXApproach] ✓ New tab opened")
+
+                # Navigate to bookmarks URL (Chrome bookmarks manager)
+                logger.info("[IXApproach] Accessing bookmarks...")
+                driver.get("chrome://bookmarks/")
+                time.sleep(2)  # Wait for bookmarks page to load
+
+                # Get bookmark count via JavaScript
+                # Chrome bookmarks are stored in the bookmarks API
+                bookmark_script = """
+                    return new Promise((resolve) => {
+                        chrome.bookmarks.getTree((tree) => {
+                            let count = 0;
+                            function countBookmarks(nodes) {
+                                nodes.forEach(node => {
+                                    if (node.url) count++;  // It's a bookmark (has URL)
+                                    if (node.children) countBookmarks(node.children);
+                                });
+                            }
+                            countBookmarks(tree);
+                            resolve(count);
+                        });
+                    });
+                """
+
+                try:
+                    bookmark_count = driver.execute_script(bookmark_script)
+                    logger.info("[IXApproach] ✓ Bookmarks enumerated")
+                    logger.info("[IXApproach] Total bookmarks: %d", bookmark_count)
+                except Exception as e:
+                    logger.warning("[IXApproach] Could not count bookmarks via API: %s", str(e))
+                    logger.info("[IXApproach] Bookmarks page opened successfully")
+
+            except Exception as e:
+                logger.error("[IXApproach] Failed to open new tab or enumerate bookmarks: %s", str(e))
+
+            # Create context
             self._current_context = IXAutomationContext(
-                profile_id=detected_profile_id,
+                profile_id=profile_id,
                 launcher=launcher,
                 login_manager=None  # Not using Facebook login management
             )
 
-            # Step 4: Run workflow (placeholder)
-            logger.info("[IXApproach] ═══════════════════════════════════════════")
-            logger.info("[IXApproach] STEP 4: Run Upload Workflow")
-            logger.info("[IXApproach] ═══════════════════════════════════════════")
-
-            self._run_upload_workflow(work_item, self._current_context, result)
-
-            # Step 5: Keep profile open
+            # Step 5: Workflow Complete
             logger.info("[IXApproach] ═══════════════════════════════════════════")
             logger.info("[IXApproach] STEP 5: Workflow Complete")
             logger.info("[IXApproach] ═══════════════════════════════════════════")

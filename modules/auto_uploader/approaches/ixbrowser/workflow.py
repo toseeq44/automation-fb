@@ -23,6 +23,7 @@ from ..base_approach import (
 from .config_handler import IXBrowserConfig
 from .connection_manager import ConnectionManager
 from .browser_launcher import BrowserLauncher
+from .upload_helper import VideoUploadHelper
 
 logger = logging.getLogger(__name__)
 
@@ -148,13 +149,12 @@ class IXBrowserApproach(BaseApproach):
         Execute complete ixBrowser workflow.
 
         Steps:
-        1. Initialize connection (auto-launch ixBrowser if needed)
-        2. Get profiles from ixBrowser
-        3. Launch profile programmatically
-        4. Attach Selenium WebDriver
-        5. Get session info (current URL, login status)
-        6. Run upload workflow (placeholder for now)
-        7. Close profile
+        1. Launch Profile via API
+        2. Attach Selenium WebDriver
+        3. Enumerate Browser Tabs
+        4. Bookmark-Folder Comparison
+        5. Upload Videos to Bookmarks
+        6. Workflow Complete (Profile remains open)
         """
         result = WorkflowResult(success=False, account_name=work_item.account_name)
 
@@ -396,6 +396,85 @@ class IXBrowserApproach(BaseApproach):
                 logger.error("[IXApproach] Bookmark-folder comparison failed: %s", str(e))
                 result.add_error(f"Comparison failed: {str(e)}")
 
+            # Step 5: Upload Videos to Bookmarks
+            logger.info("[IXApproach] ═══════════════════════════════════════════")
+            logger.info("[IXApproach] STEP 5: Upload Videos to Bookmarks")
+            logger.info("[IXApproach] ═══════════════════════════════════════════")
+
+            try:
+                # Only proceed if we have matched bookmarks
+                if not facebook_bookmarks:
+                    logger.warning("[IXApproach] No Facebook bookmarks found, skipping uploads")
+                elif not matched:
+                    logger.warning("[IXApproach] No matched folders found, skipping uploads")
+                else:
+                    # Initialize upload helper
+                    upload_helper = VideoUploadHelper(driver)
+
+                    upload_results = []
+                    skipped = []
+
+                    logger.info("[IXApproach] Starting uploads for %d matched bookmark(s)...", len(matched))
+                    logger.info("[IXApproach] ")
+
+                    # Upload videos for each matched bookmark
+                    for bookmark in facebook_bookmarks:
+                        folder_name = bookmark['title']
+                        folder_path = os.path.join(profile_folder, folder_name)
+
+                        # Only upload if folder exists (matched)
+                        if folder_name in matched:
+                            logger.info("[IXApproach] ───────────────────────────────────────────────")
+                            logger.info("[IXApproach] Processing: %s", folder_name)
+                            logger.info("[IXApproach] ───────────────────────────────────────────────")
+
+                            success = upload_helper.upload_to_bookmark(bookmark, folder_path)
+                            upload_results.append({
+                                'bookmark': folder_name,
+                                'success': success
+                            })
+
+                            # Brief pause between uploads
+                            if success:
+                                logger.info("[IXApproach] Waiting 5 seconds before next upload...")
+                                time.sleep(5)
+                        else:
+                            logger.debug("[IXApproach] Skipping %s - no folder found", folder_name)
+                            skipped.append(folder_name)
+
+                    # Calculate summary statistics
+                    successful = sum(1 for r in upload_results if r['success'])
+                    failed = sum(1 for r in upload_results if not r['success'])
+
+                    # Display upload summary
+                    logger.info("[IXApproach] ═══════════════════════════════════════════")
+                    logger.info("[IXApproach] Upload Summary")
+                    logger.info("[IXApproach] ═══════════════════════════════════════════")
+                    logger.info("[IXApproach] Total uploads attempted: %d", len(upload_results))
+                    logger.info("[IXApproach] Successful: %d", successful)
+                    logger.info("[IXApproach] Failed: %d", failed)
+                    logger.info("[IXApproach] Skipped (no folder): %d", len(skipped))
+                    logger.info("[IXApproach] ")
+
+                    # Show detailed results
+                    if upload_results:
+                        logger.info("[IXApproach] Upload Details:")
+                        for r in upload_results:
+                            status = "✓" if r['success'] else "✗"
+                            logger.info("[IXApproach]   %s %s", status, r['bookmark'])
+
+                    logger.info("[IXApproach] ═══════════════════════════════════════════")
+
+                    # Update result with upload stats
+                    result.creators_processed = successful
+
+                    if failed > 0:
+                        result.add_error(f"{failed} upload(s) failed")
+
+            except Exception as e:
+                logger.error("[IXApproach] Video upload failed: %s", str(e))
+                result.add_error(f"Upload failed: {str(e)}")
+
             # Create context
             self._current_context = IXAutomationContext(
                 profile_id=profile_id,
@@ -403,9 +482,9 @@ class IXBrowserApproach(BaseApproach):
                 login_manager=None  # Not using Facebook login management
             )
 
-            # Step 5: Workflow Complete
+            # Step 6: Workflow Complete
             logger.info("[IXApproach] ═══════════════════════════════════════════")
-            logger.info("[IXApproach] STEP 5: Workflow Complete")
+            logger.info("[IXApproach] STEP 6: Workflow Complete")
             logger.info("[IXApproach] ═══════════════════════════════════════════")
             logger.info("[IXApproach] ✓ Profile remains open")
             logger.info("[IXApproach] ✓ Browser session active")

@@ -9,6 +9,8 @@ import time
 import glob
 import pyautogui
 import random
+import shutil
+import pyperclip
 from typing import Optional, List, Dict, Any, Tuple
 from pathlib import Path
 from selenium.webdriver.common.keys import Keys
@@ -354,6 +356,68 @@ class VideoUploadHelper:
             logger.error("[Upload] Error finding video: %s", str(e))
             return None
 
+    def move_video_to_uploaded_folder(self, video_file: str, creator_folder: str) -> bool:
+        """
+        Move uploaded video to 'uploaded videos' subfolder to prevent duplicate uploads.
+
+        Args:
+            video_file: Full path to the uploaded video file
+            creator_folder: Path to the creator's main folder
+
+        Returns:
+            True if moved successfully, False otherwise
+        """
+        try:
+            logger.info("[Upload] ═══════════════════════════════════════════")
+            logger.info("[Upload] Moving Video to 'Uploaded' Folder")
+            logger.info("[Upload] ═══════════════════════════════════════════")
+
+            # Check if video file exists
+            if not os.path.exists(video_file):
+                logger.error("[Upload] ✗ Video file not found: %s", video_file)
+                return False
+
+            # Create 'uploaded videos' subfolder path
+            uploaded_folder = os.path.join(creator_folder, "uploaded videos")
+
+            # Create folder if it doesn't exist
+            if not os.path.exists(uploaded_folder):
+                os.makedirs(uploaded_folder)
+                logger.info("[Upload] ✓ Created 'uploaded videos' folder: %s", uploaded_folder)
+            else:
+                logger.info("[Upload] 'uploaded videos' folder exists: %s", uploaded_folder)
+
+            # Get video filename
+            video_filename = os.path.basename(video_file)
+
+            # Destination path
+            destination = os.path.join(uploaded_folder, video_filename)
+
+            # Check if file already exists at destination
+            if os.path.exists(destination):
+                logger.warning("[Upload] ⚠ File already exists at destination, adding timestamp")
+                # Add timestamp to avoid overwrite
+                name, ext = os.path.splitext(video_filename)
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                video_filename = f"{name}_{timestamp}{ext}"
+                destination = os.path.join(uploaded_folder, video_filename)
+
+            # Move the file (cut operation)
+            shutil.move(video_file, destination)
+
+            logger.info("[Upload] ✓ Video moved successfully!")
+            logger.info("[Upload]   From: %s", video_file)
+            logger.info("[Upload]   To: %s", destination)
+            logger.info("[Upload] ═══════════════════════════════════════════")
+
+            return True
+
+        except Exception as e:
+            logger.error("[Upload] ✗ Failed to move video: %s", str(e))
+            logger.error("[Upload]   Video: %s", video_file)
+            logger.error("[Upload]   Destination: %s", creator_folder)
+            return False
+
     def upload_video_file(self, video_path: str) -> bool:
         """
         Upload video via file input element WITHOUT opening file dialog.
@@ -543,6 +607,7 @@ class VideoUploadHelper:
     def _type_with_human_behavior(self, field, text: str) -> bool:
         """
         Type text with human-like behavior (random delays between keystrokes).
+        Supports emojis and special characters via clipboard paste fallback.
 
         Args:
             field: WebElement to type into
@@ -554,27 +619,65 @@ class VideoUploadHelper:
         try:
             logger.info("[Upload] Typing with human behavior: '%s'", text)
 
-            for char in text:
-                field.send_keys(char)
-                # Random delay between 50-150ms (realistic typing speed)
-                delay = random.uniform(0.05, 0.15)
-                time.sleep(delay)
+            # Method 1: Try character-by-character typing (works for ASCII)
+            typing_success = False
+            try:
+                for char in text:
+                    field.send_keys(char)
+                    # Random delay between 50-150ms (realistic typing speed)
+                    delay = random.uniform(0.05, 0.15)
+                    time.sleep(delay)
 
-            # Brief pause after typing
-            time.sleep(0.3)
+                # Brief pause after typing
+                time.sleep(0.3)
 
-            # Verify text was entered
-            entered_text = field.get_attribute("value") or ""
-            if text in entered_text:
-                logger.info("[Upload] ✓ Text typed successfully")
-                return True
+                # Verify text was entered
+                entered_text = field.get_attribute("value") or ""
+                if text in entered_text:
+                    logger.info("[Upload] ✓ Text typed successfully (character-by-character)")
+                    typing_success = True
+                else:
+                    logger.warning("[Upload] ⚠ Character typing verification failed")
+                    typing_success = False
+
+            except Exception as e:
+                logger.warning("[Upload] Character typing failed (probably emojis/unicode): %s", str(e))
+                typing_success = False
+
+            # Method 2: Fallback to clipboard paste (works for emojis/special characters)
+            if not typing_success:
+                logger.info("[Upload] Attempting clipboard paste fallback...")
+                try:
+                    # Copy text to clipboard
+                    pyperclip.copy(text)
+                    time.sleep(0.2)
+
+                    # Click field to focus
+                    field.click()
+                    time.sleep(0.2)
+
+                    # Paste using Ctrl+V
+                    field.send_keys(Keys.CONTROL + 'v')
+                    time.sleep(0.5)
+
+                    # Verify pasted text
+                    entered_text = field.get_attribute("value") or ""
+                    if text in entered_text:
+                        logger.info("[Upload] ✓ Text pasted successfully (clipboard method)")
+                        return True
+                    else:
+                        logger.warning("[Upload] ⚠ Paste verification failed. Expected: '%s', Got: '%s'",
+                                     text, entered_text)
+                        return False
+
+                except Exception as paste_error:
+                    logger.error("[Upload] Clipboard paste failed: %s", str(paste_error))
+                    return False
             else:
-                logger.warning("[Upload] ⚠ Text verification failed. Expected: '%s', Got: '%s'",
-                             text, entered_text)
-                return False
+                return True
 
         except Exception as e:
-            logger.error("[Upload] Typing failed: %s", str(e))
+            logger.error("[Upload] All typing methods failed: %s", str(e))
             return False
 
     def set_video_title(self, title: str, retries: int = 3) -> bool:
@@ -1110,6 +1213,10 @@ class VideoUploadHelper:
                 logger.info("[Upload]   Video: %s", video_name)
                 logger.info("[Upload]   Status: 100%% Complete")
                 logger.info("[Upload] ═══════════════════════════════════════════")
+
+                # Move video to 'uploaded videos' subfolder (prevent duplicates)
+                self.move_video_to_uploaded_folder(video_file, folder_path)
+
                 return True
 
             except Exception as e:

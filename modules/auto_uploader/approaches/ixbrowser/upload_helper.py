@@ -598,11 +598,11 @@ class VideoUploadHelper:
             try:
                 if attempt > 1:
                     logger.info("[Upload] Retry attempt %d/%d", attempt, retries)
-                    time.sleep(3)
+                    time.sleep(2)
 
-                # Wait for page to be ready
-                logger.info("[Upload] Waiting for page to load completely...")
-                time.sleep(2)  # Give Facebook time to render fields
+                # Minimal wait - upload interface should be ready
+                logger.info("[Upload] Looking for title field...")
+                time.sleep(0.5)  # Just 0.5 seconds - field should be visible now
 
                 # Enhanced title field selectors (prioritized order) - PROPER SELENIUM SYNTAX
                 title_selectors = [
@@ -1076,10 +1076,27 @@ class VideoUploadHelper:
                             continue
                         raise Exception("File upload failed")
 
-                # Step 6: Set title
-                self.set_video_title(video_name)
+                # Step 6: Set title IMMEDIATELY (while upload is in progress)
+                # Don't wait for 100% - title field appears as soon as upload starts
+                logger.info("[Upload] ═══════════════════════════════════════════")
+                logger.info("[Upload] Setting Title (Upload In Progress)")
+                logger.info("[Upload] ═══════════════════════════════════════════")
 
-                # Step 7: Monitor progress
+                # Short wait for upload interface to fully appear
+                time.sleep(2)
+
+                # Set title NOW (upload running in background)
+                title_set = self.set_video_title(video_name)
+                if title_set:
+                    logger.info("[Upload] ✓ Title set while video uploading!")
+                else:
+                    logger.warning("[Upload] ⚠ Could not set title (continuing anyway)")
+
+                # Step 7: Monitor progress (upload continues in background)
+                logger.info("[Upload] ═══════════════════════════════════════════")
+                logger.info("[Upload] Monitoring Upload Progress")
+                logger.info("[Upload] ═══════════════════════════════════════════")
+
                 if not self.monitor_upload_progress():
                     if attempt < max_retries:
                         logger.warning("[Upload] Upload did not complete, retrying...")

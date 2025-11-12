@@ -64,10 +64,11 @@ class VideoUploadHelper:
 
             logger.info("[Upload] ✓ Page loaded successfully")
 
-            # IMPORTANT: Bring browser to front after navigation
+            # IMPORTANT: Bring browser to front after navigation (keep visible)
             try:
-                self.driver.execute_script("window.focus();")
-                logger.info("[Upload] ✓ Browser window focused")
+                self.driver.maximize_window()
+                self.driver.execute_script("window.focus(); window.scrollTo(0, 0);")
+                logger.info("[Upload] ✓ Browser window focused and maximized")
             except:
                 pass
 
@@ -901,7 +902,43 @@ class VideoUploadHelper:
                         continue
                     raise Exception("Failed to navigate to bookmark")
 
-                # Step 2: Find Add Videos button (text-based or image recognition)
+                # Step 2: Get video file FIRST (before clicking button!)
+                video_file = self.get_first_video_from_folder(folder_path)
+                if not video_file:
+                    raise Exception("No video found in folder")
+
+                video_name = os.path.splitext(os.path.basename(video_file))[0]
+                logger.info("[Upload] ✓ Video ready: %s", video_name)
+
+                # Step 3: Find file input element (BEFORE clicking "Add Videos" button)
+                logger.info("[Upload] ───────────────────────────────────────────")
+                logger.info("[Upload] Pre-loading file into hidden input...")
+                logger.info("[Upload] ───────────────────────────────────────────")
+
+                file_inputs = self.driver.find_elements(By.XPATH, "//input[@type='file']")
+
+                if file_inputs:
+                    logger.info("[Upload] ✓ Found %d file input(s)", len(file_inputs))
+
+                    # Inject file path into ALL file inputs (prevents dialog)
+                    for idx, file_input in enumerate(file_inputs, 1):
+                        try:
+                            logger.info("[Upload] Injecting file into input #%d...", idx)
+                            file_input.send_keys(video_file)
+                            logger.info("[Upload] ✓ File injected into input #%d", idx)
+                        except Exception as e:
+                            logger.debug("[Upload] Input #%d injection failed: %s", idx, str(e))
+
+                    time.sleep(1)  # Let injection settle
+                    logger.info("[Upload] ✓ File pre-loaded into hidden inputs (NO DIALOG!)")
+                else:
+                    logger.warning("[Upload] ⚠ No file inputs found yet (will try after button click)")
+
+                # Step 4: Now find and click "Add Videos" button
+                logger.info("[Upload] ───────────────────────────────────────────")
+                logger.info("[Upload] Finding 'Add Videos' button...")
+                logger.info("[Upload] ───────────────────────────────────────────")
+
                 button_result = self.find_add_videos_button()
                 if not button_result:
                     if attempt < max_retries:
@@ -909,7 +946,7 @@ class VideoUploadHelper:
                         continue
                     raise Exception("Add Videos button not found")
 
-                # Click the button (handle both WebElement and coordinates)
+                # Click the button (file is ALREADY injected, so NO DIALOG!)
                 if isinstance(button_result, tuple):
                     # Image recognition result - use PyAutoGUI
                     button_x, button_y = button_result
@@ -921,26 +958,21 @@ class VideoUploadHelper:
                     button_result.click()
 
                 time.sleep(2)  # Wait for click response
-                logger.info("[Upload] ✓ Button clicked")
+                logger.info("[Upload] ✓ Button clicked (file already loaded, no dialog shown!)")
 
-                # Step 3: Get video file
-                video_file = self.get_first_video_from_folder(folder_path)
-                if not video_file:
-                    raise Exception("No video found in folder")
+                # Step 5: If file input wasn't available before, inject now
+                if not file_inputs:
+                    logger.info("[Upload] Injecting file NOW (after button click)...")
+                    if not self.upload_video_file(video_file):
+                        if attempt < max_retries:
+                            logger.warning("[Upload] Upload failed, retrying...")
+                            continue
+                        raise Exception("File upload failed")
 
-                video_name = os.path.splitext(os.path.basename(video_file))[0]
-
-                # Step 4: Upload video
-                if not self.upload_video_file(video_file):
-                    if attempt < max_retries:
-                        logger.warning("[Upload] Upload failed, retrying...")
-                        continue
-                    raise Exception("File upload failed")
-
-                # Step 5: Set title
+                # Step 6: Set title
                 self.set_video_title(video_name)
 
-                # Step 6: Monitor progress
+                # Step 7: Monitor progress
                 if not self.monitor_upload_progress():
                     if attempt < max_retries:
                         logger.warning("[Upload] Upload did not complete, retrying...")

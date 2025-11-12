@@ -8,6 +8,8 @@ from __future__ import annotations
 import logging
 import os
 import time
+import subprocess
+import platform
 from dataclasses import dataclass
 from typing import Optional
 
@@ -26,6 +28,101 @@ from .browser_launcher import BrowserLauncher
 from .upload_helper import VideoUploadHelper
 
 logger = logging.getLogger(__name__)
+
+
+def bring_browser_to_front(driver) -> bool:
+    """
+    Bring browser window to front using OS-level commands.
+    This ensures the window is visible above ALL other windows including the Python app.
+
+    Args:
+        driver: Selenium WebDriver instance
+
+    Returns:
+        True if successful
+    """
+    try:
+        logger.info("[Window] Bringing browser to front (OS-level)...")
+
+        # Method 1: Selenium methods
+        try:
+            driver.maximize_window()
+            driver.switch_to.window(driver.current_window_handle)
+            driver.execute_script("window.focus();")
+            logger.info("[Window] ✓ Selenium window focus applied")
+        except Exception as e:
+            logger.debug("[Window] Selenium focus failed: %s", str(e))
+
+        # Method 2: OS-level window management
+        system = platform.system()
+
+        if system == "Linux":
+            # Linux: Use wmctrl or xdotool
+            try:
+                # Get window title from driver
+                window_title = driver.title
+
+                # Try wmctrl first
+                try:
+                    subprocess.run(
+                        ["wmctrl", "-a", window_title],
+                        check=False,
+                        timeout=2,
+                        capture_output=True
+                    )
+                    logger.info("[Window] ✓ wmctrl window focus applied")
+                except (subprocess.TimeoutExpired, FileNotFoundError):
+                    pass
+
+                # Try xdotool as fallback
+                try:
+                    result = subprocess.run(
+                        ["xdotool", "search", "--name", window_title, "windowactivate"],
+                        check=False,
+                        timeout=2,
+                        capture_output=True
+                    )
+                    logger.info("[Window] ✓ xdotool window focus applied")
+                except (subprocess.TimeoutExpired, FileNotFoundError):
+                    pass
+
+            except Exception as e:
+                logger.debug("[Window] Linux window focus failed: %s", str(e))
+
+        elif system == "Windows":
+            # Windows: Use PowerShell or win32gui
+            try:
+                window_title = driver.title
+
+                # PowerShell command to bring window to front
+                ps_command = f'''
+                $wshell = New-Object -ComObject wscript.shell
+                $wshell.AppActivate("{window_title}")
+                '''
+
+                subprocess.run(
+                    ["powershell", "-Command", ps_command],
+                    check=False,
+                    timeout=2,
+                    capture_output=True
+                )
+                logger.info("[Window] ✓ Windows window focus applied")
+            except Exception as e:
+                logger.debug("[Window] Windows focus failed: %s", str(e))
+
+        # Final JavaScript focus
+        try:
+            driver.execute_script("window.focus(); window.scrollTo(0, 0);")
+        except:
+            pass
+
+        time.sleep(0.5)  # Give OS time to process
+        logger.info("[Window] ✓ Browser window brought to front successfully!")
+        return True
+
+    except Exception as e:
+        logger.warning("[Window] Could not bring window to front: %s", str(e))
+        return False
 
 
 @dataclass
@@ -234,30 +331,8 @@ class IXBrowserApproach(BaseApproach):
 
             logger.info("[IXApproach] ✓ Selenium attached successfully!")
 
-            # IMPORTANT: Bring browser window to FRONT (always visible)
-            try:
-                logger.info("[IXApproach] Bringing browser window to front...")
-
-                # Method 1: Maximize window (makes it prominent)
-                driver.maximize_window()
-                logger.info("[IXApproach] ✓ Window maximized")
-
-                # Method 2: Switch to current window (ensures focus)
-                driver.switch_to.window(driver.current_window_handle)
-
-                # Method 3: JavaScript focus (brings window to front)
-                driver.execute_script("window.focus();")
-
-                # Method 4: Click on page to activate (ensures it's active)
-                driver.execute_script("document.body.click();")
-
-                logger.info("[IXApproach] ✓ Browser window brought to front and focused!")
-
-                time.sleep(1)  # Give system time to bring window forward
-
-            except Exception as e:
-                logger.warning("[IXApproach] Could not bring window to front: %s", str(e))
-                # Non-critical, continue anyway
+            # IMPORTANT: Bring browser window to FRONT (always visible) - OS-LEVEL
+            bring_browser_to_front(driver)
 
             # Step 3: Enumerate tabs and URLs
             logger.info("[IXApproach] ═══════════════════════════════════════════")

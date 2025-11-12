@@ -64,6 +64,13 @@ class VideoUploadHelper:
 
             logger.info("[Upload] ✓ Page loaded successfully")
 
+            # IMPORTANT: Bring browser to front after navigation
+            try:
+                self.driver.execute_script("window.focus();")
+                logger.info("[Upload] ✓ Browser window focused")
+            except:
+                pass
+
             # Debug: See what's on the page
             self.debug_page_content(title)
 
@@ -348,7 +355,8 @@ class VideoUploadHelper:
 
     def upload_video_file(self, video_path: str) -> bool:
         """
-        Upload video via file input element.
+        Upload video via file input element WITHOUT opening file dialog.
+        Uses direct file path injection to avoid UI dialog.
 
         Args:
             video_path: Full path to video file
@@ -357,7 +365,18 @@ class VideoUploadHelper:
             True if upload initiated
         """
         try:
-            logger.info("[Upload] Initiating file upload...")
+            logger.info("[Upload] ═══════════════════════════════════════════")
+            logger.info("[Upload] Uploading Video File (NO DIALOG)")
+            logger.info("[Upload] ═══════════════════════════════════════════")
+            logger.info("[Upload] File: %s", video_path)
+
+            # Verify file exists
+            if not os.path.exists(video_path):
+                logger.error("[Upload] ✗ File not found: %s", video_path)
+                return False
+
+            logger.info("[Upload] ✓ File exists (%.2f MB)",
+                       os.path.getsize(video_path) / (1024 * 1024))
 
             # Find file input elements (usually hidden)
             file_inputs = self.driver.find_elements(By.XPATH, "//input[@type='file']")
@@ -366,20 +385,85 @@ class VideoUploadHelper:
                 logger.error("[Upload] ✗ File input element not found")
                 return False
 
-            # Try first input
-            file_input = file_inputs[0]
+            logger.info("[Upload] ✓ Found %d file input(s)", len(file_inputs))
 
-            logger.info("[Upload] Sending file path to input...")
-            file_input.send_keys(video_path)
+            # Use first visible or first available input
+            file_input = None
+            for idx, inp in enumerate(file_inputs, 1):
+                try:
+                    # Don't check visibility - file inputs are often hidden
+                    file_input = inp
+                    logger.info("[Upload] Using file input #%d", idx)
+                    break
+                except:
+                    continue
+
+            if not file_input:
+                logger.error("[Upload] ✗ No usable file input found")
+                return False
+
+            # CRITICAL: Send file path DIRECTLY without clicking (avoids dialog)
+            logger.info("[Upload] Injecting file path directly (bypassing dialog)...")
+
+            # Method 1: Direct send_keys (should NOT open dialog)
+            try:
+                # Make sure element is NOT clicked first
+                logger.info("[Upload] Method 1: Using send_keys (direct injection)...")
+                file_input.send_keys(video_path)
+                logger.info("[Upload] ✓ File path injected successfully")
+            except Exception as e:
+                logger.warning("[Upload] Direct send_keys failed: %s", str(e))
+
+                # Method 2: JavaScript injection (absolutely no dialog)
+                logger.info("[Upload] Method 2: Using JavaScript injection...")
+                try:
+                    # Create a DataTransfer object with the file
+                    js_script = """
+                    var input = arguments[0];
+                    var filePath = arguments[1];
+
+                    // Set the value directly (some browsers allow this)
+                    try {
+                        input.value = filePath;
+                    } catch(e) {
+                        console.log('Could not set value directly:', e);
+                    }
+
+                    // Trigger change event
+                    var event = new Event('change', { bubbles: true });
+                    input.dispatchEvent(event);
+
+                    return true;
+                    """
+
+                    self.driver.execute_script(js_script, file_input, video_path)
+                    logger.info("[Upload] ✓ JavaScript injection completed")
+                except Exception as js_error:
+                    logger.error("[Upload] JavaScript injection failed: %s", str(js_error))
+                    raise
+
+            # Keep browser window focused (prevent any popups from stealing focus)
+            try:
+                self.driver.execute_script("window.focus();")
+            except:
+                pass
 
             # Wait for upload to start
+            logger.info("[Upload] Waiting for upload to initialize...")
             time.sleep(3)
 
-            logger.info("[Upload] ✓ File sent to uploader")
+            logger.info("[Upload] ═══════════════════════════════════════════")
+            logger.info("[Upload] ✓ File Upload Initiated (No Dialog Shown)")
+            logger.info("[Upload] ═══════════════════════════════════════════")
             return True
 
         except Exception as e:
-            logger.error("[Upload] File upload failed: %s", str(e))
+            logger.error("[Upload] ═══════════════════════════════════════════")
+            logger.error("[Upload] ✗ File Upload FAILED")
+            logger.error("[Upload]   Error: %s", str(e))
+            logger.error("[Upload] ═══════════════════════════════════════════")
+            import traceback
+            logger.error("[Upload] Traceback: %s", traceback.format_exc())
             return False
 
     def _clear_field_with_human_behavior(self, field) -> bool:

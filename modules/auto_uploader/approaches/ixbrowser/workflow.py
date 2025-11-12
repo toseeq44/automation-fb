@@ -234,6 +234,31 @@ class IXBrowserApproach(BaseApproach):
 
             logger.info("[IXApproach] ✓ Selenium attached successfully!")
 
+            # IMPORTANT: Bring browser window to FRONT (always visible)
+            try:
+                logger.info("[IXApproach] Bringing browser window to front...")
+
+                # Method 1: Maximize window (makes it prominent)
+                driver.maximize_window()
+                logger.info("[IXApproach] ✓ Window maximized")
+
+                # Method 2: Switch to current window (ensures focus)
+                driver.switch_to.window(driver.current_window_handle)
+
+                # Method 3: JavaScript focus (brings window to front)
+                driver.execute_script("window.focus();")
+
+                # Method 4: Click on page to activate (ensures it's active)
+                driver.execute_script("document.body.click();")
+
+                logger.info("[IXApproach] ✓ Browser window brought to front and focused!")
+
+                time.sleep(1)  # Give system time to bring window forward
+
+            except Exception as e:
+                logger.warning("[IXApproach] Could not bring window to front: %s", str(e))
+                # Non-critical, continue anyway
+
             # Step 3: Enumerate tabs and URLs
             logger.info("[IXApproach] ═══════════════════════════════════════════")
             logger.info("[IXApproach] STEP 3: Enumerate Browser Tabs")

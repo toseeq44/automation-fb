@@ -910,29 +910,69 @@ class VideoUploadHelper:
                 video_name = os.path.splitext(os.path.basename(video_file))[0]
                 logger.info("[Upload] ✓ Video ready: %s", video_name)
 
-                # Step 3: Find file input element (BEFORE clicking "Add Videos" button)
-                logger.info("[Upload] ───────────────────────────────────────────")
-                logger.info("[Upload] Pre-loading file into hidden input...")
-                logger.info("[Upload] ───────────────────────────────────────────")
+                # Step 3: Wait for page to stabilize
+                logger.info("[Upload] Waiting for page to fully stabilize...")
+                time.sleep(3)  # Give Facebook time to load all elements
+
+                # Step 3a: Find file input element (BEFORE clicking "Add Videos" button)
+                logger.info("[Upload] ═══════════════════════════════════════════")
+                logger.info("[Upload] PRE-LOADING File (Prevents Dialog)")
+                logger.info("[Upload] ═══════════════════════════════════════════")
 
                 file_inputs = self.driver.find_elements(By.XPATH, "//input[@type='file']")
+                file_preloaded = False
 
                 if file_inputs:
-                    logger.info("[Upload] ✓ Found %d file input(s)", len(file_inputs))
+                    logger.info("[Upload] ✓ Found %d file input(s) BEFORE button click", len(file_inputs))
 
                     # Inject file path into ALL file inputs (prevents dialog)
                     for idx, file_input in enumerate(file_inputs, 1):
                         try:
                             logger.info("[Upload] Injecting file into input #%d...", idx)
-                            file_input.send_keys(video_file)
-                            logger.info("[Upload] ✓ File injected into input #%d", idx)
-                        except Exception as e:
-                            logger.debug("[Upload] Input #%d injection failed: %s", idx, str(e))
 
-                    time.sleep(1)  # Let injection settle
-                    logger.info("[Upload] ✓ File pre-loaded into hidden inputs (NO DIALOG!)")
+                            # Make input visible temporarily (helps with some implementations)
+                            try:
+                                self.driver.execute_script("""
+                                    arguments[0].style.display = 'block';
+                                    arguments[0].style.visibility = 'visible';
+                                    arguments[0].style.opacity = '1';
+                                """, file_input)
+                            except:
+                                pass
+
+                            # Inject file path
+                            file_input.send_keys(video_file)
+                            time.sleep(0.5)
+
+                            # Verify injection
+                            value = file_input.get_attribute("value")
+                            if value and video_file in value:
+                                logger.info("[Upload] ✓ File verified in input #%d: %s", idx, value[-50:])
+                                file_preloaded = True
+                            else:
+                                logger.warning("[Upload] ⚠ File not verified in input #%d", idx)
+
+                            # Hide input again
+                            try:
+                                self.driver.execute_script("""
+                                    arguments[0].style.display = 'none';
+                                """, file_input)
+                            except:
+                                pass
+
+                        except Exception as e:
+                            logger.warning("[Upload] Input #%d injection failed: %s", idx, str(e))
+
+                    if file_preloaded:
+                        logger.info("[Upload] ═══════════════════════════════════════════")
+                        logger.info("[Upload] ✓✓✓ FILE PRE-LOADED SUCCESSFULLY! ✓✓✓")
+                        logger.info("[Upload] ═══════════════════════════════════════════")
+                        time.sleep(2)  # Let it settle
+                    else:
+                        logger.warning("[Upload] ⚠ File pre-load verification failed")
                 else:
                     logger.warning("[Upload] ⚠ No file inputs found yet (will try after button click)")
+                    file_preloaded = False
 
                 # Step 4: Now find and click "Add Videos" button
                 logger.info("[Upload] ───────────────────────────────────────────")
@@ -947,18 +987,85 @@ class VideoUploadHelper:
                     raise Exception("Add Videos button not found")
 
                 # Click the button (file is ALREADY injected, so NO DIALOG!)
+                logger.info("[Upload] ═══════════════════════════════════════════")
+                logger.info("[Upload] Clicking 'Add Videos' Button...")
+                logger.info("[Upload] ═══════════════════════════════════════════")
+
                 if isinstance(button_result, tuple):
                     # Image recognition result - use PyAutoGUI
                     button_x, button_y = button_result
-                    logger.info("[Upload] Clicking button at (%d, %d) using PyAutoGUI...", button_x, button_y)
+                    logger.info("[Upload] Using PyAutoGUI click at (%d, %d)...", button_x, button_y)
                     pyautogui.click(button_x, button_y)
                 else:
                     # Text-based result - use Selenium click
-                    logger.info("[Upload] Clicking button using Selenium (tag: %s)...", button_result.tag_name)
+                    logger.info("[Upload] Using Selenium click (tag: %s)...", button_result.tag_name)
                     button_result.click()
 
-                time.sleep(2)  # Wait for click response
-                logger.info("[Upload] ✓ Button clicked (file already loaded, no dialog shown!)")
+                logger.info("[Upload] ✓ Button clicked!")
+
+                # CRITICAL: Monitor for file dialog and close it if it appears
+                logger.info("[Upload] Monitoring for unwanted file dialog...")
+                time.sleep(1)  # Give time for dialog to appear if it's going to
+
+                # Check if dialog opened (Windows-specific)
+                import platform
+                if platform.system() == "Windows":
+                    try:
+                        import subprocess
+                        # Check for "Open" dialog window
+                        ps_check = '''
+                        $windows = Get-Process | Where-Object {$_.MainWindowTitle -like "*Open*" -or $_.MainWindowTitle -like "*Browse*"}
+                        if ($windows) { Write-Output "DialogFound" } else { Write-Output "NoDialog" }
+                        '''
+
+                        result = subprocess.run(
+                            ["powershell", "-Command", ps_check],
+                            capture_output=True,
+                            text=True,
+                            timeout=2
+                        )
+
+                        if "DialogFound" in result.stdout:
+                            logger.warning("[Upload] ⚠ File dialog detected! Closing it...")
+
+                            # Send ESC key to close dialog
+                            ps_close = '''
+                            Add-Type @"
+                            using System;
+                            using System.Runtime.InteropServices;
+                            public class KeySend {
+                                [DllImport("user32.dll")]
+                                public static extern void keybd_event(byte bVk, byte bScan, int dwFlags, int dwExtraInfo);
+                            }
+"@
+                            [KeySend]::keybd_event(0x1B, 0, 0, 0)  # ESC key down
+                            Start-Sleep -Milliseconds 100
+                            [KeySend]::keybd_event(0x1B, 0, 2, 0)  # ESC key up
+                            '''
+
+                            subprocess.run(
+                                ["powershell", "-ExecutionPolicy", "Bypass", "-Command", ps_close],
+                                timeout=2
+                            )
+
+                            logger.info("[Upload] ✓ Dialog closed with ESC key")
+                            time.sleep(0.5)
+                        else:
+                            logger.info("[Upload] ✓ No file dialog detected (good!)")
+
+                    except Exception as e:
+                        logger.debug("[Upload] Dialog check failed: %s", str(e))
+
+                time.sleep(2)  # Wait for page response
+
+                if file_preloaded:
+                    logger.info("[Upload] ═══════════════════════════════════════════")
+                    logger.info("[Upload] ✓ Button clicked (file was pre-loaded)")
+                    logger.info("[Upload] ✓ NO FILE DIALOG SHOULD HAVE APPEARED!")
+                    logger.info("[Upload] ═══════════════════════════════════════════")
+                else:
+                    logger.warning("[Upload] ⚠ Button clicked but file was not pre-loaded")
+                    logger.warning("[Upload] ⚠ Dialog may have appeared")
 
                 # Step 5: If file input wasn't available before, inject now
                 if not file_inputs:

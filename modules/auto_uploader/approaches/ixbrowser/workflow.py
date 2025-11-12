@@ -26,6 +26,7 @@ from .config_handler import IXBrowserConfig
 from .connection_manager import ConnectionManager
 from .browser_launcher import BrowserLauncher
 from .upload_helper import VideoUploadHelper
+from .window_manager import bring_window_to_front_windows, maximize_window_windows
 
 logger = logging.getLogger(__name__)
 
@@ -42,26 +43,44 @@ def bring_browser_to_front(driver) -> bool:
         True if successful
     """
     try:
-        logger.info("[Window] Bringing browser to front (OS-level)...")
+        logger.info("[Window] ═══════════════════════════════════════════")
+        logger.info("[Window] Bringing Browser Window to FRONT")
+        logger.info("[Window] ═══════════════════════════════════════════")
 
-        # Method 1: Selenium methods
+        # Get window title
+        window_title = driver.title
+        logger.info("[Window] Window title: '%s'", window_title)
+
+        # Method 1: Selenium maximize (basic)
         try:
             driver.maximize_window()
             driver.switch_to.window(driver.current_window_handle)
             driver.execute_script("window.focus();")
-            logger.info("[Window] ✓ Selenium window focus applied")
+            logger.info("[Window] ✓ Selenium maximize applied")
         except Exception as e:
             logger.debug("[Window] Selenium focus failed: %s", str(e))
 
-        # Method 2: OS-level window management
+        # Method 2: OS-specific commands
         system = platform.system()
+        logger.info("[Window] Detected OS: %s", system)
 
-        if system == "Linux":
+        success = False
+
+        if system == "Windows":
+            # Use dedicated Windows window manager
+            logger.info("[Window] Using Windows-specific window management...")
+
+            # Try to bring window to front
+            if bring_window_to_front_windows(window_title, partial_match=True):
+                success = True
+                logger.info("[Window] ✓ Windows window manager successful!")
+
+            # Also try to maximize
+            maximize_window_windows(window_title)
+
+        elif system == "Linux":
             # Linux: Use wmctrl or xdotool
             try:
-                # Get window title from driver
-                window_title = driver.title
-
                 # Try wmctrl first
                 try:
                     subprocess.run(
@@ -70,58 +89,47 @@ def bring_browser_to_front(driver) -> bool:
                         timeout=2,
                         capture_output=True
                     )
-                    logger.info("[Window] ✓ wmctrl window focus applied")
+                    logger.info("[Window] ✓ wmctrl applied")
+                    success = True
                 except (subprocess.TimeoutExpired, FileNotFoundError):
                     pass
 
                 # Try xdotool as fallback
-                try:
-                    result = subprocess.run(
-                        ["xdotool", "search", "--name", window_title, "windowactivate"],
-                        check=False,
-                        timeout=2,
-                        capture_output=True
-                    )
-                    logger.info("[Window] ✓ xdotool window focus applied")
-                except (subprocess.TimeoutExpired, FileNotFoundError):
-                    pass
+                if not success:
+                    try:
+                        subprocess.run(
+                            ["xdotool", "search", "--name", window_title, "windowactivate"],
+                            check=False,
+                            timeout=2,
+                            capture_output=True
+                        )
+                        logger.info("[Window] ✓ xdotool applied")
+                        success = True
+                    except (subprocess.TimeoutExpired, FileNotFoundError):
+                        pass
 
             except Exception as e:
-                logger.debug("[Window] Linux window focus failed: %s", str(e))
+                logger.debug("[Window] Linux commands failed: %s", str(e))
 
-        elif system == "Windows":
-            # Windows: Use PowerShell or win32gui
-            try:
-                window_title = driver.title
-
-                # PowerShell command to bring window to front
-                ps_command = f'''
-                $wshell = New-Object -ComObject wscript.shell
-                $wshell.AppActivate("{window_title}")
-                '''
-
-                subprocess.run(
-                    ["powershell", "-Command", ps_command],
-                    check=False,
-                    timeout=2,
-                    capture_output=True
-                )
-                logger.info("[Window] ✓ Windows window focus applied")
-            except Exception as e:
-                logger.debug("[Window] Windows focus failed: %s", str(e))
-
-        # Final JavaScript focus
+        # Final attempts
         try:
             driver.execute_script("window.focus(); window.scrollTo(0, 0);")
         except:
             pass
 
-        time.sleep(0.5)  # Give OS time to process
-        logger.info("[Window] ✓ Browser window brought to front successfully!")
-        return True
+        time.sleep(1)  # Give OS time to process
+
+        logger.info("[Window] ═══════════════════════════════════════════")
+        if success:
+            logger.info("[Window] ✓✓✓ WINDOW NOW VISIBLE ON TOP! ✓✓✓")
+        else:
+            logger.warning("[Window] ⚠ Window focus attempted (may need manual check)")
+        logger.info("[Window] ═══════════════════════════════════════════")
+
+        return True  # Return True even if OS commands failed (Selenium might work)
 
     except Exception as e:
-        logger.warning("[Window] Could not bring window to front: %s", str(e))
+        logger.error("[Window] Fatal error: %s", str(e))
         return False
 
 

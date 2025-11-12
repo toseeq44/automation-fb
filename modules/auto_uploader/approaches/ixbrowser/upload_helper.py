@@ -13,6 +13,9 @@ from typing import Optional, List, Dict, Any, Tuple
 from pathlib import Path
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 logger = logging.getLogger(__name__)
 
@@ -74,9 +77,9 @@ class VideoUploadHelper:
         """Debug helper to see what's on the page."""
         try:
             # Get all clickable elements (buttons, divs with role=button, etc)
-            all_buttons = self.driver.find_elements("xpath", "//button")
-            all_divs_button = self.driver.find_elements("xpath", "//div[@role='button']")
-            all_clickable = self.driver.find_elements("xpath", "//*[@onclick or @role='button']")
+            all_buttons = self.driver.find_elements(By.XPATH, "//button")
+            all_divs_button = self.driver.find_elements(By.XPATH, "//div[@role='button']")
+            all_clickable = self.driver.find_elements(By.XPATH, "//*[@onclick or @role='button']")
 
             logger.info("[Upload] DEBUG: Found %d <button> tags", len(all_buttons))
             logger.info("[Upload] DEBUG: Found %d <div role='button'> elements", len(all_divs_button))
@@ -130,7 +133,7 @@ class VideoUploadHelper:
 
                 # Method 1: ANY element containing "Add Videos" text (divs, spans, buttons, etc)
                 try:
-                    elements = self.driver.find_elements("xpath",
+                    elements = self.driver.find_elements(By.XPATH,
                         "//*[contains(text(), 'Add Videos') or contains(text(), 'Add videos')]")
                     if elements:
                         logger.info("[Upload] ✓ Found button (broad text search) - %d match(es)", len(elements))
@@ -144,7 +147,7 @@ class VideoUploadHelper:
 
                 # Method 2: Divs with role=button containing text
                 try:
-                    elements = self.driver.find_elements("xpath",
+                    elements = self.driver.find_elements(By.XPATH,
                         "//div[@role='button' and contains(., 'Add Videos')]")
                     if elements:
                         logger.info("[Upload] ✓ Found button (div role=button)")
@@ -154,11 +157,11 @@ class VideoUploadHelper:
 
                 # Method 3: Spans containing text
                 try:
-                    elements = self.driver.find_elements("xpath",
+                    elements = self.driver.find_elements(By.XPATH,
                         "//span[contains(text(), 'Add Videos')]")
                     if elements:
                         # Get the parent element (likely the clickable container)
-                        parent = elements[0].find_element("xpath", "..")
+                        parent = elements[0].find_element(By.XPATH, "..")
                         logger.info("[Upload] ✓ Found button (span parent)")
                         return parent
                 except Exception as e:
@@ -166,7 +169,7 @@ class VideoUploadHelper:
 
                 # Method 4: Case-insensitive search
                 try:
-                    elements = self.driver.find_elements("xpath",
+                    elements = self.driver.find_elements(By.XPATH,
                         "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'add videos')]")
                     if elements:
                         logger.info("[Upload] ✓ Found button (case-insensitive)")
@@ -178,7 +181,7 @@ class VideoUploadHelper:
 
                 # Method 5: Aria-label search
                 try:
-                    elements = self.driver.find_elements("xpath",
+                    elements = self.driver.find_elements(By.XPATH,
                         "//*[contains(@aria-label, 'Add Videos') or contains(@aria-label, 'Add videos')]")
                     if elements:
                         logger.info("[Upload] ✓ Found button (aria-label)")
@@ -357,7 +360,7 @@ class VideoUploadHelper:
             logger.info("[Upload] Initiating file upload...")
 
             # Find file input elements (usually hidden)
-            file_inputs = self.driver.find_elements("xpath", "//input[@type='file']")
+            file_inputs = self.driver.find_elements(By.XPATH, "//input[@type='file']")
 
             if not file_inputs:
                 logger.error("[Upload] ✗ File input element not found")
@@ -492,6 +495,7 @@ class VideoUploadHelper:
     def set_video_title(self, title: str, retries: int = 3) -> bool:
         """
         Set video title in appropriate field with improved detection and human-like behavior.
+        Uses proper Selenium syntax with explicit waits.
 
         Args:
             title: Video title to set
@@ -509,131 +513,207 @@ class VideoUploadHelper:
             try:
                 if attempt > 1:
                     logger.info("[Upload] Retry attempt %d/%d", attempt, retries)
-                    time.sleep(2)
+                    time.sleep(3)
 
-                # Enhanced title field selectors (prioritized order)
+                # Wait for page to be ready
+                logger.info("[Upload] Waiting for page to load completely...")
+                time.sleep(2)  # Give Facebook time to render fields
+
+                # Enhanced title field selectors (prioritized order) - PROPER SELENIUM SYNTAX
                 title_selectors = [
-                    # Method 1: Specific Reel title placeholder (from inspect element)
-                    ("//input[@placeholder='Add a title to your reel']", "Reel title placeholder"),
+                    # Method 1: Specific Reel title placeholder (EXACT match from inspect element)
+                    ("//input[@placeholder='Add a title to your reel']", "Reel title placeholder (exact)"),
 
-                    # Method 2: Generic title placeholder
+                    # Method 2: Case variations of reel title
+                    ("//input[contains(@placeholder, 'Add a title')]", "Reel title (contains)"),
+                    ("//input[contains(@placeholder, 'title to your reel')]", "Reel title (partial)"),
+
+                    # Method 3: Generic title placeholder
                     ("//input[@placeholder='Title']", "Generic title placeholder"),
 
-                    # Method 3: Contains 'title' in placeholder (case-insensitive)
+                    # Method 4: Contains 'title' in placeholder (case-insensitive)
                     ("//input[contains(translate(@placeholder, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'title')]", "Title (case-insensitive)"),
 
-                    # Method 4: Title aria-label
+                    # Method 5: Title aria-label
                     ("//input[contains(@aria-label, 'Title') or contains(@aria-label, 'title')]", "Title aria-label"),
 
-                    # Method 5: Input with name='title'
+                    # Method 6: Input with name='title'
                     ("//input[@name='title']", "Title name attribute"),
 
-                    # Method 6: Input in form-like structure
-                    ("//div[contains(@class, 'title')]//input", "Title in div class"),
+                    # Method 7: Any text input in upload form
+                    ("//input[@type='text']", "Any text input"),
                 ]
 
-                # Try each selector
+                # DEBUG: Show all input fields on page
+                logger.info("[Upload] DEBUG: Searching for ALL input fields on page...")
+                try:
+                    all_inputs = self.driver.find_elements(By.XPATH, "//input | //textarea")
+                    logger.info("[Upload] DEBUG: Found %d total input/textarea fields", len(all_inputs))
+
+                    for idx, inp in enumerate(all_inputs[:10], 1):  # Show first 10
+                        try:
+                            if inp.is_displayed():
+                                tag = inp.tag_name
+                                placeholder = inp.get_attribute("placeholder") or "(none)"
+                                aria_label = inp.get_attribute("aria-label") or "(none)"
+                                inp_type = inp.get_attribute("type") or "(none)"
+                                logger.info("[Upload] DEBUG: Field %d - <%s type='%s'> placeholder='%s' aria-label='%s'",
+                                          idx, tag, inp_type, placeholder[:50], aria_label[:50])
+                        except:
+                            pass
+                except Exception as e:
+                    logger.debug("[Upload] DEBUG: Could not list all fields - %s", str(e))
+
+                # Try each selector with PROPER SELENIUM SYNTAX
                 for selector, selector_name in title_selectors:
                     try:
-                        logger.info("[Upload] Trying selector: %s", selector_name)
-                        fields = self.driver.find_elements("xpath", selector)
+                        logger.info("[Upload] ───────────────────────────────────────────")
+                        logger.info("[Upload] Trying: %s", selector_name)
+                        logger.info("[Upload] XPath: %s", selector)
+
+                        # FIXED: Use By.XPATH (proper Selenium syntax)
+                        fields = self.driver.find_elements(By.XPATH, selector)
 
                         if not fields:
-                            logger.debug("[Upload] No fields found with: %s", selector_name)
+                            logger.info("[Upload] ✗ No fields found with this selector")
                             continue
 
-                        # Try first visible field
-                        for field in fields:
+                        logger.info("[Upload] ✓ Found %d field(s)", len(fields))
+
+                        # Try each field found
+                        for field_idx, field in enumerate(fields, 1):
                             try:
-                                if not field.is_displayed():
-                                    logger.debug("[Upload] Field not visible, skipping...")
+                                logger.info("[Upload] Testing field %d/%d...", field_idx, len(fields))
+
+                                # Check visibility
+                                is_visible = field.is_displayed()
+                                logger.info("[Upload]   Visible: %s", "YES" if is_visible else "NO")
+
+                                if not is_visible:
+                                    logger.info("[Upload]   Skipping invisible field")
                                     continue
 
-                                logger.info("[Upload] ✓ Found title field: %s", selector_name)
+                                # Get field details
+                                tag = field.tag_name
+                                placeholder = field.get_attribute("placeholder") or "(none)"
+                                aria_label = field.get_attribute("aria-label") or "(none)"
+                                existing = field.get_attribute("value") or ""
+
+                                logger.info("[Upload]   Tag: %s", tag)
+                                logger.info("[Upload]   Placeholder: %s", placeholder)
+                                logger.info("[Upload]   Aria-label: %s", aria_label)
+                                logger.info("[Upload]   Current value: %s", existing if existing else "(empty)")
 
                                 # Scroll field into view
+                                logger.info("[Upload]   Scrolling into view...")
                                 self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", field)
                                 time.sleep(0.5)
 
-                                # Check existing text
-                                existing = field.get_attribute("value") or ""
-                                placeholder = field.get_attribute("placeholder") or ""
-
-                                logger.info("[Upload] Field info:")
-                                logger.info("[Upload]   Placeholder: %s", placeholder)
-                                logger.info("[Upload]   Existing value: %s", existing if existing else "(empty)")
+                                # Highlight field for debugging (temporary yellow border)
+                                try:
+                                    original_style = field.get_attribute("style")
+                                    self.driver.execute_script("arguments[0].style.border='3px solid yellow'", field)
+                                    time.sleep(0.5)
+                                    logger.info("[Upload]   ✓ Field highlighted (yellow border)")
+                                except:
+                                    pass
 
                                 # Clear existing text if present
                                 if existing:
-                                    logger.info("[Upload] Field has existing text, clearing...")
+                                    logger.info("[Upload]   Clearing existing text: '%s'", existing)
                                     if not self._clear_field_with_human_behavior(field):
-                                        logger.warning("[Upload] Clear failed, trying next field...")
+                                        logger.warning("[Upload]   Clear failed, trying next field...")
                                         continue
 
                                 # Type title with human behavior
+                                logger.info("[Upload]   Typing title...")
                                 if self._type_with_human_behavior(field, title):
                                     logger.info("[Upload] ═══════════════════════════════════════════")
-                                    logger.info("[Upload] ✓ SUCCESS: Title Set")
+                                    logger.info("[Upload] ✓✓✓ SUCCESS: Title Set! ✓✓✓")
                                     logger.info("[Upload]   Method: %s", selector_name)
+                                    logger.info("[Upload]   Selector: %s", selector)
                                     logger.info("[Upload]   Title: %s", title)
                                     logger.info("[Upload] ═══════════════════════════════════════════")
+
+                                    # Remove highlight
+                                    try:
+                                        self.driver.execute_script("arguments[0].style.border=''", field)
+                                    except:
+                                        pass
+
                                     return True
                                 else:
-                                    logger.warning("[Upload] Typing failed, trying next field...")
+                                    logger.warning("[Upload]   Typing failed, trying next field...")
                                     continue
 
                             except Exception as e:
-                                logger.debug("[Upload] Field interaction error: %s", str(e))
+                                logger.warning("[Upload]   Field interaction error: %s", str(e))
                                 continue
 
                     except Exception as e:
-                        logger.debug("[Upload] Selector '%s' error: %s", selector_name, str(e))
+                        logger.warning("[Upload] Selector '%s' error: %s", selector_name, str(e))
                         continue
 
-                # Method 7: Description field (fallback for Reels)
-                logger.info("[Upload] Title fields failed, trying description field...")
+                # Method 8: Description field (fallback for Reels)
+                logger.info("[Upload] ═══════════════════════════════════════════")
+                logger.info("[Upload] Title fields failed, trying DESCRIPTION field...")
+                logger.info("[Upload] ═══════════════════════════════════════════")
+
                 try:
                     desc_selectors = [
                         "//textarea[@placeholder='Describe your reel...']",
+                        "//textarea[contains(@placeholder, 'Describe your reel')]",
                         "//textarea[contains(@placeholder, 'describe your reel')]",
                         "//textarea[contains(@placeholder, 'Describe')]",
+                        "//textarea",  # Any textarea as last resort
                     ]
 
                     for desc_selector in desc_selectors:
-                        desc_fields = self.driver.find_elements("xpath", desc_selector)
+                        logger.info("[Upload] Trying description: %s", desc_selector)
+                        desc_fields = self.driver.find_elements(By.XPATH, desc_selector)
 
                         if desc_fields:
-                            field = desc_fields[0]
+                            logger.info("[Upload] ✓ Found %d description field(s)", len(desc_fields))
 
-                            if field.is_displayed():
-                                logger.info("[Upload] ✓ Found description field (fallback)")
+                            for field in desc_fields:
+                                try:
+                                    if field.is_displayed():
+                                        placeholder = field.get_attribute("placeholder") or "(none)"
+                                        logger.info("[Upload] ✓ Found visible description field")
+                                        logger.info("[Upload]   Placeholder: %s", placeholder)
 
-                                # Scroll into view
-                                self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", field)
-                                time.sleep(0.5)
+                                        # Scroll into view
+                                        self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", field)
+                                        time.sleep(0.5)
 
-                                # Clear and type
-                                field.click()
-                                time.sleep(0.3)
+                                        # Clear and type
+                                        field.click()
+                                        time.sleep(0.3)
 
-                                existing = field.get_attribute("value") or field.text or ""
-                                if existing:
-                                    self._clear_field_with_human_behavior(field)
+                                        existing = field.get_attribute("value") or field.text or ""
+                                        if existing:
+                                            self._clear_field_with_human_behavior(field)
 
-                                if self._type_with_human_behavior(field, title):
-                                    logger.info("[Upload] ✓ Title set in description field (fallback)")
-                                    return True
+                                        if self._type_with_human_behavior(field, title):
+                                            logger.info("[Upload] ✓ Title set in description field (fallback)")
+                                            return True
+                                except:
+                                    continue
 
                 except Exception as e:
-                    logger.debug("[Upload] Description field error: %s", str(e))
+                    logger.warning("[Upload] Description field error: %s", str(e))
 
-                logger.warning("[Upload] Attempt %d failed - no suitable field found", attempt)
+                logger.warning("[Upload] ═══════════════════════════════════════════")
+                logger.warning("[Upload] Attempt %d/%d FAILED - No suitable field found", attempt, retries)
+                logger.warning("[Upload] ═══════════════════════════════════════════")
 
             except Exception as e:
                 logger.error("[Upload] Attempt %d error: %s", attempt, str(e))
+                import traceback
+                logger.error("[Upload] Traceback: %s", traceback.format_exc())
 
         logger.error("[Upload] ═══════════════════════════════════════════")
-        logger.error("[Upload] ✗ FAILED: Could not set title after %d attempts", retries)
+        logger.error("[Upload] ✗✗✗ FAILED: Could not set title after %d attempts", retries)
         logger.error("[Upload] ═══════════════════════════════════════════")
         return False
 
@@ -652,7 +732,7 @@ class VideoUploadHelper:
         while (time.time() - start_time) < self.upload_timeout:
             try:
                 # Method 1: Progress bar with aria-valuenow
-                progress_bars = self.driver.find_elements("xpath", "//*[@role='progressbar']")
+                progress_bars = self.driver.find_elements(By.XPATH, "//*[@role='progressbar']")
 
                 if progress_bars:
                     for bar in progress_bars:
@@ -672,7 +752,7 @@ class VideoUploadHelper:
                                 pass
 
                 # Method 2: Text-based percentage (e.g., "95%")
-                progress_texts = self.driver.find_elements("xpath", "//*[contains(text(), '%')]")
+                progress_texts = self.driver.find_elements(By.XPATH, "//*[contains(text(), '%')]")
 
                 for text_elem in progress_texts:
                     text = text_elem.text
@@ -693,7 +773,7 @@ class VideoUploadHelper:
                             pass
 
                 # Method 3: "Complete" or "Published" indicators
-                complete_indicators = self.driver.find_elements("xpath",
+                complete_indicators = self.driver.find_elements(By.XPATH,
                     "//*[contains(text(), 'Complete') or contains(text(), 'Published') or contains(text(), 'Done')]")
 
                 if complete_indicators:

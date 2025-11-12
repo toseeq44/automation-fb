@@ -598,7 +598,7 @@ class VideoUploadHelper:
             try:
                 if attempt > 1:
                     logger.info("[Upload] Retry attempt %d/%d", attempt, retries)
-                    time.sleep(2)
+                    time.sleep(1)
 
                 # Minimal wait - upload interface should be ready
                 logger.info("[Upload] Looking for title field...")
@@ -716,7 +716,8 @@ class VideoUploadHelper:
                                     logger.info("[Upload] ═══════════════════════════════════════════")
                                     logger.info("[Upload] ✓✓✓ SUCCESS: Title Set! ✓✓✓")
                                     logger.info("[Upload]   Method: %s", selector_name)
-                                    logger.info("[Upload]   Selector: %s", selector)
+                                    logger.info("[Upload]   " \
+                                    ": %s", selector)
                                     logger.info("[Upload]   Title: %s", title)
                                     logger.info("[Upload] ═══════════════════════════════════════════")
 
@@ -1083,7 +1084,7 @@ class VideoUploadHelper:
                 logger.info("[Upload] ═══════════════════════════════════════════")
 
                 # Short wait for upload interface to fully appear
-                time.sleep(2)
+                time.sleep(1)
 
                 # Set title NOW (upload running in background)
                 title_set = self.set_video_title(video_name)

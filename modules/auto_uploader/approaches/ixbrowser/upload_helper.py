@@ -11,6 +11,7 @@ import pyautogui
 import random
 import shutil
 import pyperclip
+import math
 from typing import Optional, List, Dict, Any, Tuple
 from pathlib import Path
 from selenium.webdriver.common.keys import Keys
@@ -1263,7 +1264,8 @@ class VideoUploadHelper:
 
     def hover_on_publish_button(self, button) -> bool:
         """
-        Move mouse to publish button and hover for visual confirmation.
+        Move ACTUAL physical mouse to publish button and hover for visual confirmation.
+        Uses PyAutoGUI for real mouse movement (visible on screen).
         Does NOT click (production mode).
 
         Args:
@@ -1274,7 +1276,7 @@ class VideoUploadHelper:
         """
         try:
             logger.info("[Upload] ═══════════════════════════════════════════")
-            logger.info("[Upload] Hovering on Publish Button")
+            logger.info("[Upload] Hovering on Publish Button (Physical Mouse)")
             logger.info("[Upload] ═══════════════════════════════════════════")
 
             # Step 1: Scroll button into view (center of screen)
@@ -1287,19 +1289,83 @@ class VideoUploadHelper:
                 });
             """, button)
 
-            time.sleep(0.3)  # Let scroll complete
+            time.sleep(0.5)  # Let scroll complete and element settle
 
-            # Step 2: Move mouse to button using ActionChains
-            logger.info("[Upload] Moving mouse to button...")
-            actions = ActionChains(self.driver)
-            actions.move_to_element(button)
-            actions.perform()
+            # Step 2: Get element position relative to viewport
+            logger.info("[Upload] Getting element coordinates...")
+            element_rect = button.rect  # x, y, width, height
 
-            logger.info("[Upload] ✓ Mouse positioned on Publish button")
+            logger.info("[Upload] Element rect: x=%s, y=%s, width=%s, height=%s",
+                       element_rect['x'], element_rect['y'],
+                       element_rect['width'], element_rect['height'])
 
-            # Step 3: Hover for 0.5 seconds (visual confirmation)
+            # Step 3: Get browser window position on screen
+            try:
+                # Get window position using JavaScript (viewport position on screen)
+                window_pos = self.driver.execute_script("""
+                    return {
+                        x: window.screenX,
+                        y: window.screenY
+                    };
+                """)
+
+                logger.info("[Upload] Browser window position: x=%s, y=%s",
+                           window_pos['x'], window_pos['y'])
+
+            except Exception as js_error:
+                logger.warning("[Upload] Could not get window position via JS: %s", str(js_error))
+                # Fallback: assume window is at top-left
+                window_pos = {'x': 0, 'y': 0}
+
+            # Step 4: Calculate absolute screen coordinates
+            # Element center point
+            element_center_x = element_rect['x'] + (element_rect['width'] / 2)
+            element_center_y = element_rect['y'] + (element_rect['height'] / 2)
+
+            # Absolute screen coordinates
+            screen_x = window_pos['x'] + element_center_x
+            screen_y = window_pos['y'] + element_center_y
+
+            logger.info("[Upload] Calculated screen coordinates: x=%d, y=%d",
+                       int(screen_x), int(screen_y))
+
+            # Step 5: Move ACTUAL physical mouse using PyAutoGUI
+            logger.info("[Upload] Moving PHYSICAL mouse to button...")
+
+            # Get current mouse position
+            current_x, current_y = pyautogui.position()
+            logger.info("[Upload] Current mouse position: x=%d, y=%d", current_x, current_y)
+
+            # Smooth movement to button (duration makes it visible)
+            pyautogui.moveTo(
+                int(screen_x),
+                int(screen_y),
+                duration=0.5  # 0.5 seconds smooth movement (very visible!)
+            )
+
+            logger.info("[Upload] ✓ Physical mouse moved to Publish button!")
+
+            # Step 6: Hover for additional 0.5 seconds (visual confirmation)
             logger.info("[Upload] Hovering for 0.5 seconds...")
             time.sleep(0.5)
+
+            # Step 7: Move mouse in small circle (visual emphasis)
+            logger.info("[Upload] Moving mouse in small circle (visual confirmation)...")
+
+            # Small circular motion around button (8 points)
+            radius = 10  # Small 10px circle
+            for angle in range(0, 360, 45):  # 45° increments = 8 points
+                offset_x = int(radius * math.cos(math.radians(angle)))
+                offset_y = int(radius * math.sin(math.radians(angle)))
+
+                pyautogui.moveTo(
+                    int(screen_x + offset_x),
+                    int(screen_y + offset_y),
+                    duration=0.05  # Fast small movements
+                )
+
+            # Return to button center
+            pyautogui.moveTo(int(screen_x), int(screen_y), duration=0.1)
 
             logger.info("[Upload] ✓ Hover complete!")
             logger.info("[Upload] (Production mode: NOT clicking button)")
@@ -1309,6 +1375,8 @@ class VideoUploadHelper:
 
         except Exception as e:
             logger.error("[Upload] Failed to hover on button: %s", str(e))
+            import traceback
+            logger.debug("[Upload] Traceback: %s", traceback.format_exc())
             return False
 
     def detect_and_hover_publish_button(self) -> bool:

@@ -21,8 +21,10 @@ from selenium.webdriver.support import expected_conditions as EC
 
 logger = logging.getLogger(__name__)
 
-# Image path for Add Videos button
+# Image paths for buttons
 ADD_VIDEOS_BUTTON_IMAGE = "/home/user/automation-fb/modules/auto_uploader/helper_images/add_videos_button.png"
+PUBLISH_BUTTON_ENABLED_IMAGE = "/home/user/automation-fb/modules/auto_uploader/helper_images/publish_button_after_data.png"
+PUBLISH_BUTTON_DISABLED_IMAGE = "/home/user/automation-fb/modules/auto_uploader/helper_images/publish_button_befor_data.png"
 
 
 class VideoUploadHelper:
@@ -1084,6 +1086,269 @@ class VideoUploadHelper:
         logger.error("[Upload]   Last detected progress: %d%%", last_progress)
         return False
 
+    def find_publish_button(self) -> Optional[Any]:
+        """
+        Find publish button using multiple detection methods.
+
+        Returns:
+            WebElement if found, None otherwise
+        """
+        logger.info("[Upload] ═══════════════════════════════════════════")
+        logger.info("[Upload] Searching for Publish Button")
+        logger.info("[Upload] ═══════════════════════════════════════════")
+
+        # Method 1: Exact text match "Publish" (most reliable for div with text)
+        try:
+            logger.info("[Upload] Method 1: Exact text 'Publish'")
+            buttons = self.driver.find_elements(By.XPATH, "//*[text()='Publish']")
+
+            logger.info("[Upload] Found %d element(s) with exact text 'Publish'", len(buttons))
+
+            for idx, btn in enumerate(buttons, 1):
+                try:
+                    is_visible = btn.is_displayed()
+                    logger.info("[Upload] Button #%d - Visible: %s", idx, is_visible)
+
+                    if is_visible:
+                        logger.info("[Upload] ✓ Found visible Publish button (Method 1)")
+                        return btn
+                except:
+                    continue
+
+        except Exception as e:
+            logger.debug("[Upload] Method 1 failed: %s", str(e))
+
+        # Method 2: Contains text "Publish" (case variations, partial match)
+        try:
+            logger.info("[Upload] Method 2: Contains text 'Publish'")
+            buttons = self.driver.find_elements(By.XPATH, "//*[contains(text(), 'Publish')]")
+
+            logger.info("[Upload] Found %d element(s) containing 'Publish'", len(buttons))
+
+            for idx, btn in enumerate(buttons, 1):
+                try:
+                    if btn.is_displayed():
+                        logger.info("[Upload] ✓ Found visible Publish button (Method 2)")
+                        return btn
+                except:
+                    continue
+
+        except Exception as e:
+            logger.debug("[Upload] Method 2 failed: %s", str(e))
+
+        # Method 3: div/button with role and text
+        try:
+            logger.info("[Upload] Method 3: Role-based with text")
+            selectors = [
+                "//div[@role='button'][text()='Publish']",
+                "//div[@role='button'][contains(text(), 'Publish')]",
+                "//button[text()='Publish']",
+                "//button[contains(text(), 'Publish')]",
+            ]
+
+            for selector in selectors:
+                buttons = self.driver.find_elements(By.XPATH, selector)
+                if buttons:
+                    for btn in buttons:
+                        try:
+                            if btn.is_displayed():
+                                logger.info("[Upload] ✓ Found visible Publish button (Method 3: %s)", selector)
+                                return btn
+                        except:
+                            continue
+
+        except Exception as e:
+            logger.debug("[Upload] Method 3 failed: %s", str(e))
+
+        # Method 4: Image recognition (enabled state)
+        try:
+            logger.info("[Upload] Method 4: Image recognition (enabled button)")
+
+            # Take screenshot to search in
+            screenshot = pyautogui.screenshot()
+
+            # Find button using image matching
+            button_location = pyautogui.locateOnScreen(
+                PUBLISH_BUTTON_ENABLED_IMAGE,
+                confidence=0.8
+            )
+
+            if button_location:
+                logger.info("[Upload] ✓ Found Publish button via image recognition!")
+                logger.info("[Upload]   Location: %s", button_location)
+
+                # Get center coordinates
+                center_x, center_y = pyautogui.center(button_location)
+
+                # Find element at those coordinates using JavaScript
+                element = self.driver.execute_script("""
+                    return document.elementFromPoint(arguments[0], arguments[1]);
+                """, center_x, center_y)
+
+                if element:
+                    logger.info("[Upload] ✓ Got WebElement from image coordinates")
+                    return element
+
+        except Exception as e:
+            logger.debug("[Upload] Method 4 (image recognition) failed: %s", str(e))
+
+        logger.warning("[Upload] ⚠ Publish button NOT found after trying all methods")
+        return None
+
+    def is_publish_button_enabled(self, button) -> bool:
+        """
+        Check if publish button is enabled (not disabled/grayed out).
+
+        Args:
+            button: WebElement of publish button
+
+        Returns:
+            True if enabled, False if disabled
+        """
+        try:
+            # Method 1: Check aria-disabled attribute
+            aria_disabled = button.get_attribute("aria-disabled")
+            if aria_disabled == "true":
+                logger.debug("[Upload] Button is disabled (aria-disabled='true')")
+                return False
+
+            # Method 2: Check disabled attribute
+            disabled = button.get_attribute("disabled")
+            if disabled:
+                logger.debug("[Upload] Button is disabled (disabled attribute)")
+                return False
+
+            # Method 3: Check if button classes contain "disabled"
+            button_class = button.get_attribute("class") or ""
+            if "disabled" in button_class.lower():
+                logger.debug("[Upload] Button appears disabled (class contains 'disabled')")
+                return False
+
+            # Method 4: Image recognition - check if it matches ENABLED state image
+            try:
+                # Get button location and screenshot
+                location = button.location
+                size = button.size
+
+                # Use image recognition to verify enabled state
+                enabled_match = pyautogui.locateOnScreen(
+                    PUBLISH_BUTTON_ENABLED_IMAGE,
+                    confidence=0.75
+                )
+
+                if enabled_match:
+                    logger.info("[Upload] ✓ Button is ENABLED (image match confirmed)")
+                    return True
+                else:
+                    # Try matching disabled state
+                    disabled_match = pyautogui.locateOnScreen(
+                        PUBLISH_BUTTON_DISABLED_IMAGE,
+                        confidence=0.75
+                    )
+
+                    if disabled_match:
+                        logger.debug("[Upload] Button is DISABLED (disabled image match)")
+                        return False
+
+            except Exception as img_error:
+                logger.debug("[Upload] Image state check failed: %s", str(img_error))
+
+            # Default: Assume enabled if no disabled indicators found
+            logger.info("[Upload] ✓ Button appears ENABLED (no disabled indicators)")
+            return True
+
+        except Exception as e:
+            logger.warning("[Upload] Error checking button state: %s", str(e))
+            return False
+
+    def hover_on_publish_button(self, button) -> bool:
+        """
+        Move mouse to publish button and hover for visual confirmation.
+        Does NOT click (production mode).
+
+        Args:
+            button: WebElement of publish button
+
+        Returns:
+            True if hover successful
+        """
+        try:
+            logger.info("[Upload] ═══════════════════════════════════════════")
+            logger.info("[Upload] Hovering on Publish Button")
+            logger.info("[Upload] ═══════════════════════════════════════════")
+
+            # Step 1: Scroll button into view (center of screen)
+            logger.info("[Upload] Scrolling button into view...")
+            self.driver.execute_script("""
+                arguments[0].scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'center',
+                    inline: 'center'
+                });
+            """, button)
+
+            time.sleep(0.3)  # Let scroll complete
+
+            # Step 2: Move mouse to button using ActionChains
+            logger.info("[Upload] Moving mouse to button...")
+            actions = ActionChains(self.driver)
+            actions.move_to_element(button)
+            actions.perform()
+
+            logger.info("[Upload] ✓ Mouse positioned on Publish button")
+
+            # Step 3: Hover for 0.5 seconds (visual confirmation)
+            logger.info("[Upload] Hovering for 0.5 seconds...")
+            time.sleep(0.5)
+
+            logger.info("[Upload] ✓ Hover complete!")
+            logger.info("[Upload] (Production mode: NOT clicking button)")
+            logger.info("[Upload] ═══════════════════════════════════════════")
+
+            return True
+
+        except Exception as e:
+            logger.error("[Upload] Failed to hover on button: %s", str(e))
+            return False
+
+    def detect_and_hover_publish_button(self) -> bool:
+        """
+        Complete workflow: Find publish button, check if enabled, and hover on it.
+        This is called after upload completes.
+
+        Returns:
+            True if button found and hovered, False otherwise
+        """
+        try:
+            # Step 1: Find the button
+            button = self.find_publish_button()
+
+            if not button:
+                logger.warning("[Upload] ⚠ Could not find Publish button")
+                logger.warning("[Upload] Continuing to next bookmark anyway...")
+                return False
+
+            logger.info("[Upload] ✓ Publish button found!")
+
+            # Step 2: Check if enabled
+            logger.info("[Upload] Checking button state...")
+            is_enabled = self.is_publish_button_enabled(button)
+
+            if is_enabled:
+                logger.info("[Upload] ✓ Publish button is ENABLED")
+            else:
+                logger.warning("[Upload] ⚠ Publish button is DISABLED")
+                logger.warning("[Upload] (Upload might not be complete yet)")
+
+            # Step 3: Hover on button (regardless of enabled state, for visual confirmation)
+            hover_success = self.hover_on_publish_button(button)
+
+            return hover_success
+
+        except Exception as e:
+            logger.error("[Upload] Error in detect_and_hover_publish_button: %s", str(e))
+            return False
+
     def upload_to_bookmark(self, bookmark: Dict[str, str], folder_path: str, max_retries: int = 3) -> bool:
         """
         Complete upload workflow for single bookmark.
@@ -1319,6 +1584,9 @@ class VideoUploadHelper:
                 logger.info("[Upload]   Video: %s", video_name)
                 logger.info("[Upload]   Status: 100%% Complete")
                 logger.info("[Upload] ═══════════════════════════════════════════")
+
+                # Detect and hover on Publish button (production mode: no click)
+                self.detect_and_hover_publish_button()
 
                 # Move video to 'uploaded videos' subfolder (prevent duplicates)
                 self.move_video_to_uploaded_folder(video_file, folder_path)

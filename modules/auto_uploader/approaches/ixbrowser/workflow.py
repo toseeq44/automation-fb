@@ -535,6 +535,27 @@ class IXBrowserApproach(BaseApproach):
                     )
                     self._folder_queue.initialize_queue()
 
+                    # Phase 2: Detect total folders and calculate dynamic limit
+                    all_folders = self._folder_queue.get_all_folders()
+                    total_folders = len(all_folders)
+
+                    logger.info("[IXApproach] ═══════════════════════════════════════════")
+                    logger.info("[IXApproach] Folder Detection")
+                    logger.info("[IXApproach] ═══════════════════════════════════════════")
+                    logger.info("[IXApproach] Total creator folders detected: %d", total_folders)
+
+                    # Calculate dynamic limit: Allow ~20 videos per folder per run
+                    # This ensures we can handle users with 100 folders (2000 uploads)
+                    # or 800 folders (16000 uploads) without arbitrary limits
+                    videos_per_folder_estimate = 20
+                    max_uploads_per_run = total_folders * videos_per_folder_estimate
+
+                    logger.info("[IXApproach] Dynamic upload limit calculated:")
+                    logger.info("[IXApproach]   Folders: %d", total_folders)
+                    logger.info("[IXApproach]   Estimated videos per folder: %d", videos_per_folder_estimate)
+                    logger.info("[IXApproach]   Max uploads this run: %d", max_uploads_per_run)
+                    logger.info("[IXApproach] ═══════════════════════════════════════════")
+
                     # Phase 2: Check for resume
                     logger.info("[IXApproach] ═══════════════════════════════════════════")
                     logger.info("[IXApproach] Resume Check")
@@ -568,7 +589,6 @@ class IXBrowserApproach(BaseApproach):
 
                     upload_results = []
                     total_uploads_this_run = 0
-                    max_uploads_per_run = 100  # Safety limit to prevent infinite loop
 
                     logger.info("[IXApproach] Starting infinite folder queue...")
                     logger.info("[IXApproach] Processing one folder at a time")

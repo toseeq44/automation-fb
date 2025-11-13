@@ -909,6 +909,7 @@ class VideoUploadHelper:
     def monitor_upload_progress(self) -> bool:
         """
         Monitor upload progress until 100% complete.
+        Enhanced with extensive logging and multiple fallback methods.
 
         Returns:
             True if upload completed successfully
@@ -917,66 +918,170 @@ class VideoUploadHelper:
 
         start_time = time.time()
         last_progress = 0
+        stuck_count = 0
+        max_stuck_iterations = 10  # Alert if stuck for 50 seconds (10 * 5s)
 
         while (time.time() - start_time) < self.upload_timeout:
             try:
-                # Method 1: Progress bar with aria-valuenow
+                # Method 1: Progress bar with role="progressbar"
+                logger.debug("[Upload] Looking for progress bars...")
                 progress_bars = self.driver.find_elements(By.XPATH, "//*[@role='progressbar']")
 
+                logger.info("[Upload] Found %d element(s) with role='progressbar'", len(progress_bars))
+
                 if progress_bars:
-                    for bar in progress_bars:
-                        value = bar.get_attribute("aria-valuenow")
-                        if value:
+                    for idx, bar in enumerate(progress_bars, 1):
+                        try:
+                            # Check visibility
+                            is_visible = bar.is_displayed()
+                            logger.info("[Upload] Progress bar #%d - Visible: %s", idx, is_visible)
+
+                            if not is_visible:
+                                logger.debug("[Upload] Skipping hidden progress bar #%d", idx)
+                                continue
+
+                            # Get all ARIA attributes for debugging
+                            aria_valuenow = bar.get_attribute("aria-valuenow")
+                            aria_valuemin = bar.get_attribute("aria-valuemin")
+                            aria_valuemax = bar.get_attribute("aria-valuemax")
+
+                            logger.info("[Upload] Progress bar #%d attributes:", idx)
+                            logger.info("[Upload]   aria-valuenow: '%s'", aria_valuenow)
+                            logger.info("[Upload]   aria-valuemin: '%s'", aria_valuemin)
+                            logger.info("[Upload]   aria-valuemax: '%s'", aria_valuemax)
+
+                            # Method 1A: Try aria-valuenow attribute
+                            if aria_valuenow:
+                                try:
+                                    progress = int(float(aria_valuenow))
+                                    logger.info("[Upload] ✓ Got progress from aria-valuenow: %d%%", progress)
+
+                                    if progress != last_progress:
+                                        logger.info("[Upload] Progress: %d%%", progress)
+                                        last_progress = progress
+                                        stuck_count = 0  # Reset stuck counter
+
+                                    if progress >= 100:
+                                        logger.info("[Upload] ✓ Upload 100% complete!")
+                                        return True
+
+                                    # Successfully got progress, continue monitoring
+                                    break  # Exit bar loop, wait and check again
+
+                                except Exception as parse_error:
+                                    logger.warning("[Upload] ⚠ Failed to parse aria-valuenow '%s': %s",
+                                                 aria_valuenow, str(parse_error))
+
+                            else:
+                                logger.warning("[Upload] ⚠ Progress bar #%d has NO aria-valuenow attribute!", idx)
+
+                            # Method 1B: Fallback - Find percentage text INSIDE progress bar
+                            logger.info("[Upload] Trying fallback: looking for %% text inside progress bar #%d", idx)
                             try:
-                                progress = int(float(value))
+                                # Find span elements inside this progress bar
+                                inner_spans = bar.find_elements(By.XPATH, ".//span")
+                                logger.info("[Upload] Found %d span(s) inside progress bar #%d", len(inner_spans), idx)
+
+                                for span_idx, span in enumerate(inner_spans, 1):
+                                    span_text = span.text.strip()
+                                    logger.debug("[Upload] Span #%d text: '%s'", span_idx, span_text)
+
+                                    if "%" in span_text:
+                                        try:
+                                            # Extract number (e.g., "5%" -> 5)
+                                            progress_str = span_text.replace("%", "").strip()
+                                            progress = int(float(progress_str))
+
+                                            logger.info("[Upload] ✓ Got progress from inner span text: %d%%", progress)
+
+                                            if progress != last_progress:
+                                                logger.info("[Upload] Progress: %d%%", progress)
+                                                last_progress = progress
+                                                stuck_count = 0
+
+                                            if progress >= 100:
+                                                logger.info("[Upload] ✓ Upload 100% complete!")
+                                                return True
+
+                                            # Successfully got progress
+                                            break
+
+                                        except Exception as span_parse_error:
+                                            logger.debug("[Upload] Failed to parse span text '%s': %s",
+                                                       span_text, str(span_parse_error))
+
+                            except Exception as inner_error:
+                                logger.debug("[Upload] Inner span search failed: %s", str(inner_error))
+
+                        except Exception as bar_error:
+                            logger.warning("[Upload] Error processing progress bar #%d: %s", idx, str(bar_error))
+                            continue
+
+                # Method 2: Text-based percentage anywhere on page (broader search)
+                logger.debug("[Upload] Method 2: Searching for percentage text on page...")
+                progress_texts = self.driver.find_elements(By.XPATH, "//*[contains(text(), '%')]")
+
+                logger.debug("[Upload] Found %d element(s) with %% symbol", len(progress_texts))
+
+                for text_elem in progress_texts:
+                    text = text_elem.text.strip()
+                    if "%" in text and text_elem.is_displayed():
+                        try:
+                            # Extract number before % (handle "Uploading: 95%" or just "95%")
+                            progress_str = text.split("%")[0].strip().split()[-1]
+                            progress = int(float(progress_str))
+
+                            # Validate it's a reasonable percentage (0-100)
+                            if 0 <= progress <= 100:
+                                logger.info("[Upload] ✓ Got progress from page text: %d%% (text: '%s')", progress, text)
 
                                 if progress != last_progress:
                                     logger.info("[Upload] Progress: %d%%", progress)
                                     last_progress = progress
+                                    stuck_count = 0
 
                                 if progress >= 100:
                                     logger.info("[Upload] ✓ Upload 100% complete!")
                                     return True
-                            except:
-                                pass
 
-                # Method 2: Text-based percentage (e.g., "95%")
-                progress_texts = self.driver.find_elements(By.XPATH, "//*[contains(text(), '%')]")
+                                break  # Got valid progress
 
-                for text_elem in progress_texts:
-                    text = text_elem.text
-                    if "%" in text:
-                        try:
-                            # Extract number before %
-                            progress_str = text.split("%")[0].strip().split()[-1]
-                            progress = int(progress_str)
-
-                            if progress != last_progress:
-                                logger.info("[Upload] Progress: %d%%", progress)
-                                last_progress = progress
-
-                            if progress >= 100:
-                                logger.info("[Upload] ✓ Upload 100% complete!")
-                                return True
-                        except:
-                            pass
+                        except Exception as text_parse_error:
+                            logger.debug("[Upload] Failed to parse text '%s': %s", text, str(text_parse_error))
 
                 # Method 3: "Complete" or "Published" indicators
+                logger.debug("[Upload] Method 3: Checking for completion indicators...")
                 complete_indicators = self.driver.find_elements(By.XPATH,
                     "//*[contains(text(), 'Complete') or contains(text(), 'Published') or contains(text(), 'Done')]")
 
                 if complete_indicators:
-                    logger.info("[Upload] ✓ Upload completed (indicator found)!")
-                    return True
+                    for indicator in complete_indicators:
+                        if indicator.is_displayed():
+                            logger.info("[Upload] ✓ Upload completed (indicator found: '%s')!", indicator.text)
+                            return True
+
+                # Check if progress is stuck
+                if last_progress > 0:
+                    stuck_count += 1
+                    if stuck_count >= max_stuck_iterations:
+                        logger.warning("[Upload] ⚠ Progress stuck at %d%% for %d seconds",
+                                     last_progress, stuck_count * 5)
+                        stuck_count = 0  # Reset to avoid spam
 
             except Exception as e:
-                logger.debug("[Upload] Progress check error: %s", str(e))
+                logger.warning("[Upload] Progress check error: %s", str(e))
+                import traceback
+                logger.debug("[Upload] Traceback: %s", traceback.format_exc())
 
-            # Wait before next check
-            time.sleep(3)
+            # Wait before next check (increased from 3 to 5 seconds)
+            logger.debug("[Upload] Waiting 5 seconds before next check...")
+            time.sleep(5)
 
         # Timeout reached
-        logger.error("[Upload] ✗ Upload timeout after %d seconds", self.upload_timeout)
+        elapsed = time.time() - start_time
+        logger.error("[Upload] ✗ Upload timeout after %.0f seconds (limit: %d seconds)",
+                    elapsed, self.upload_timeout)
+        logger.error("[Upload]   Last detected progress: %d%%", last_progress)
         return False
 
     def upload_to_bookmark(self, bookmark: Dict[str, str], folder_path: str, max_retries: int = 3) -> bool:

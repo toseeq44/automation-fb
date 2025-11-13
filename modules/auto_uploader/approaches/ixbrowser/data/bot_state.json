@@ -1,0 +1,35 @@
+{
+  "_comment": "Bot runtime state - Updated continuously during operation",
+  "last_updated": null,
+  "global_status": "idle",
+  "current_session": {
+    "session_id": null,
+    "started_at": null
+  },
+  "queue": {
+    "current_folder_index": 0,
+    "current_folder_path": null,
+    "total_folders": 0,
+    "folders_completed_this_cycle": 0,
+    "current_cycle": 1
+  },
+  "current_upload": {
+    "video_file": null,
+    "video_name": null,
+    "bookmark": null,
+    "bookmark_index": null,
+    "status": "idle",
+    "progress_last_seen": 0,
+    "started_at": null,
+    "last_progress_update": null,
+    "attempt": 0,
+    "network_drops": 0
+  },
+  "network": {
+    "last_check": null,
+    "status": "unknown",
+    "consecutive_failures": 0,
+    "last_drop_time": null,
+    "reconnect_count": 0
+  }
+}

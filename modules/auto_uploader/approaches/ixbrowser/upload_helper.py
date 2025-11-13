@@ -20,6 +20,11 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
+# Phase 2: Import core modules for robustness
+from .core.state_manager import StateManager
+from .core.network_monitor import NetworkMonitor
+from .utils.file_handler import FileHandler
+
 logger = logging.getLogger(__name__)
 
 # Image paths for buttons
@@ -31,15 +36,30 @@ PUBLISH_BUTTON_DISABLED_IMAGE = "/home/user/automation-fb/modules/auto_uploader/
 class VideoUploadHelper:
     """Helper class for uploading videos to Facebook via bookmarks."""
 
-    def __init__(self, driver: Any):
+    def __init__(self, driver: Any, state_manager: StateManager = None,
+                 network_monitor: NetworkMonitor = None):
         """
         Initialize upload helper.
 
         Args:
             driver: Selenium WebDriver instance
+            state_manager: Optional StateManager for persistence (Phase 2)
+            network_monitor: Optional NetworkMonitor for resilience (Phase 2)
         """
         self.driver = driver
         self.upload_timeout = 600  # 10 minutes max per video
+
+        # Phase 2: Robustness components
+        self.state_manager = state_manager or StateManager()
+        self.network_monitor = network_monitor or NetworkMonitor(check_interval=10)
+        self.file_handler = FileHandler()
+
+        # Track current upload session
+        self.current_video = None
+        self.current_bookmark = None
+        self.current_attempt = 0
+
+        logger.info("[Upload] ✓ VideoUploadHelper initialized with Phase 2 robustness")
 
     def navigate_to_bookmark(self, bookmark: Dict[str, str]) -> bool:
         """
@@ -964,8 +984,13 @@ class VideoUploadHelper:
                                         last_progress = progress
                                         stuck_count = 0  # Reset stuck counter
 
+                                        # Phase 2: Save progress to state
+                                        self.state_manager.update_current_upload(progress=progress)
+
                                     if progress >= 100:
                                         logger.info("[Upload] ✓ Upload 100% complete!")
+                                        # Phase 2: Update state to 100%
+                                        self.state_manager.update_current_upload(progress=100, status="completed")
                                         return True
 
                                     # Successfully got progress, continue monitoring
@@ -1002,8 +1027,13 @@ class VideoUploadHelper:
                                                 last_progress = progress
                                                 stuck_count = 0
 
+                                                # Phase 2: Save progress to state
+                                                self.state_manager.update_current_upload(progress=progress)
+
                                             if progress >= 100:
                                                 logger.info("[Upload] ✓ Upload 100% complete!")
+                                                # Phase 2: Update state to 100%
+                                                self.state_manager.update_current_upload(progress=100, status="completed")
                                                 return True
 
                                             # Successfully got progress
@@ -1043,8 +1073,13 @@ class VideoUploadHelper:
                                     last_progress = progress
                                     stuck_count = 0
 
+                                    # Phase 2: Save progress to state
+                                    self.state_manager.update_current_upload(progress=progress)
+
                                 if progress >= 100:
                                     logger.info("[Upload] ✓ Upload 100% complete!")
+                                    # Phase 2: Update state to 100%
+                                    self.state_manager.update_current_upload(progress=100, status="completed")
                                     return True
 
                                 break  # Got valid progress
@@ -1061,6 +1096,8 @@ class VideoUploadHelper:
                     for indicator in complete_indicators:
                         if indicator.is_displayed():
                             logger.info("[Upload] ✓ Upload completed (indicator found: '%s')!", indicator.text)
+                            # Phase 2: Update state to 100%
+                            self.state_manager.update_current_upload(progress=100, status="completed")
                             return True
 
                 # Check if progress is stuck
@@ -1431,6 +1468,13 @@ class VideoUploadHelper:
         """
         bookmark_title = bookmark['title']
 
+        # Phase 2: Check network before starting
+        if not self.network_monitor.is_network_stable():
+            logger.warning("[Upload] Network unstable, waiting for recovery...")
+            if not self.network_monitor.wait_for_reconnection(max_wait=300):
+                logger.error("[Upload] Network timeout, cannot start upload")
+                return False
+
         for attempt in range(1, max_retries + 1):
             try:
                 logger.info("[Upload] ═══════════════════════════════════════════")
@@ -1451,6 +1495,21 @@ class VideoUploadHelper:
 
                 video_name = os.path.splitext(os.path.basename(video_file))[0]
                 logger.info("[Upload] ✓ Video ready: %s", video_name)
+
+                # Phase 2: Track current upload in state
+                self.current_video = video_file
+                self.current_bookmark = bookmark_title
+                self.current_attempt = attempt
+
+                self.state_manager.update_current_upload(
+                    video_file=video_file,
+                    video_name=video_name,
+                    bookmark=bookmark_title,
+                    status="uploading",
+                    progress=0,
+                    attempt=attempt
+                )
+                logger.debug("[Upload] ✓ State saved (video: %s, attempt: %d)", video_name, attempt)
 
                 # Step 3: Wait for page to stabilize
                 logger.info("[Upload] Waiting for page to fully stabilize...")
@@ -1656,21 +1715,58 @@ class VideoUploadHelper:
                 # Detect and hover on Publish button (production mode: no click)
                 self.detect_and_hover_publish_button()
 
-                # Move video to 'uploaded videos' subfolder (prevent duplicates)
-                self.move_video_to_uploaded_folder(video_file, folder_path)
+                # Phase 2: Move video using FileHandler (robust file operations)
+                moved_to = self.file_handler.move_video_to_uploaded(video_file, folder_path)
+                if moved_to:
+                    logger.info("[Upload] ✓ Video moved to 'uploaded videos' folder")
+
+                    # Phase 2: Mark video as uploaded in permanent history
+                    self.state_manager.mark_video_uploaded(
+                        video_file=video_file,
+                        bookmark=bookmark_title,
+                        moved_to=moved_to
+                    )
+                else:
+                    logger.warning("[Upload] ⚠ Could not move video (continuing anyway)")
+
+                # Phase 2: Clear current upload state
+                self.state_manager.clear_current_upload()
+                logger.debug("[Upload] ✓ State cleared after successful upload")
 
                 return True
 
             except Exception as e:
                 logger.error("[Upload] Attempt %d failed: %s", attempt, str(e))
+
+                # Phase 2: Update state with failure info
+                self.state_manager.update_current_upload(
+                    status="failed",
+                    attempt=attempt
+                )
+
                 if attempt < max_retries:
                     logger.info("[Upload] Retrying in 5 seconds...")
                     time.sleep(5)
                 else:
+                    # Phase 2: All retries exhausted - delete failed video
                     logger.error("[Upload] ═══════════════════════════════════════════")
                     logger.error("[Upload] ✗ FAILED: %s", bookmark_title)
                     logger.error("[Upload]   Error: %s", str(e))
+                    logger.error("[Upload]   Video: %s", video_name)
                     logger.error("[Upload] ═══════════════════════════════════════════")
+
+                    # Delete video after 3 failed attempts
+                    if self.file_handler.delete_failed_video(
+                        video_file,
+                        reason=f"failed after {max_retries} retries: {str(e)}"
+                    ):
+                        logger.warning("[Upload] ✓ Failed video deleted to prevent re-upload")
+                    else:
+                        logger.error("[Upload] ✗ Could not delete failed video")
+
+                    # Phase 2: Clear state after failure
+                    self.state_manager.clear_current_upload()
+
                     return False
 
         return False

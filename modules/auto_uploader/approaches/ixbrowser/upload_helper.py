@@ -61,6 +61,84 @@ class VideoUploadHelper:
 
         logger.info("[Upload] ✓ VideoUploadHelper initialized with Phase 2 robustness")
 
+    def ensure_window_ready(self, operation_name: str = "operation") -> bool:
+        """
+        **DEFENSIVE CHECK** - Ensure browser window is ready before any critical operation.
+
+        This method performs 3 checks before proceeding:
+        1. Activate browser window (bring to foreground)
+        2. Dismiss any visible notifications/popups
+        3. Verify window is responsive
+
+        Call this before EVERY critical step to prevent failures.
+
+        Args:
+            operation_name: Name of operation (for logging)
+
+        Returns:
+            True if window is ready, False if issues detected
+        """
+        try:
+            logger.info("[Upload] ═══════════════════════════════════════════")
+            logger.info("[Upload] DEFENSIVE CHECK: Preparing for %s", operation_name)
+            logger.info("[Upload] ═══════════════════════════════════════════")
+
+            # Step 1: Activate browser window (bring to foreground)
+            try:
+                logger.info("[Upload] Step 1/3: Activating browser window...")
+
+                # Maximize window
+                self.driver.maximize_window()
+
+                # Bring to front using JavaScript
+                self.driver.execute_script("window.focus();")
+
+                # Switch to window (ensure it's active)
+                self.driver.switch_to.window(self.driver.current_window_handle)
+
+                logger.info("[Upload] ✓ Browser window activated")
+
+            except Exception as e:
+                logger.warning("[Upload] ⚠ Window activation failed: %s", str(e))
+                # Continue anyway - not critical
+
+            # Step 2: Dismiss any notifications/popups
+            logger.info("[Upload] Step 2/3: Checking for notifications/popups...")
+
+            dismissed_count = self.dismiss_notifications()
+
+            if dismissed_count > 0:
+                logger.info("[Upload] ✓ Dismissed %d notification(s)", dismissed_count)
+            else:
+                logger.info("[Upload] ✓ No notifications found (clear)")
+
+            # Step 3: Verify window is responsive
+            try:
+                logger.info("[Upload] Step 3/3: Verifying window responsiveness...")
+
+                # Try to get current URL (simple check for responsiveness)
+                current_url = self.driver.current_url
+
+                if current_url:
+                    logger.info("[Upload] ✓ Window is responsive")
+                else:
+                    logger.warning("[Upload] ⚠ Window may not be responsive")
+                    return False
+
+            except Exception as e:
+                logger.error("[Upload] ✗ Window responsiveness check failed: %s", str(e))
+                return False
+
+            logger.info("[Upload] ═══════════════════════════════════════════")
+            logger.info("[Upload] ✓ WINDOW READY - Proceeding with %s", operation_name)
+            logger.info("[Upload] ═══════════════════════════════════════════")
+
+            return True
+
+        except Exception as e:
+            logger.error("[Upload] ensure_window_ready() failed: %s", str(e))
+            return False
+
     def navigate_to_bookmark(self, bookmark: Dict[str, str]) -> bool:
         """
         Navigate to bookmark URL.
@@ -1652,6 +1730,10 @@ class VideoUploadHelper:
                 logger.info("[Upload] Finding 'Add Videos' button...")
                 logger.info("[Upload] ───────────────────────────────────────────")
 
+                # DEFENSIVE CHECK: Ensure window is ready before finding button
+                if not self.ensure_window_ready("finding Add Videos button"):
+                    logger.warning("[Upload] ⚠ Window readiness check failed, but continuing...")
+
                 button_result = self.find_add_videos_button()
                 if not button_result:
                     if attempt < max_retries:
@@ -1770,6 +1852,10 @@ class VideoUploadHelper:
                 logger.info("[Upload] Monitoring Upload Progress")
                 logger.info("[Upload] ═══════════════════════════════════════════")
 
+                # DEFENSIVE CHECK: Ensure window is ready before monitoring
+                if not self.ensure_window_ready("monitoring upload progress"):
+                    logger.warning("[Upload] ⚠ Window readiness check failed, but continuing...")
+
                 if not self.monitor_upload_progress():
                     if attempt < max_retries:
                         logger.warning("[Upload] Upload did not complete, retrying...")
@@ -1783,6 +1869,10 @@ class VideoUploadHelper:
                 logger.info("[Upload]   Video: %s", video_name)
                 logger.info("[Upload]   Status: 100%% Complete")
                 logger.info("[Upload] ═══════════════════════════════════════════")
+
+                # DEFENSIVE CHECK: Ensure window is ready before finding publish button
+                if not self.ensure_window_ready("finding publish button"):
+                    logger.warning("[Upload] ⚠ Window readiness check failed, but continuing...")
 
                 # Detect and hover on Publish button (production mode: no click)
                 self.detect_and_hover_publish_button()

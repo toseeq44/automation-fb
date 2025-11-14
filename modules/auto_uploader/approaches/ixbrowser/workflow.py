@@ -312,8 +312,8 @@ class IXBrowserApproach(BaseApproach):
             state_manager=self._state_manager
         )
 
-        # Fetch all profiles from ixBrowser
-        all_profiles = self._profile_manager.fetch_profiles(limit=100)
+        # Fetch ALL profiles from ixBrowser (unlimited)
+        all_profiles = self._profile_manager.fetch_profiles()
 
         if not all_profiles:
             result.add_error("No profiles found in ixBrowser. Please create a profile first.")

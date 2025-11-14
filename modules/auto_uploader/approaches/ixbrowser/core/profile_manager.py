@@ -50,18 +50,18 @@ class ProfileManager:
 
         logger.info("[ProfileManager] Initialized")
 
-    def fetch_profiles(self, limit: int = 100) -> List[Dict[str, Any]]:
+    def fetch_profiles(self, limit: int = 9999) -> List[Dict[str, Any]]:
         """
         Fetch all profiles from ixBrowser API.
 
         Args:
-            limit: Maximum profiles to fetch (default: 100)
+            limit: Maximum profiles to fetch (default: 9999 - essentially unlimited)
 
         Returns:
             List of profile dictionaries with 'profile_id', 'name', etc.
         """
         try:
-            logger.info("[ProfileManager] Fetching profiles from ixBrowser API...")
+            logger.info("[ProfileManager] Fetching ALL profiles from ixBrowser API...")
 
             profiles = self.connection_manager.get_profile_list(limit=limit)
 

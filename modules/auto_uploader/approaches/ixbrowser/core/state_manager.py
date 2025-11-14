@@ -20,10 +20,14 @@ import os
 import json
 import time
 import threading
+import platform
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Detect platform for Windows-specific workarounds
+IS_WINDOWS = platform.system() == "Windows"
 
 
 class StateManager:
@@ -82,32 +86,80 @@ class StateManager:
         """
         Save JSON file with atomic write and optional backup.
 
+        Windows-compatible with retry logic for file locking issues.
+
         Args:
             file_path: Path to JSON file
             data: Data to save
             backup: Create backup before overwriting
         """
-        try:
-            with self.lock:
-                # Create backup if file exists
-                if backup and file_path.exists():
-                    backup_path = file_path.with_suffix('.json.bak')
-                    import shutil
-                    shutil.copy2(file_path, backup_path)
+        max_retries = 5
+        retry_delay = 0.1  # 100ms
 
-                # Atomic write: write to temp file first
+        for attempt in range(max_retries):
+            try:
+                with self.lock:
+                    # Create backup if file exists
+                    if backup and file_path.exists():
+                        backup_path = file_path.with_suffix('.json.bak')
+                        import shutil
+                        try:
+                            shutil.copy2(file_path, backup_path)
+                        except Exception as e:
+                            logger.debug("[StateManager] Backup failed (non-critical): %s", str(e))
+
+                    # Atomic write: write to temp file first
+                    temp_path = file_path.with_suffix('.json.tmp')
+                    with open(temp_path, 'w', encoding='utf-8') as f:
+                        json.dump(data, f, indent=2, ensure_ascii=False)
+
+                    # Windows-specific workaround for file locking
+                    if IS_WINDOWS:
+                        # On Windows, delete target file first if it exists
+                        # This avoids "Access denied" errors when replacing
+                        if file_path.exists():
+                            try:
+                                file_path.unlink()
+                            except PermissionError:
+                                # File is locked, wait and retry
+                                if attempt < max_retries - 1:
+                                    logger.debug("[StateManager] File locked, retrying in %dms (attempt %d/%d)",
+                                               int(retry_delay * 1000), attempt + 1, max_retries)
+                                    time.sleep(retry_delay)
+                                    retry_delay *= 2  # Exponential backoff
+                                    continue
+                                else:
+                                    raise
+
+                        # Rename temp to actual
+                        os.replace(str(temp_path), str(file_path))
+                    else:
+                        # On POSIX, use atomic replace
+                        os.replace(str(temp_path), str(file_path))
+
+                    logger.debug("[StateManager] Saved %s successfully", file_path.name)
+                    return  # Success!
+
+            except Exception as e:
+                # Clean up temp file if it exists
                 temp_path = file_path.with_suffix('.json.tmp')
-                with open(temp_path, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, indent=2, ensure_ascii=False)
+                if temp_path.exists():
+                    try:
+                        temp_path.unlink()
+                    except:
+                        pass
 
-                # Rename temp to actual (atomic on POSIX)
-                temp_path.replace(file_path)
-
-                logger.debug("[StateManager] Saved %s successfully", file_path.name)
-
-        except Exception as e:
-            logger.error("[StateManager] Error saving %s: %s", file_path.name, str(e))
-            raise
+                # If this is the last attempt, re-raise the exception
+                if attempt >= max_retries - 1:
+                    logger.error("[StateManager] Error saving %s after %d attempts: %s",
+                               file_path.name, max_retries, str(e))
+                    raise
+                else:
+                    # Log warning and retry
+                    logger.debug("[StateManager] Save attempt %d/%d failed: %s, retrying...",
+                               attempt + 1, max_retries, str(e))
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
 
     def load_state(self) -> Dict[str, Any]:
         """

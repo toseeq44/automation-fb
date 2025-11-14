@@ -100,6 +100,9 @@ class VideoUploadHelper:
             # Debug: See what's on the page
             self.debug_page_content(title)
 
+            # Priority 2: Dismiss any notifications/popups after page load
+            self.dismiss_notifications()
+
             return True
 
         except Exception as e:
@@ -144,6 +147,51 @@ class VideoUploadHelper:
 
         except Exception as e:
             logger.error("[Upload] DEBUG: Failed - %s", str(e))
+
+    def dismiss_notifications(self) -> int:
+        """
+        Priority 2: Detect and dismiss any Facebook notifications/popups.
+
+        Returns:
+            Number of notifications/popups dismissed
+        """
+        try:
+            from .config.upload_config import NOTIFICATION_CONFIG
+
+            # Check if active dismissal is enabled
+            if not NOTIFICATION_CONFIG.get('active_dismissal_enabled', True):
+                return 0
+
+            dismiss_patterns = NOTIFICATION_CONFIG.get('dismiss_patterns', [])
+            dismissed_count = 0
+
+            for pattern in dismiss_patterns:
+                try:
+                    elements = self.driver.find_elements(By.XPATH, pattern)
+                    for elem in elements:
+                        try:
+                            # Check if element is visible
+                            if elem.is_displayed():
+                                # Try to click it
+                                elem.click()
+                                dismissed_count += 1
+                                logger.info("[Upload] ✓ Dismissed notification/popup (pattern: %s...)", pattern[:50])
+                                time.sleep(0.3)  # Brief pause after dismissal
+                        except:
+                            # Element might have disappeared or not clickable
+                            pass
+                except:
+                    # Pattern might not match anything - that's OK
+                    pass
+
+            if dismissed_count > 0:
+                logger.info("[Upload] ✓ Total notifications dismissed: %d", dismissed_count)
+
+            return dismissed_count
+
+        except Exception as e:
+            logger.debug("[Upload] Notification dismissal error: %s", str(e))
+            return 0
 
     def find_add_videos_button_text(self, retries: int = 3) -> Optional[Any]:
         """
@@ -1448,6 +1496,27 @@ class VideoUploadHelper:
             # Step 3: Hover on button (regardless of enabled state, for visual confirmation)
             hover_success = self.hover_on_publish_button(button)
 
+            # Step 4: Wait for Facebook "bulk upload processing" notification
+            # Facebook shows this notification after publish button appears
+            # User's smart solution: Let it show, then navigate to next page (dismisses automatically)
+            try:
+                from .config.upload_config import NOTIFICATION_CONFIG
+                post_publish_wait = NOTIFICATION_CONFIG.get('post_publish_wait', 3)
+
+                logger.info("[Upload] ═══════════════════════════════════════════")
+                logger.info("[Upload] Waiting %d seconds for Facebook notifications...", post_publish_wait)
+                logger.info("[Upload] Note: 'Bulk upload processing' notification will appear")
+                logger.info("[Upload] It will auto-dismiss when moving to next page")
+                logger.info("[Upload] ═══════════════════════════════════════════")
+
+                time.sleep(post_publish_wait)
+
+                # Optional: Try to dismiss any notifications that appeared
+                self.dismiss_notifications()
+
+            except Exception as e:
+                logger.debug("[Upload] Post-publish wait failed: %s", str(e))
+
             return hover_success
 
         except Exception as e:
@@ -1514,6 +1583,9 @@ class VideoUploadHelper:
                 # Step 3: Wait for page to stabilize
                 logger.info("[Upload] Waiting for page to fully stabilize...")
                 time.sleep(3)  # Give Facebook time to load all elements
+
+                # Step 3-Priority2: Dismiss any popups/notifications before proceeding
+                self.dismiss_notifications()
 
                 # Step 3a: Find file input element (BEFORE clicking "Add Videos" button)
                 logger.info("[Upload] ═══════════════════════════════════════════")

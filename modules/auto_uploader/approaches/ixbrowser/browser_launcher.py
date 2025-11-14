@@ -169,6 +169,29 @@ class BrowserLauncher:
         if startup_args is None:
             startup_args = []
 
+        # Priority 1: Add notification blocking args (most effective!)
+        # Load notification config
+        try:
+            from .config.upload_config import NOTIFICATION_CONFIG
+
+            if NOTIFICATION_CONFIG.get('block_browser_notifications', True):
+                # Add Chrome args to disable ALL notifications
+                notification_blocking_args = [
+                    "--disable-notifications",           # Disable browser notifications
+                    "--disable-infobars",                # Disable "Chrome is being controlled" bar
+                    "--disable-popup-blocking",          # Prevent popup warnings
+                    "--disable-default-apps",            # Disable default app notifications
+                ]
+
+                # Add only unique args
+                for arg in notification_blocking_args:
+                    if arg not in startup_args:
+                        startup_args.append(arg)
+
+                logger.info("[IXLauncher] ✓ Notification blocking enabled (browser-level)")
+        except Exception as e:
+            logger.debug("[IXLauncher] Could not load notification config: %s", str(e))
+
         # Log startup args (if any)
         if startup_args:
             logger.info("[IXLauncher] Startup args: %s", startup_args)

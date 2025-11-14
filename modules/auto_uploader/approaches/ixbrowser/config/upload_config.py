@@ -142,6 +142,58 @@ USER_CONFIG = {
 
 
 # ═══════════════════════════════════════════════════════════
+# NOTIFICATION HANDLING CONFIGURATION
+# ═══════════════════════════════════════════════════════════
+
+NOTIFICATION_CONFIG = {
+    # Enable browser-level notification blocking (Priority 1)
+    "block_browser_notifications": True,
+
+    # Enable active notification dismissal during upload (Priority 2)
+    "active_dismissal_enabled": True,
+
+    # Check for notifications every N seconds during upload
+    "dismissal_check_interval": 10,
+
+    # Enable Windows focus protection (Priority 3)
+    "focus_protection_enabled": False,  # Optional - can cause issues on some systems
+
+    # Wait time after publish button to handle Facebook processing notification
+    # Facebook shows "Your bulk upload is processing" notification
+    # We navigate to next page to auto-dismiss it
+    "post_publish_wait": 3,  # seconds
+
+    # XPath patterns for common Facebook notifications/popups to dismiss
+    "dismiss_patterns": [
+        # Facebook notification "X" button
+        "//div[@role='dialog']//div[@aria-label='Close']",
+        "//div[@role='dialog']//div[@aria-label='Dismiss']",
+
+        # "Not Now" buttons for popups
+        "//div[@role='dialog']//div[text()='Not Now']",
+        "//div[@role='dialog']//button[text()='Not Now']",
+        "//button[contains(text(), 'Not Now')]",
+
+        # Generic close buttons
+        "//button[@aria-label='Close']",
+        "//div[@aria-label='Close notification']",
+
+        # Facebook cookie/consent banners
+        "//button[contains(text(), 'Decline')]",
+        "//button[contains(text(), 'Only essential')]",
+        "//button[contains(text(), 'Only Essential Cookies')]",
+
+        # "Allow notifications" popup
+        "//button[contains(text(), 'Block')]",
+        "//button[contains(text(), 'Don')]",  # "Don't Allow"
+
+        # Generic overlays
+        "//div[@role='dialog']//button[@type='button'][1]",  # First button in dialog
+    ],
+}
+
+
+# ═══════════════════════════════════════════════════════════
 # RESUME & RECOVERY CONFIGURATION
 # ═══════════════════════════════════════════════════════════
 
@@ -186,7 +238,7 @@ def get_config(section: str = None):
     Get configuration section or all configs.
 
     Args:
-        section: Config section name (network, state, upload, folder, user, resume, logging)
+        section: Config section name (network, state, upload, folder, user, notification, resume, logging)
                  If None, returns all configs
 
     Returns:
@@ -198,6 +250,7 @@ def get_config(section: str = None):
         "upload": UPLOAD_CONFIG,
         "folder": FOLDER_CONFIG,
         "user": USER_CONFIG,
+        "notification": NOTIFICATION_CONFIG,
         "resume": RESUME_CONFIG,
         "logging": LOGGING_CONFIG,
     }
@@ -222,6 +275,7 @@ def update_config(section: str, key: str, value):
         "upload": UPLOAD_CONFIG,
         "folder": FOLDER_CONFIG,
         "user": USER_CONFIG,
+        "notification": NOTIFICATION_CONFIG,
         "resume": RESUME_CONFIG,
         "logging": LOGGING_CONFIG,
     }

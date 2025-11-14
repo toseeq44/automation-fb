@@ -117,6 +117,31 @@ FOLDER_CONFIG = {
 
 
 # ═══════════════════════════════════════════════════════════
+# USER TYPE & DAILY LIMIT CONFIGURATION
+# ═══════════════════════════════════════════════════════════
+
+USER_CONFIG = {
+    # User type: "basic" or "pro"
+    # Basic: Limited to daily_limit bookmarks per 24 hours
+    # Pro: Unlimited uploads
+    "user_type": "basic",  # Default: basic user
+
+    # Daily limit for basic users (number of bookmarks/pages per 24 hours)
+    "daily_limit_basic": 200,
+
+    # Daily limit for pro users (set to None or very high number)
+    "daily_limit_pro": None,  # None = unlimited
+
+    # Enable daily limit tracking
+    "track_daily_limit": True,
+
+    # Reset time (hour of day, 0-23)
+    # Set to 0 to reset at midnight
+    "reset_hour": 0,
+}
+
+
+# ═══════════════════════════════════════════════════════════
 # RESUME & RECOVERY CONFIGURATION
 # ═══════════════════════════════════════════════════════════
 
@@ -161,7 +186,7 @@ def get_config(section: str = None):
     Get configuration section or all configs.
 
     Args:
-        section: Config section name (network, state, upload, folder, resume, logging)
+        section: Config section name (network, state, upload, folder, user, resume, logging)
                  If None, returns all configs
 
     Returns:
@@ -172,6 +197,7 @@ def get_config(section: str = None):
         "state": STATE_CONFIG,
         "upload": UPLOAD_CONFIG,
         "folder": FOLDER_CONFIG,
+        "user": USER_CONFIG,
         "resume": RESUME_CONFIG,
         "logging": LOGGING_CONFIG,
     }
@@ -195,6 +221,7 @@ def update_config(section: str, key: str, value):
         "state": STATE_CONFIG,
         "upload": UPLOAD_CONFIG,
         "folder": FOLDER_CONFIG,
+        "user": USER_CONFIG,
         "resume": RESUME_CONFIG,
         "logging": LOGGING_CONFIG,
     }

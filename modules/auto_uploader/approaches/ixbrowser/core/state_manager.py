@@ -389,4 +389,118 @@ class StateManager:
             state['network']['last_drop_time'] = time.strftime("%Y-%m-%d %H:%M:%S")
 
         self.save_state(state)
-        logger.debug("[StateManager] Updated network status: %s", status)
+
+    # ═══════════════════════════════════════════════════════════
+    # Daily Limit Tracking (Basic vs Pro users)
+    # ═══════════════════════════════════════════════════════════
+
+    def get_daily_stats(self) -> Dict[str, Any]:
+        """
+        Get today's upload statistics.
+
+        Returns:
+            Dict with today's stats: {date, bookmarks_uploaded, videos_uploaded, started_at}
+        """
+        from datetime import datetime
+
+        state = self.load_state()
+
+        # Get daily stats (initialize if not present)
+        if 'daily_stats' not in state:
+            state['daily_stats'] = {
+                'date': datetime.now().strftime("%Y-%m-%d"),
+                'bookmarks_uploaded': 0,
+                'videos_uploaded': 0,
+                'started_at': time.strftime("%Y-%m-%d %H:%M:%S")
+            }
+            self.save_state(state)
+
+        daily_stats = state['daily_stats']
+
+        # Check if date changed (new day) - reset counter
+        today = datetime.now().strftime("%Y-%m-%d")
+        if daily_stats.get('date') != today:
+            logger.info("[StateManager] New day detected - resetting daily counters")
+            daily_stats = {
+                'date': today,
+                'bookmarks_uploaded': 0,
+                'videos_uploaded': 0,
+                'started_at': time.strftime("%Y-%m-%d %H:%M:%S")
+            }
+            state['daily_stats'] = daily_stats
+            self.save_state(state)
+
+        return daily_stats
+
+    def increment_daily_bookmarks(self, count: int = 1):
+        """
+        Increment daily bookmark counter.
+
+        Args:
+            count: Number of bookmarks to add (default: 1)
+        """
+        state = self.load_state()
+
+        # Get current stats (will auto-reset if new day)
+        daily_stats = self.get_daily_stats()
+
+        # Increment counter
+        daily_stats['bookmarks_uploaded'] += count
+        daily_stats['videos_uploaded'] += count  # Assuming 1 video per bookmark
+        daily_stats['last_updated'] = time.strftime("%Y-%m-%d %H:%M:%S")
+
+        state['daily_stats'] = daily_stats
+        self.save_state(state)
+
+        logger.debug("[StateManager] Daily stats updated: %d bookmarks today",
+                    daily_stats['bookmarks_uploaded'])
+
+    def check_daily_limit(self, user_type: str = "basic", limit: int = 200) -> Dict[str, Any]:
+        """
+        Check if daily limit has been reached.
+
+        Args:
+            user_type: "basic" or "pro"
+            limit: Daily limit for basic users
+
+        Returns:
+            Dict with: {
+                'limit_reached': bool,
+                'current_count': int,
+                'limit': int or None,
+                'remaining': int or None,
+                'user_type': str
+            }
+        """
+        daily_stats = self.get_daily_stats()
+        current_count = daily_stats.get('bookmarks_uploaded', 0)
+
+        # Pro users have no limit
+        if user_type.lower() == "pro":
+            return {
+                'limit_reached': False,
+                'current_count': current_count,
+                'limit': None,
+                'remaining': None,
+                'user_type': 'pro',
+                'message': 'Pro user - unlimited uploads'
+            }
+
+        # Basic users have daily limit
+        limit_reached = current_count >= limit
+        remaining = max(0, limit - current_count)
+
+        result = {
+            'limit_reached': limit_reached,
+            'current_count': current_count,
+            'limit': limit,
+            'remaining': remaining,
+            'user_type': 'basic'
+        }
+
+        if limit_reached:
+            result['message'] = f'Daily limit reached: {current_count}/{limit} bookmarks uploaded today'
+        else:
+            result['message'] = f'Daily usage: {current_count}/{limit} bookmarks ({remaining} remaining)'
+
+        return result

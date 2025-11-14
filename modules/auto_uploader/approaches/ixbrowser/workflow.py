@@ -32,6 +32,7 @@ from .window_manager import bring_window_to_front_windows, maximize_window_windo
 from .core.state_manager import StateManager
 from .core.network_monitor import NetworkMonitor
 from .core.folder_queue import FolderQueueManager
+from .config.upload_config import USER_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -568,6 +569,41 @@ class IXBrowserApproach(BaseApproach):
 
                     logger.info("[IXApproach] ═══════════════════════════════════════════")
 
+                    # Phase 2: Check daily limit (Basic vs Pro user)
+                    logger.info("[IXApproach] ═══════════════════════════════════════════")
+                    logger.info("[IXApproach] Daily Limit Check")
+                    logger.info("[IXApproach] ═══════════════════════════════════════════")
+
+                    user_type = USER_CONFIG.get('user_type', 'basic')
+                    daily_limit = USER_CONFIG.get('daily_limit_basic', 200)
+
+                    limit_status = self._state_manager.check_daily_limit(
+                        user_type=user_type,
+                        limit=daily_limit
+                    )
+
+                    logger.info("[IXApproach] User Type: %s", user_type.upper())
+                    logger.info("[IXApproach] %s", limit_status['message'])
+
+                    # If limit reached for basic users, stop here
+                    if limit_status['limit_reached']:
+                        logger.warning("[IXApproach] ═══════════════════════════════════════════")
+                        logger.warning("[IXApproach] DAILY LIMIT REACHED!")
+                        logger.warning("[IXApproach] ═══════════════════════════════════════════")
+                        logger.warning("[IXApproach] User: %s", user_type.upper())
+                        logger.warning("[IXApproach] Uploaded today: %d bookmarks", limit_status['current_count'])
+                        logger.warning("[IXApproach] Daily limit: %d bookmarks", limit_status['limit'])
+                        logger.warning("[IXApproach] ")
+                        logger.warning("[IXApproach] Please wait until tomorrow to upload more videos.")
+                        logger.warning("[IXApproach] Or upgrade to PRO for unlimited uploads!")
+                        logger.warning("[IXApproach] ═══════════════════════════════════════════")
+
+                        # Stop processing
+                        result.add_error("Daily limit reached for basic user")
+                        raise Exception("Daily limit reached")
+
+                    logger.info("[IXApproach] ═══════════════════════════════════════════")
+
                     # Phase 2: Initialize upload helper with Phase 2 components
                     upload_helper = VideoUploadHelper(
                         driver,
@@ -582,7 +618,13 @@ class IXBrowserApproach(BaseApproach):
                     upload_results = []
                     total_uploads_this_run = 0
 
-                    logger.info("[IXApproach] Starting folder processing (unlimited mode)...")
+                    logger.info("[IXApproach] Starting folder processing...")
+                    logger.info("[IXApproach] User type: %s", user_type.upper())
+                    if user_type.lower() == 'pro':
+                        logger.info("[IXApproach] Upload mode: UNLIMITED (Pro user)")
+                    else:
+                        logger.info("[IXApproach] Upload mode: %d/%d bookmarks today",
+                                   limit_status['current_count'], limit_status['limit'])
                     logger.info("[IXApproach] Processing one folder at a time")
                     logger.info("[IXApproach] Press Ctrl+C to stop bot (state will be saved)")
                     logger.info("[IXApproach] ")
@@ -624,11 +666,34 @@ class IXBrowserApproach(BaseApproach):
                             self._folder_queue.move_to_next_folder()
                             continue
 
+                        # Check daily limit BEFORE uploading (for basic users)
+                        if user_type.lower() == 'basic':
+                            current_limit_check = self._state_manager.check_daily_limit(
+                                user_type=user_type,
+                                limit=daily_limit
+                            )
+
+                            if current_limit_check['limit_reached']:
+                                logger.warning("[IXApproach] ═══════════════════════════════════════════")
+                                logger.warning("[IXApproach] DAILY LIMIT REACHED!")
+                                logger.warning("[IXApproach] ═══════════════════════════════════════════")
+                                logger.warning("[IXApproach] Uploaded today: %d/%d bookmarks",
+                                             current_limit_check['current_count'],
+                                             current_limit_check['limit'])
+                                logger.warning("[IXApproach] Daily limit reached during upload session.")
+                                logger.warning("[IXApproach] Please wait until tomorrow.")
+                                logger.warning("[IXApproach] ═══════════════════════════════════════════")
+                                break  # Exit upload loop
+
                         # Process this folder
                         logger.info("[IXApproach] ───────────────────────────────────────────────")
                         logger.info("[IXApproach] Processing: %s", folder_name)
                         logger.info("[IXApproach] Videos remaining: %d", len(videos))
                         logger.info("[IXApproach] Current cycle: #%d", self._folder_queue.get_cycle_count())
+                        if user_type.lower() == 'basic':
+                            logger.info("[IXApproach] Daily usage: %d/%d bookmarks",
+                                       current_limit_check['current_count'],
+                                       current_limit_check['limit'])
                         logger.info("[IXApproach] ───────────────────────────────────────────────")
 
                         # Upload video to bookmark (uploads ONE video per call)
@@ -643,6 +708,11 @@ class IXBrowserApproach(BaseApproach):
 
                         if success:
                             logger.info("[IXApproach] ✓ Upload successful")
+
+                            # Increment daily counter after successful upload
+                            self._state_manager.increment_daily_bookmarks(count=1)
+                            logger.debug("[IXApproach] Daily bookmark counter incremented")
+
                             # Brief pause between uploads
                             logger.info("[IXApproach] Waiting 5 seconds before next upload...")
                             time.sleep(5)

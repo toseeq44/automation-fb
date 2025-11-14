@@ -67,45 +67,91 @@ class NetworkMonitor:
         """
         Check network health using multiple methods.
 
+        Prioritizes HTTP checks over ping to avoid firewall issues.
+        Ping is optional and won't fail the check if HTTP works.
+
         Returns:
             "stable", "unstable", or "disconnected"
         """
-        # Level 1: Quick ping to Google DNS
+        # Load configuration
         try:
-            result = subprocess.run(
-                ['ping', '-c', '1', '-W', '2', '8.8.8.8'],
-                capture_output=True,
-                timeout=3
-            )
-            if result.returncode != 0:
-                logger.debug("[NetworkMonitor] Ping failed (no basic connectivity)")
-                return "disconnected"
-        except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
-            logger.debug("[NetworkMonitor] Ping error: %s", str(e))
-            return "disconnected"
+            from ..config.upload_config import NETWORK_CONFIG
+            enable_ping = NETWORK_CONFIG.get("enable_ping", False)
+            require_ping = NETWORK_CONFIG.get("require_ping", False)
+        except ImportError:
+            enable_ping = False
+            require_ping = False
 
-        # Level 2: HTTP request to Google
+        ping_ok = False
+        google_ok = False
+        facebook_ok = False
+
+        # Level 1: Quick ping to Google DNS (OPTIONAL)
+        if enable_ping:
+            try:
+                result = subprocess.run(
+                    ['ping', '-c', '1', '-W', '2', '8.8.8.8'],
+                    capture_output=True,
+                    timeout=3
+                )
+                ping_ok = (result.returncode == 0)
+                if ping_ok:
+                    logger.debug("[NetworkMonitor] ✓ Ping check passed")
+                else:
+                    logger.debug("[NetworkMonitor] ✗ Ping check failed (may be blocked by firewall)")
+            except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
+                logger.debug("[NetworkMonitor] ✗ Ping error: %s", str(e))
+                ping_ok = False
+        else:
+            logger.debug("[NetworkMonitor] ⊘ Ping checks disabled (skipped)")
+            ping_ok = None  # Not tested
+
+        # Level 2: HTTP request to Google (PRIMARY CHECK)
         try:
             response = requests.get("https://www.google.com", timeout=5)
-            if response.status_code != 200:
-                logger.debug("[NetworkMonitor] Google check failed (status: %d)", response.status_code)
-                return "unstable"
+            google_ok = (response.status_code == 200)
+            if google_ok:
+                logger.debug("[NetworkMonitor] ✓ Google HTTP check passed")
+            else:
+                logger.debug("[NetworkMonitor] ✗ Google check failed (status: %d)", response.status_code)
         except requests.RequestException as e:
-            logger.debug("[NetworkMonitor] Google HTTP failed: %s", str(e))
-            return "unstable"
+            logger.debug("[NetworkMonitor] ✗ Google HTTP failed: %s", str(e))
+            google_ok = False
 
-        # Level 3: HTTP request to Facebook
+        # Level 3: HTTP request to Facebook (PRIMARY CHECK)
         try:
             response = requests.get("https://www.facebook.com", timeout=5)
-            if response.status_code != 200:
-                logger.debug("[NetworkMonitor] Facebook check failed (status: %d)", response.status_code)
-                return "unstable"
+            facebook_ok = (response.status_code == 200)
+            if facebook_ok:
+                logger.debug("[NetworkMonitor] ✓ Facebook HTTP check passed")
+            else:
+                logger.debug("[NetworkMonitor] ✗ Facebook check failed (status: %d)", response.status_code)
         except requests.RequestException as e:
-            logger.debug("[NetworkMonitor] Facebook HTTP failed: %s", str(e))
-            return "unstable"
+            logger.debug("[NetworkMonitor] ✗ Facebook HTTP failed: %s", str(e))
+            facebook_ok = False
 
-        # All checks passed
-        return "stable"
+        # ═══════════════════════════════════════════════════════════
+        # DECISION LOGIC - Prioritize HTTP over ping
+        # ═══════════════════════════════════════════════════════════
+
+        # If BOTH HTTP checks passed → STABLE (even if ping failed)
+        if google_ok and facebook_ok:
+            logger.debug("[NetworkMonitor] ✓ Network STABLE (both HTTP checks passed)")
+            return "stable"
+
+        # If AT LEAST ONE HTTP check passed → STABLE (sufficient for our use case)
+        if google_ok or facebook_ok:
+            logger.debug("[NetworkMonitor] ✓ Network STABLE (at least one HTTP check passed)")
+            return "stable"
+
+        # If ping is required and failed → DISCONNECTED
+        if enable_ping and require_ping and not ping_ok:
+            logger.debug("[NetworkMonitor] ✗ Network DISCONNECTED (ping required but failed)")
+            return "disconnected"
+
+        # If all HTTP checks failed → DISCONNECTED
+        logger.debug("[NetworkMonitor] ✗ Network DISCONNECTED (all HTTP checks failed)")
+        return "disconnected"
 
     def is_network_stable(self) -> bool:
         """

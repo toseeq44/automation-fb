@@ -39,6 +39,15 @@ NETWORK_CONFIG = {
 
     # Ping target for basic connectivity check
     "ping_target": "8.8.8.8",  # Google DNS
+
+    # Enable ping checks (can be disabled if firewall blocks ICMP)
+    # If disabled, only HTTP checks will be used
+    "enable_ping": False,  # Disabled by default to avoid firewall issues
+
+    # Require ping success (if enabled)
+    # If False: ping failure won't mark network as down if HTTP works
+    # If True: ping failure will mark network as down regardless of HTTP
+    "require_ping": False,  # Prioritize HTTP checks over ping
 }
 
 

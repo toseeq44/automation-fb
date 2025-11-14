@@ -535,7 +535,7 @@ class IXBrowserApproach(BaseApproach):
                     )
                     self._folder_queue.initialize_queue()
 
-                    # Phase 2: Detect total folders and calculate dynamic limit
+                    # Phase 2: Detect total folders (for tracking/logging only)
                     all_folders = self._folder_queue.get_all_folders()
                     total_folders = len(all_folders)
 
@@ -543,17 +543,9 @@ class IXBrowserApproach(BaseApproach):
                     logger.info("[IXApproach] Folder Detection")
                     logger.info("[IXApproach] ═══════════════════════════════════════════")
                     logger.info("[IXApproach] Total creator folders detected: %d", total_folders)
-
-                    # Calculate dynamic limit: Allow ~20 videos per folder per run
-                    # This ensures we can handle users with 100 folders (2000 uploads)
-                    # or 800 folders (16000 uploads) without arbitrary limits
-                    videos_per_folder_estimate = 20
-                    max_uploads_per_run = total_folders * videos_per_folder_estimate
-
-                    logger.info("[IXApproach] Dynamic upload limit calculated:")
-                    logger.info("[IXApproach]   Folders: %d", total_folders)
-                    logger.info("[IXApproach]   Estimated videos per folder: %d", videos_per_folder_estimate)
-                    logger.info("[IXApproach]   Max uploads this run: %d", max_uploads_per_run)
+                    logger.info("[IXApproach] Upload mode: UNLIMITED")
+                    logger.info("[IXApproach] Bot will process all videos in all folders")
+                    logger.info("[IXApproach] Resume functionality: ENABLED")
                     logger.info("[IXApproach] ═══════════════════════════════════════════")
 
                     # Phase 2: Check for resume
@@ -590,12 +582,14 @@ class IXBrowserApproach(BaseApproach):
                     upload_results = []
                     total_uploads_this_run = 0
 
-                    logger.info("[IXApproach] Starting infinite folder queue...")
+                    logger.info("[IXApproach] Starting folder processing (unlimited mode)...")
                     logger.info("[IXApproach] Processing one folder at a time")
+                    logger.info("[IXApproach] Press Ctrl+C to stop bot (state will be saved)")
                     logger.info("[IXApproach] ")
 
-                    # Phase 2: Process folders one at a time (infinite loop)
-                    while total_uploads_this_run < max_uploads_per_run:
+                    # Phase 2: Process folders one at a time (unlimited - no limit)
+                    # Bot will continue until user stops it or all folders are processed
+                    while True:
                         # Get current folder from queue
                         current_folder = self._folder_queue.get_current_folder()
                         if not current_folder:

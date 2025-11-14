@@ -261,9 +261,24 @@ class AutoUploaderPage(QWidget):
         self.status_value = QLabel("Ready")
         self.status_value.setStyleSheet("font-size: 14px; color: #43B581;")
         status_layout.addWidget(self.status_value)
+
+        status_layout.addSpacing(30)
+
+        # Daily upload counter
+        upload_count_label = QLabel("Today's Uploads:")
+        upload_count_label.setStyleSheet("font-size: 14px; font-weight: bold;")
+        status_layout.addWidget(upload_count_label)
+
+        self.upload_count_value = QLabel("Loading...")
+        self.upload_count_value.setStyleSheet("font-size: 14px; color: #3498DB;")
+        status_layout.addWidget(self.upload_count_value)
+
         status_layout.addStretch()
 
         outer_layout.addLayout(status_layout)
+
+        # Load and display daily upload count
+        self._update_daily_upload_count()
 
         button_row = QHBoxLayout()
         button_row.setSpacing(12)
@@ -474,6 +489,9 @@ class AutoUploaderPage(QWidget):
         self._append_log("=" * 70)
         self._append_log(f"[{datetime.now():%H:%M:%S}] Ready for next upload")
 
+        # Refresh daily upload counter
+        self._update_daily_upload_count()
+
     # ------------------------------------------------------------------ #
     # Logging helper                                                     #
     # ------------------------------------------------------------------ #
@@ -481,3 +499,52 @@ class AutoUploaderPage(QWidget):
         stamped = message if message.startswith("[") else f"[{datetime.now():%H:%M:%S}] {message}"
         self.log_output.append(stamped)
         self.log_output.verticalScrollBar().setValue(self.log_output.verticalScrollBar().maximum())
+
+    # ------------------------------------------------------------------ #
+    # Daily upload counter                                               #
+    # ------------------------------------------------------------------ #
+    def _update_daily_upload_count(self) -> None:
+        """Update daily upload count display from state."""
+        try:
+            # Import here to avoid circular dependency
+            from ..approaches.ixbrowser.core.state_manager import StateManager
+            from ..approaches.ixbrowser.config.upload_config import USER_CONFIG
+
+            # Get state manager
+            state_manager = StateManager()
+
+            # Get user type and limit
+            user_type = USER_CONFIG.get('user_type', 'basic')
+            daily_limit = USER_CONFIG.get('daily_limit_basic', 200)
+
+            # Check daily limit
+            limit_status = state_manager.check_daily_limit(
+                user_type=user_type,
+                limit=daily_limit
+            )
+
+            # Format display text
+            if user_type.lower() == 'pro':
+                # Pro user - unlimited
+                count_text = f"{limit_status['current_count']} (Unlimited)"
+                color = "#1ABC9C"  # Green for pro
+            else:
+                # Basic user - show X/200
+                count_text = f"{limit_status['current_count']}/{limit_status['limit']}"
+
+                # Color based on usage
+                remaining = limit_status['remaining']
+                if limit_status['limit_reached']:
+                    color = "#E74C3C"  # Red - limit reached
+                elif remaining <= 20:
+                    color = "#F39C12"  # Orange - low remaining
+                else:
+                    color = "#3498DB"  # Blue - normal
+
+            self.upload_count_value.setText(count_text)
+            self.upload_count_value.setStyleSheet(f"font-size: 14px; color: {color};")
+
+        except Exception as e:
+            # Fallback if state manager not available
+            self.upload_count_value.setText("N/A")
+            self.upload_count_value.setStyleSheet("font-size: 14px; color: #95A5A6;")

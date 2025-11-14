@@ -32,6 +32,7 @@ from .window_manager import bring_window_to_front_windows, maximize_window_windo
 from .core.state_manager import StateManager
 from .core.network_monitor import NetworkMonitor
 from .core.folder_queue import FolderQueueManager
+from .core.profile_manager import ProfileManager
 from .config.upload_config import USER_CONFIG
 
 logger = logging.getLogger(__name__)
@@ -173,6 +174,7 @@ class IXBrowserApproach(BaseApproach):
         self._state_manager = StateManager()
         self._network_monitor = NetworkMonitor(check_interval=10)
         self._folder_queue: Optional[FolderQueueManager] = None
+        self._profile_manager: Optional[ProfileManager] = None
 
         logger.info("[IXApproach] ✓ Phase 2 robustness components initialized")
 
@@ -300,57 +302,219 @@ class IXBrowserApproach(BaseApproach):
             result.add_error("Failed to get API client.")
             return result
 
-        # Get all profiles
+        # Phase 2A: Initialize ProfileManager
         logger.info("[IXApproach] ═══════════════════════════════════════════")
-        logger.info("[IXApproach] Getting Profile Information from ixBrowser")
+        logger.info("[IXApproach] Phase 2A: Multi-Profile Support")
         logger.info("[IXApproach] ═══════════════════════════════════════════")
 
-        all_profiles = self._connection_manager.get_profile_list(limit=100)
+        self._profile_manager = ProfileManager(
+            connection_manager=self._connection_manager,
+            state_manager=self._state_manager
+        )
+
+        # Fetch all profiles from ixBrowser
+        all_profiles = self._profile_manager.fetch_profiles(limit=100)
 
         if not all_profiles:
             result.add_error("No profiles found in ixBrowser. Please create a profile first.")
             return result
 
-        logger.info("[IXApproach] ✓ Found %d profile(s) in ixBrowser:", len(all_profiles))
-        for idx, p in enumerate(all_profiles, 1):
-            logger.info("[IXApproach]   %d. %s (ID: %s)", idx, p.get('name', 'Unknown'), p.get('profile_id'))
+        logger.info("[IXApproach] ✓ Multi-profile mode enabled")
+        logger.info("[IXApproach] ✓ Total profiles: %d", len(all_profiles))
+        logger.info("[IXApproach] ✓ Bot will process ALL profiles sequentially")
 
-        # Select first profile
-        profile_id = all_profiles[0]['profile_id']
-        profile_name = all_profiles[0].get('name', 'Unknown')
-        logger.info("[IXApproach] Selected profile: %s (ID: %s)", profile_name, profile_id)
+        # Load profile state (for crash recovery)
+        self._profile_manager.load_state()
 
-        # Create browser launcher
-        launcher = BrowserLauncher(client)
+        # Check global daily limit BEFORE starting
+        logger.info("[IXApproach] ═══════════════════════════════════════════")
+        logger.info("[IXApproach] Global Daily Limit Check")
+        logger.info("[IXApproach] ═══════════════════════════════════════════")
+
+        user_type = USER_CONFIG.get('user_type', 'basic')
+        daily_limit = USER_CONFIG.get('daily_limit_basic', 200)
+
+        initial_limit_status = self._state_manager.check_daily_limit(
+            user_type=user_type,
+            limit=daily_limit
+        )
+
+        logger.info("[IXApproach] User Type: %s", user_type.upper())
+        logger.info("[IXApproach] %s", initial_limit_status['message'])
+
+        # If limit already reached, stop here
+        if initial_limit_status['limit_reached']:
+            logger.warning("[IXApproach] ═══════════════════════════════════════════")
+            logger.warning("[IXApproach] GLOBAL DAILY LIMIT ALREADY REACHED!")
+            logger.warning("[IXApproach] ═══════════════════════════════════════════")
+            logger.warning("[IXApproach] Uploaded today: %d bookmarks", initial_limit_status['current_count'])
+            logger.warning("[IXApproach] Daily limit: %d bookmarks", initial_limit_status['limit'])
+            logger.warning("[IXApproach] Please wait until tomorrow to upload more videos.")
+            logger.warning("[IXApproach] ═══════════════════════════════════════════")
+            result.add_error("Global daily limit already reached")
+            return result
+
+        logger.info("[IXApproach] ═══════════════════════════════════════════")
+
+        # ═══════════════════════════════════════════════════════════
+        # MAIN PROFILE LOOP - Process all profiles sequentially
+        # ═══════════════════════════════════════════════════════════
+
+        total_successful_uploads = 0
+        profile_results = []
 
         try:
+            # Loop through all profiles
+            while not self._profile_manager.all_profiles_complete():
+                # Check global daily limit before each profile
+                current_limit_status = self._state_manager.check_daily_limit(
+                    user_type=user_type,
+                    limit=daily_limit
+                )
+
+                if current_limit_status['limit_reached']:
+                    logger.warning("[IXApproach] ═══════════════════════════════════════════")
+                    logger.warning("[IXApproach] GLOBAL DAILY LIMIT REACHED!")
+                    logger.warning("[IXApproach] ═══════════════════════════════════════════")
+                    logger.warning("[IXApproach] Uploaded today: %d/%d bookmarks",
+                                 current_limit_status['current_count'],
+                                 current_limit_status['limit'])
+                    logger.warning("[IXApproach] Stopping all profile processing")
+                    logger.warning("[IXApproach] ═══════════════════════════════════════════")
+                    break
+
+                # Get current profile
+                current_profile = self._profile_manager.get_current_profile()
+                if not current_profile:
+                    logger.error("[IXApproach] No current profile available")
+                    break
+
+                profile_id = current_profile.get('profile_id')
+                profile_name = current_profile.get('name', 'Unknown')
+                profile_info = self._profile_manager.get_current_profile_info()
+
+                logger.info("[IXApproach] ═══════════════════════════════════════════")
+                logger.info("[IXApproach] PROCESSING PROFILE %d/%d",
+                           profile_info['index'], profile_info['total'])
+                logger.info("[IXApproach] ═══════════════════════════════════════════")
+                logger.info("[IXApproach] Profile: %s (ID: %s)", profile_name, profile_id)
+                logger.info("[IXApproach] Global uploads today: %d",
+                           current_limit_status['current_count'])
+                if user_type.lower() == 'basic':
+                    logger.info("[IXApproach] Remaining: %d/%d",
+                               current_limit_status['remaining'],
+                               current_limit_status['limit'])
+
+                # Process this single profile
+                profile_upload_count = self._process_single_profile(
+                    profile_id=profile_id,
+                    profile_name=profile_name,
+                    client=client,
+                    user_type=user_type,
+                    daily_limit=daily_limit
+                )
+
+                # Track results
+                profile_results.append({
+                    'profile_name': profile_name,
+                    'profile_id': profile_id,
+                    'uploads': profile_upload_count
+                })
+
+                total_successful_uploads += profile_upload_count
+
+                # Check if limit reached after this profile
+                post_profile_limit = self._state_manager.check_daily_limit(
+                    user_type=user_type,
+                    limit=daily_limit
+                )
+
+                if post_profile_limit['limit_reached']:
+                    logger.warning("[IXApproach] ═══════════════════════════════════════════")
+                    logger.warning("[IXApproach] Daily limit reached after profile: %s", profile_name)
+                    logger.warning("[IXApproach] Stopping multi-profile processing")
+                    logger.warning("[IXApproach] ═══════════════════════════════════════════")
+                    break
+
+                # Move to next profile
+                has_more = self._profile_manager.move_to_next_profile()
+                if not has_more:
+                    logger.info("[IXApproach] ═══════════════════════════════════════════")
+                    logger.info("[IXApproach] ALL PROFILES PROCESSED!")
+                    logger.info("[IXApproach] ═══════════════════════════════════════════")
+                    break
+
+                # Brief pause between profiles
+                logger.info("[IXApproach] Waiting 5 seconds before next profile...")
+                time.sleep(5)
+
+            # Display multi-profile summary
+            logger.info("[IXApproach] ═══════════════════════════════════════════")
+            logger.info("[IXApproach] Multi-Profile Session Summary")
+            logger.info("[IXApproach] ═══════════════════════════════════════════")
+            logger.info("[IXApproach] Total profiles processed: %d", len(profile_results))
+            logger.info("[IXApproach] Total uploads this session: %d", total_successful_uploads)
+
+            final_limit_status = self._state_manager.check_daily_limit(
+                user_type=user_type,
+                limit=daily_limit
+            )
+            logger.info("[IXApproach] Global daily uploads: %d", final_limit_status['current_count'])
+
+            for idx, pr in enumerate(profile_results, 1):
+                logger.info("[IXApproach]   %d. %s: %d upload(s)",
+                           idx, pr['profile_name'], pr['uploads'])
+
+            logger.info("[IXApproach] ═══════════════════════════════════════════")
+
+            result.creators_processed = total_successful_uploads
+            result.success = True
+
+        except Exception as e:
+            logger.error("[IXApproach] Multi-profile workflow error: %s", str(e))
+            result.add_error(str(e))
+
+        return result
+
+    def _process_single_profile(self, profile_id: int, profile_name: str,
+                                 client, user_type: str, daily_limit: int) -> int:
+        """
+        Process a single profile completely.
+
+        Args:
+            profile_id: Profile ID to process
+            profile_name: Profile name
+            client: ixBrowser API client
+            user_type: User type (basic/pro)
+            daily_limit: Daily upload limit
+
+        Returns:
+            Number of successful uploads for this profile
+        """
+        upload_count = 0
+
+        try:
+            # Create browser launcher
+            launcher = BrowserLauncher(client)
+
             # Step 1: Launch Profile via API
             logger.info("[IXApproach] ═══════════════════════════════════════════")
             logger.info("[IXApproach] STEP 1: Launch Profile")
             logger.info("[IXApproach] ═══════════════════════════════════════════")
 
-            # Launch profile with no custom args (clean opening)
-            if not launcher.launch_profile(profile_id, startup_args=[]):
-                result.add_error(f"Failed to launch profile {profile_id}")
-                return result
+            # Open profile using ProfileManager
+            if not self._profile_manager.open_profile(launcher):
+                logger.error("[IXApproach] Failed to open profile: %s", profile_name)
+                return 0
 
-            logger.info("[IXApproach] ✓ Profile launched successfully!")
-
-            # Step 2: Attach Selenium
-            logger.info("[IXApproach] ═══════════════════════════════════════════")
-            logger.info("[IXApproach] STEP 2: Attach Selenium WebDriver")
-            logger.info("[IXApproach] ═══════════════════════════════════════════")
-
-            if not launcher.attach_selenium():
-                result.add_error("Failed to attach Selenium WebDriver")
-                return result
-
-            driver = launcher.get_driver()
+            # Get driver from ProfileManager
+            driver = self._profile_manager.get_driver()
             if not driver:
-                result.add_error("Selenium driver not available")
-                return result
+                logger.error("[IXApproach] Driver not available")
+                self._profile_manager.close_profile()
+                return 0
 
-            logger.info("[IXApproach] ✓ Selenium attached successfully!")
+            logger.info("[IXApproach] ✓ Profile opened and Selenium attached!")
 
             # IMPORTANT: Bring browser window to FRONT (always visible) - OS-LEVEL
             bring_browser_to_front(driver)
@@ -534,7 +698,8 @@ class IXBrowserApproach(BaseApproach):
                         base_path=profile_folder,
                         state_manager=self._state_manager
                     )
-                    self._folder_queue.initialize_queue()
+                    # Force reset for each new profile (fresh start)
+                    self._folder_queue.initialize_queue(force_reset=True)
 
                     # Phase 2: Detect total folders (for tracking/logging only)
                     all_folders = self._folder_queue.get_all_folders()
@@ -740,9 +905,9 @@ class IXBrowserApproach(BaseApproach):
                     successful = sum(1 for r in upload_results if r['success'])
                     failed = sum(1 for r in upload_results if not r['success'])
 
-                    # Display upload summary
+                    # Display upload summary for this profile
                     logger.info("[IXApproach] ═══════════════════════════════════════════")
-                    logger.info("[IXApproach] Upload Summary (This Run)")
+                    logger.info("[IXApproach] Profile Upload Summary: %s", profile_name)
                     logger.info("[IXApproach] ═══════════════════════════════════════════")
                     logger.info("[IXApproach] Total uploads attempted: %d", len(upload_results))
                     logger.info("[IXApproach] Successful: %d", successful)
@@ -753,39 +918,31 @@ class IXBrowserApproach(BaseApproach):
                     logger.info("[IXApproach]   Cycle: #%d", queue_status['cycle'])
                     logger.info("[IXApproach] ═══════════════════════════════════════════")
 
-                    # Update result with upload stats
-                    result.creators_processed = successful
-
-                    if failed > 0:
-                        result.add_error(f"{failed} upload(s) failed")
+                    # Track upload count for this profile
+                    upload_count = successful
 
             except Exception as e:
                 logger.error("[IXApproach] Video upload failed: %s", str(e))
-                result.add_error(f"Upload failed: {str(e)}")
                 # Stop network monitor on error
                 if self._network_monitor:
                     self._network_monitor.stop_monitoring()
 
-            # Create context
-            self._current_context = IXAutomationContext(
-                profile_id=profile_id,
-                launcher=launcher,
-                login_manager=None  # Not using Facebook login management
-            )
-
-            # Step 6: Workflow Complete
-            logger.info("[IXApproach] ═══════════════════════════════════════════")
-            logger.info("[IXApproach] STEP 6: Workflow Complete")
-            logger.info("[IXApproach] ═══════════════════════════════════════════")
-            logger.info("[IXApproach] ✓ Profile remains open")
-            logger.info("[IXApproach] ✓ Browser session active")
-            logger.info("[IXApproach] User can continue working in the browser")
-
         except Exception as e:
-            logger.error("[IXApproach] Workflow error: %s", str(e))
-            result.add_error(str(e))
+            logger.error("[IXApproach] Profile processing error: %s", str(e))
 
-        return result
+        finally:
+            # IMPORTANT: Close profile after processing
+            logger.info("[IXApproach] ═══════════════════════════════════════════")
+            logger.info("[IXApproach] Closing Profile: %s", profile_name)
+            logger.info("[IXApproach] ═══════════════════════════════════════════")
+
+            try:
+                self._profile_manager.close_profile()
+                logger.info("[IXApproach] ✓ Profile closed successfully")
+            except Exception as e:
+                logger.error("[IXApproach] Failed to close profile: %s", str(e))
+
+        return upload_count
 
     def _run_upload_workflow(
         self,

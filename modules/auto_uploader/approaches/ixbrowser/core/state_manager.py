@@ -556,3 +556,45 @@ class StateManager:
             result['message'] = f'Daily usage: {current_count}/{limit} bookmarks ({remaining} remaining)'
 
         return result
+
+    # ═══════════════════════════════════════════════════════════
+    # Multi-Profile State Management
+    # ═══════════════════════════════════════════════════════════
+
+    def load_profile_state(self) -> Dict[str, Any]:
+        """
+        Load multi-profile state.
+
+        Returns:
+            Dict with profile state: {current_profile_index, total_profiles, last_updated}
+        """
+        try:
+            state = self.load_state()
+
+            if 'profile_state' not in state:
+                return {}
+
+            return state['profile_state']
+
+        except Exception as e:
+            logger.error("[StateManager] Failed to load profile state: %s", str(e))
+            return {}
+
+    def save_profile_state(self, profile_state: Dict[str, Any]):
+        """
+        Save multi-profile state.
+
+        Args:
+            profile_state: Profile state to save
+        """
+        try:
+            state = self.load_state()
+            state['profile_state'] = profile_state
+            state['profile_state']['last_updated'] = time.strftime("%Y-%m-%d %H:%M:%S")
+            self.save_state(state)
+
+            logger.debug("[StateManager] Saved profile state: index %d",
+                        profile_state.get('current_profile_index', 0))
+
+        except Exception as e:
+            logger.error("[StateManager] Failed to save profile state: %s", str(e))

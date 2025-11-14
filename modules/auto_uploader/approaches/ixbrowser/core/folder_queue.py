@@ -252,10 +252,28 @@ class FolderQueueManager:
             return position.get('cycle', 1)
         return 1
 
-    def initialize_queue(self):
+    def reset_queue(self):
+        """
+        Reset queue state to initial position.
+        Call this when switching to a new profile.
+        """
+        if self.state_manager:
+            logger.info("[FolderQueue] Resetting queue state")
+            self.state_manager.update_queue_position(
+                folder_index=0,
+                folder_path=None,
+                total_folders=0,
+                cycle=1
+            )
+            logger.debug("[FolderQueue] ✓ Queue state reset")
+
+    def initialize_queue(self, force_reset: bool = False):
         """
         Initialize queue with all folders.
         Call this on first run to set up state.
+
+        Args:
+            force_reset: Force reset even if already initialized (for profile switching)
         """
         folders = self.get_all_folders()
 
@@ -267,8 +285,8 @@ class FolderQueueManager:
             # Check if already initialized
             position = self.state_manager.get_current_position()
 
-            if position.get('folder_path') is None:
-                # First time initialization
+            if position.get('folder_path') is None or force_reset:
+                # First time initialization OR forced reset
                 logger.info("[FolderQueue] Initializing queue with %d folders", len(folders))
 
                 self.state_manager.update_queue_position(
@@ -281,7 +299,7 @@ class FolderQueueManager:
                 logger.info("[FolderQueue] ✓ Queue initialized at folder #1: %s",
                            os.path.basename(folders[0]))
             else:
-                logger.debug("[FolderQueue] Queue already initialized")
+                logger.debug("[FolderQueue] Queue already initialized (resuming from previous state)")
 
     def get_queue_status(self) -> Dict[str, any]:
         """

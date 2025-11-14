@@ -794,6 +794,11 @@ class IXBrowserApproach(BaseApproach):
                     logger.info("[IXApproach] Press Ctrl+C to stop bot (state will be saved)")
                     logger.info("[IXApproach] ")
 
+                    # Track if we found any videos in current cycle (to detect empty profile)
+                    starting_cycle = self._folder_queue.get_cycle_count()
+                    folders_checked_in_cycle = 0
+                    total_folders = len(all_folders)
+
                     # Phase 2: Process folders one at a time (unlimited - no limit)
                     # Bot will continue until user stops it or all folders are processed
                     while True:
@@ -829,7 +834,25 @@ class IXBrowserApproach(BaseApproach):
                             # Mark folder complete and move to next
                             self._folder_queue.mark_current_folder_complete()
                             self._folder_queue.move_to_next_folder()
+
+                            # Track empty folders
+                            folders_checked_in_cycle += 1
+
+                            # Check if we've gone through ALL folders without finding videos
+                            if folders_checked_in_cycle >= total_folders:
+                                logger.info("[IXApproach] ═══════════════════════════════════════════")
+                                logger.info("[IXApproach] Profile Complete - No Videos Found")
+                                logger.info("[IXApproach] ═══════════════════════════════════════════")
+                                logger.info("[IXApproach] Checked all %d folders", total_folders)
+                                logger.info("[IXApproach] No videos remaining in any folder")
+                                logger.info("[IXApproach] This profile is complete!")
+                                logger.info("[IXApproach] ═══════════════════════════════════════════")
+                                break  # Exit upload loop - profile complete
+
                             continue
+
+                        # Reset counter - we found videos!
+                        folders_checked_in_cycle = 0
 
                         # Check daily limit BEFORE uploading (for basic users)
                         if user_type.lower() == 'basic':

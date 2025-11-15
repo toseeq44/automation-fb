@@ -491,8 +491,14 @@ class ModernTopBar(QWidget):
         # Try animated HTML logo first (if QWebEngineView available)
         if HAS_WEB_ENGINE and os.path.exists(animated_logo_path):
             self.logo = QWebEngineView()
-            self.logo.setFixedSize(160, 100)  # 2x size for animated logo
+            self.logo.setFixedSize(200, 120)  # Logo size (OneSoul text ke sath)
+
+            # Make background transparent
             self.logo.setStyleSheet("background: transparent;")
+
+            # Set page background to transparent
+            from PyQt5.QtGui import QColor
+            self.logo.page().setBackgroundColor(QColor(0, 0, 0, 0))  # Fully transparent
 
             # Load animated HTML logo
             logo_url = QUrl.fromLocalFile(os.path.abspath(animated_logo_path))

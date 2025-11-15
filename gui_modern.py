@@ -77,7 +77,7 @@ class OneSoulTheme:
     # Size Constants
     SIDEBAR_EXPANDED = 250
     SIDEBAR_COLLAPSED = 60
-    TOPBAR_HEIGHT = 70
+    TOPBAR_HEIGHT = 140  # Increased for logo with OneSoul text
     LOGO_SIZE = 80  # 2x original (was 40)
 
     @staticmethod
@@ -491,7 +491,7 @@ class ModernTopBar(QWidget):
         # Try animated HTML logo first (if QWebEngineView available)
         if HAS_WEB_ENGINE and os.path.exists(animated_logo_path):
             self.logo = QWebEngineView()
-            self.logo.setFixedSize(200, 120)  # Logo size (OneSoul text ke sath)
+            self.logo.setFixedSize(240, 130)  # Logo size with OneSoul text visible
 
             # Make background transparent
             self.logo.setStyleSheet("background: transparent;")

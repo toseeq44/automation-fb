@@ -4,7 +4,15 @@ Main application to launch ContentFlow Pro.
 """
 import sys
 from PyQt5.QtWidgets import QApplication, QMessageBox
-from gui import VideoToolSuiteGUI
+
+# Choose UI version (set USE_MODERN_UI = True for new OneSoul Flow design)
+USE_MODERN_UI = True
+
+if USE_MODERN_UI:
+    from gui_modern import VideoToolSuiteGUI
+else:
+    from gui import VideoToolSuiteGUI
+
 from modules.logging import get_logger
 from modules.config import get_config
 from modules.license import LicenseManager

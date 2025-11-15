@@ -5,6 +5,13 @@ Run this to see the new modern UI design
 """
 
 import sys
+import os
+
+# Add current directory to Python path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
+
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import Qt
 from components.main_window import OneSoulFlowWindow

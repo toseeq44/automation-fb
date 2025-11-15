@@ -1,5 +1,6 @@
 yt-dlp>=2024.3.10
 PyQt5>=5.15.9
+PyQtWebEngine>=5.15.0  # For animated OneSoul Flow logo (optional)
 requests>=2.31.0
 google-api-python-client>=2.0.0
 instaloader>=4.9.0

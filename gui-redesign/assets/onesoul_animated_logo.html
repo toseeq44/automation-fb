@@ -166,7 +166,7 @@
             <circle cx="100" cy="50" r="3" fill="#ffd700" filter="url(#goldenGlow)"/>
             <circle cx="170" cy="50" r="4" fill="#ffd700" filter="url(#goldenGlow)"/>
 
-            <!-- "ONESOUL" Text -->
+            <!-- "ONESOUL" Text - Crisp HD without shadow -->
             <text x="100" y="110"
                 text-anchor="middle"
                 fill="#ffd700"
@@ -174,18 +174,15 @@
                 font-size="22"
                 font-weight="900"
                 letter-spacing="6"
-                filter="url(#goldenGlow)">
+                style="text-rendering: geometricPrecision;">
                 ONESOUL
             </text>
 
-            <!-- Subtle overall glow animation -->
+            <!-- Crisp rendering styles -->
             <style>
-                @keyframes logoGlow {
-                    0%, 100% { opacity: 0.9; }
-                    50% { opacity: 1; }
-                }
                 svg {
-                    animation: logoGlow 3s ease-in-out infinite;
+                    shape-rendering: geometricPrecision;
+                    text-rendering: geometricPrecision;
                 }
             </style>
         </svg>

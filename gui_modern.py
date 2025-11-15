@@ -77,7 +77,7 @@ class OneSoulTheme:
     # Size Constants
     SIDEBAR_EXPANDED = 250
     SIDEBAR_COLLAPSED = 60
-    TOPBAR_HEIGHT = 140  # Increased for logo with OneSoul text
+    TOPBAR_HEIGHT = 100  # Optimized for crisp logo with OneSoul text
     LOGO_SIZE = 80  # 2x original (was 40)
 
     @staticmethod
@@ -573,13 +573,21 @@ class ModernTopBar(QWidget):
 # ==================== 3D CONTENT WRAPPER ====================
 
 class Content3DWrapper(QWidget):
-    """Wraps module content in 3D card with depth"""
+    """Wraps module content in 3D card with depth and scrolling"""
 
     def __init__(self, content_widget, parent=None):
         super().__init__(parent)
 
         layout = QVBoxLayout()
         layout.setContentsMargins(20, 20, 20, 20)
+
+        # Scroll area for content (prevents overlap)
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setFrameShape(QScrollArea.NoFrame)
+        scroll_area.setStyleSheet("QScrollArea { background: transparent; border: none; }")
 
         # Card container with 3D effect
         card = QWidget()
@@ -601,11 +609,14 @@ class Content3DWrapper(QWidget):
         card.setGraphicsEffect(shadow)
 
         card_layout = QVBoxLayout()
-        card_layout.setContentsMargins(0, 0, 0, 0)
+        card_layout.setContentsMargins(15, 15, 15, 15)
         card_layout.addWidget(content_widget)
         card.setLayout(card_layout)
 
-        layout.addWidget(card)
+        # Add card to scroll area
+        scroll_area.setWidget(card)
+
+        layout.addWidget(scroll_area)
         self.setLayout(layout)
 
 

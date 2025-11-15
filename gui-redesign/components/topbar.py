@@ -4,7 +4,7 @@ Header with logo (left) and user info (right)
 """
 
 from PyQt5.QtWidgets import (
-    QWidget, QHBoxLayout, QLabel, QPushButton,
+    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
     QSpacerItem, QSizePolicy
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QSize

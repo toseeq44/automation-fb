@@ -77,7 +77,7 @@ class OneSoulTheme:
     # Size Constants
     SIDEBAR_EXPANDED = 250
     SIDEBAR_COLLAPSED = 60
-    TOPBAR_HEIGHT = 100  # Optimized for crisp logo with OneSoul text
+    TOPBAR_HEIGHT = 120  # Height for logo area with OneSoul text visible
     LOGO_SIZE = 80  # 2x original (was 40)
 
     @staticmethod
@@ -482,7 +482,7 @@ class ModernTopBar(QWidget):
         self.setFixedHeight(OneSoulTheme.TOPBAR_HEIGHT)
 
         layout = QHBoxLayout()
-        layout.setContentsMargins(20, 10, 20, 10)
+        layout.setContentsMargins(20, 5, 20, 5)  # Reduced vertical margins for compact look
 
         # Left: ANIMATED Logo (2x size, no text)
         animated_logo_path = os.path.join("gui-redesign", "assets", "onesoul_animated_logo.html")
@@ -491,7 +491,7 @@ class ModernTopBar(QWidget):
         # Try animated HTML logo first (if QWebEngineView available)
         if HAS_WEB_ENGINE and os.path.exists(animated_logo_path):
             self.logo = QWebEngineView()
-            self.logo.setFixedSize(240, 130)  # Logo size with OneSoul text visible
+            self.logo.setFixedSize(240, 145)  # Increased height for OneSoul text visibility
 
             # Make background transparent
             self.logo.setStyleSheet("background: transparent;")
@@ -562,11 +562,11 @@ class ModernTopBar(QWidget):
         self.license_label.setStyleSheet(f"""
             color: {color};
             font-weight: bold;
-            font-size: 13px;
-            padding: 8px 15px;
+            font-size: 12px;
+            padding: 6px 28px;
             background: {OneSoulTheme.BG_ELEVATED};
             border: 1px solid {color};
-            border-radius: 6px;
+            border-radius: 5px;
         """)
 
 

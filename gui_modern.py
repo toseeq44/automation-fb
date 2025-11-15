@@ -482,7 +482,7 @@ class ModernTopBar(QWidget):
         if os.path.exists(logo_path):
             self.logo = QSvgWidget(logo_path)
             # 2x original size (was 60x40, now 120x80)
-            self.logo.setFixedSize(OneSoulTheme.LOGO_SIZE * 1.5, OneSoulTheme.LOGO_SIZE)
+            self.logo.setFixedSize(int(OneSoulTheme.LOGO_SIZE * 1.5), OneSoulTheme.LOGO_SIZE)
             layout.addWidget(self.logo)
         else:
             # Fallback text logo if SVG not found

@@ -9,10 +9,17 @@ from PyQt5.QtWidgets import (
     QPushButton, QStackedWidget, QSpacerItem, QSizePolicy, QScrollArea,
     QGraphicsDropShadowEffect, QApplication
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve, QTimer, QSize
+from PyQt5.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve, QTimer, QSize, QUrl
 from PyQt5.QtGui import QFont, QColor
 from PyQt5.QtSvg import QSvgWidget
 import os
+
+# Try to import QWebEngineView for animated logo
+try:
+    from PyQt5.QtWebEngineWidgets import QWebEngineView
+    HAS_WEB_ENGINE = True
+except ImportError:
+    HAS_WEB_ENGINE = False
 
 # Import existing module pages
 from modules.link_grabber.gui import LinkGrabberPage
@@ -477,15 +484,28 @@ class ModernTopBar(QWidget):
         layout = QHBoxLayout()
         layout.setContentsMargins(20, 10, 20, 10)
 
-        # Left: LARGE Logo ONLY (2x size, no text)
-        logo_path = os.path.join("gui-redesign", "assets", "onesoul_logo.svg")
-        if os.path.exists(logo_path):
-            self.logo = QSvgWidget(logo_path)
-            # 2x original size (was 60x40, now 120x80)
-            self.logo.setFixedSize(int(OneSoulTheme.LOGO_SIZE * 1.5), OneSoulTheme.LOGO_SIZE)
+        # Left: ANIMATED Logo (2x size, no text)
+        animated_logo_path = os.path.join("gui-redesign", "assets", "onesoul_animated_logo.html")
+        static_logo_path = os.path.join("gui-redesign", "assets", "onesoul_logo.svg")
+
+        # Try animated HTML logo first (if QWebEngineView available)
+        if HAS_WEB_ENGINE and os.path.exists(animated_logo_path):
+            self.logo = QWebEngineView()
+            self.logo.setFixedSize(160, 100)  # 2x size for animated logo
+            self.logo.setStyleSheet("background: transparent;")
+
+            # Load animated HTML logo
+            logo_url = QUrl.fromLocalFile(os.path.abspath(animated_logo_path))
+            self.logo.setUrl(logo_url)
+            layout.addWidget(self.logo)
+
+        elif os.path.exists(static_logo_path):
+            # Fallback to static SVG
+            self.logo = QSvgWidget(static_logo_path)
+            self.logo.setFixedSize(120, 80)  # 2x original (was 60x40)
             layout.addWidget(self.logo)
         else:
-            # Fallback text logo if SVG not found
+            # Final fallback: text logo
             logo_text = QLabel("◈ ONESOUL")
             logo_text.setStyleSheet(f"""
                 color: {OneSoulTheme.TEXT_GOLD};

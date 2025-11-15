@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        html, body {
+            width: 100%;
+            height: 100%;
+            background: transparent;
+            overflow: hidden;
+        }
+        .logo-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            padding-left: 10px;
+        }
+        svg {
+            width: 100%;
+            height: 100%;
+            max-width: 160px;
+            max-height: 100px;
+        }
+        .infinity-svg {
+            filter: drop-shadow(0 0 25px rgba(0, 212, 255, 0.35));
+        }
+        .infinity-path-top,
+        .infinity-path-bottom {
+            fill: none;
+            stroke-width: 8;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            filter: drop-shadow(0 0 18px rgba(0, 212, 255, 0.45));
+        }
+        .infinity-path-top {
+            stroke: #00d4ff;
+        }
+        .infinity-path-bottom {
+            stroke: #ff00ff;
+        }
+        .infinity-highlight {
+            fill: none;
+            stroke: #ffd700;
+            stroke-width: 2;
+            stroke-linecap: round;
+            opacity: 0.6;
+            stroke-dasharray: 55 35;
+            animation: highlightWave 3.2s ease-in-out infinite;
+        }
+        .infinity-highlight.highlight-right {
+            animation-delay: 1.6s;
+            animation-direction: reverse;
+        }
+        .infinity-node {
+            fill: #ffd700;
+            stroke: rgba(0, 212, 255, 0.6);
+            stroke-width: 1.5;
+            filter: drop-shadow(0 0 10px rgba(0, 212, 255, 0.7));
+        }
+        .flow-wordmark {
+            fill: #ffd700;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: 6px;
+            text-transform: uppercase;
+            text-anchor: middle;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            filter: drop-shadow(0 0 18px rgba(255, 215, 0, 0.45));
+            dominant-baseline: middle;
+        }
+        @keyframes highlightWave {
+            0% { stroke-dashoffset: 0; opacity: 0.3; }
+            50% { opacity: 0.9; }
+            100% { stroke-dashoffset: -90; opacity: 0.3; }
+        }
+    </style>
+</head>
+<body>
+    <div class="logo-container">
+        <svg xmlns="http://www.w3.org/2000/svg" class="infinity-svg" viewBox="0 0 180 120" preserveAspectRatio="xMidYMid meet">
+            <path class="infinity-path-top" d="M20 45C20 23 40 15 58 25C70 32 78 40 90 45C102 40 110 32 122 25C140 15 160 23 160 45"/>
+            <path class="infinity-path-bottom" d="M20 45C20 67 40 75 58 65C70 58 78 50 90 45C102 50 110 58 122 65C140 75 160 67 160 45"/>
+            <path class="infinity-highlight highlight-left" d="M32 37C44 27 64 30 78 40"/>
+            <path class="infinity-highlight highlight-right" d="M148 37C136 27 116 30 102 40"/>
+            <circle class="infinity-node" cx="20" cy="45" r="4"/>
+            <circle class="infinity-node" cx="90" cy="45" r="3"/>
+            <circle class="infinity-node" cx="160" cy="45" r="4"/>
+            <text class="flow-wordmark" x="90" y="108">ONESOUL</text>
+        </svg>
+    </div>
+</body>
+</html>

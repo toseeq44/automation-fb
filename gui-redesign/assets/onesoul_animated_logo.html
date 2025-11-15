@@ -1,7 +1,9 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OneSoul Flow - Professional Animated Logo</title>
     <style>
         * {
             margin: 0;
@@ -19,80 +21,173 @@
             height: 100%;
             display: flex;
             align-items: center;
-            justify-content: flex-start;
-            padding-left: 10px;
+            justify-content: center;
         }
         svg {
             width: 100%;
             height: 100%;
-            max-width: 160px;
-            max-height: 100px;
-        }
-        .infinity-svg {
-            filter: drop-shadow(0 0 25px rgba(0, 212, 255, 0.35));
-        }
-        .infinity-path-top,
-        .infinity-path-bottom {
-            fill: none;
-            stroke-width: 8;
-            stroke-linecap: round;
-            stroke-linejoin: round;
-            filter: drop-shadow(0 0 18px rgba(0, 212, 255, 0.45));
-        }
-        .infinity-path-top {
-            stroke: #00d4ff;
-        }
-        .infinity-path-bottom {
-            stroke: #ff00ff;
-        }
-        .infinity-highlight {
-            fill: none;
-            stroke: #ffd700;
-            stroke-width: 2;
-            stroke-linecap: round;
-            opacity: 0.6;
-            stroke-dasharray: 55 35;
-            animation: highlightWave 3.2s ease-in-out infinite;
-        }
-        .infinity-highlight.highlight-right {
-            animation-delay: 1.6s;
-            animation-direction: reverse;
-        }
-        .infinity-node {
-            fill: #ffd700;
-            stroke: rgba(0, 212, 255, 0.6);
-            stroke-width: 1.5;
-            filter: drop-shadow(0 0 10px rgba(0, 212, 255, 0.7));
-        }
-        .flow-wordmark {
-            fill: #ffd700;
-            font-size: 24px;
-            font-weight: 700;
-            letter-spacing: 6px;
-            text-transform: uppercase;
-            text-anchor: middle;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            filter: drop-shadow(0 0 18px rgba(255, 215, 0, 0.45));
-            dominant-baseline: middle;
-        }
-        @keyframes highlightWave {
-            0% { stroke-dashoffset: 0; opacity: 0.3; }
-            50% { opacity: 0.9; }
-            100% { stroke-dashoffset: -90; opacity: 0.3; }
+            max-width: 200px;
+            max-height: 120px;
         }
     </style>
 </head>
 <body>
     <div class="logo-container">
-        <svg xmlns="http://www.w3.org/2000/svg" class="infinity-svg" viewBox="0 0 180 120" preserveAspectRatio="xMidYMid meet">
-            <path class="infinity-path-top" d="M20 45C20 23 40 15 58 25C70 32 78 40 90 45C102 40 110 32 122 25C140 15 160 23 160 45"/>
-            <path class="infinity-path-bottom" d="M20 45C20 67 40 75 58 65C70 58 78 50 90 45C102 50 110 58 122 65C140 75 160 67 160 45"/>
-            <path class="infinity-highlight highlight-left" d="M32 37C44 27 64 30 78 40"/>
-            <path class="infinity-highlight highlight-right" d="M148 37C136 27 116 30 102 40"/>
-            <circle class="infinity-node" cx="20" cy="45" r="4"/>
-            <circle class="infinity-node" cx="90" cy="45" r="3"/>
-            <circle class="infinity-node" cx="160" cy="45" r="4"/>
-            <text class="flow-wordmark" x="90" y="108">ONESOUL</text>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 130" preserveAspectRatio="xMidYMid meet">
+            <!-- Gradients and Filters -->
+            <defs>
+                <!-- Cyan Gradient for Top Arc -->
+                <linearGradient id="cyanGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" style="stop-color:#00d4ff;stop-opacity:1" />
+                    <stop offset="50%" style="stop-color:#00ffff;stop-opacity:1" />
+                    <stop offset="100%" style="stop-color:#00d4ff;stop-opacity:1" />
+                </linearGradient>
+
+                <!-- Magenta Gradient for Bottom Arc -->
+                <linearGradient id="magentaGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" style="stop-color:#ff00ff;stop-opacity:1" />
+                    <stop offset="50%" style="stop-color:#ff00aa;stop-opacity:1" />
+                    <stop offset="100%" style="stop-color:#ff00ff;stop-opacity:1" />
+                </linearGradient>
+
+                <!-- Cyan Glow Filter -->
+                <filter id="cyanGlow" x="-50%" y="-50%" width="200%" height="200%">
+                    <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="blur"/>
+                    <feFlood flood-color="#00d4ff" flood-opacity="0.7"/>
+                    <feComposite in2="blur" operator="in"/>
+                    <feMerge>
+                        <feMergeNode/>
+                        <feMergeNode in="SourceGraphic"/>
+                    </feMerge>
+                </filter>
+
+                <!-- Magenta Glow Filter -->
+                <filter id="magentaGlow" x="-50%" y="-50%" width="200%" height="200%">
+                    <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="blur"/>
+                    <feFlood flood-color="#ff00ff" flood-opacity="0.7"/>
+                    <feComposite in2="blur" operator="in"/>
+                    <feMerge>
+                        <feMergeNode/>
+                        <feMergeNode in="SourceGraphic"/>
+                    </feMerge>
+                </filter>
+
+                <!-- Golden Glow Filter -->
+                <filter id="goldenGlow" x="-100%" y="-100%" width="300%" height="300%">
+                    <feGaussianBlur in="SourceGraphic" stdDeviation="3" result="blur"/>
+                    <feFlood flood-color="#ffd700" flood-opacity="0.9"/>
+                    <feComposite in2="blur" operator="in"/>
+                    <feMerge>
+                        <feMergeNode/>
+                        <feMergeNode in="SourceGraphic"/>
+                    </feMerge>
+                </filter>
+
+                <!-- Infinity Path for Animation (invisible, just for motion) -->
+                <path id="infinityPath" d="M 30,50
+                    C 30,25 45,15 60,25
+                    C 75,35 85,45 100,50
+                    C 115,45 125,35 140,25
+                    C 155,15 170,25 170,50
+                    C 170,75 155,85 140,75
+                    C 125,65 115,55 100,50
+                    C 85,55 75,65 60,75
+                    C 45,85 30,75 30,50 Z"
+                    fill="none" stroke="none"/>
+            </defs>
+
+            <!-- Top Arc (Cyan) -->
+            <path d="M 30,50 C 30,25 45,15 60,25 C 75,35 85,45 100,50 C 115,45 125,35 140,25 C 155,15 170,25 170,50"
+                fill="none"
+                stroke="url(#cyanGradient)"
+                stroke-width="9"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                filter="url(#cyanGlow)">
+            </path>
+
+            <!-- Bottom Arc (Magenta) -->
+            <path d="M 30,50 C 30,75 45,85 60,75 C 75,65 85,55 100,50 C 115,55 125,65 140,75 C 155,85 170,75 170,50"
+                fill="none"
+                stroke="url(#magentaGradient)"
+                stroke-width="9"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                filter="url(#magentaGlow)">
+            </path>
+
+            <!-- Animated Golden Dot 1 (moves clockwise) -->
+            <circle r="5" fill="#ffd700" filter="url(#goldenGlow)">
+                <animateMotion
+                    dur="4s"
+                    repeatCount="indefinite"
+                    path="M 30,50
+                        C 30,25 45,15 60,25
+                        C 75,35 85,45 100,50
+                        C 115,45 125,35 140,25
+                        C 155,15 170,25 170,50
+                        C 170,75 155,85 140,75
+                        C 125,65 115,55 100,50
+                        C 85,55 75,65 60,75
+                        C 45,85 30,75 30,50 Z">
+                </animateMotion>
+                <!-- Pulsing animation -->
+                <animate attributeName="r"
+                    values="4;6;4"
+                    dur="1s"
+                    repeatCount="indefinite"/>
+            </circle>
+
+            <!-- Animated Golden Dot 2 (moves counter-clockwise, starts from opposite side) -->
+            <circle r="5" fill="#ffd700" filter="url(#goldenGlow)">
+                <animateMotion
+                    dur="4s"
+                    repeatCount="indefinite"
+                    path="M 170,50
+                        C 170,75 155,85 140,75
+                        C 125,65 115,55 100,50
+                        C 85,55 75,65 60,75
+                        C 45,85 30,75 30,50
+                        C 30,25 45,15 60,25
+                        C 75,35 85,45 100,50
+                        C 115,45 125,35 140,25
+                        C 155,15 170,25 170,50 Z">
+                </animateMotion>
+                <!-- Pulsing animation with delay -->
+                <animate attributeName="r"
+                    values="4;6;4"
+                    dur="1s"
+                    begin="0.5s"
+                    repeatCount="indefinite"/>
+            </circle>
+
+            <!-- Center Connection Nodes -->
+            <circle cx="30" cy="50" r="4" fill="#ffd700" filter="url(#goldenGlow)"/>
+            <circle cx="100" cy="50" r="3" fill="#ffd700" filter="url(#goldenGlow)"/>
+            <circle cx="170" cy="50" r="4" fill="#ffd700" filter="url(#goldenGlow)"/>
+
+            <!-- "ONESOUL" Text -->
+            <text x="100" y="110"
+                text-anchor="middle"
+                fill="#ffd700"
+                font-family="Arial Black, Arial, sans-serif"
+                font-size="22"
+                font-weight="900"
+                letter-spacing="6"
+                filter="url(#goldenGlow)">
+                ONESOUL
+            </text>
+
+            <!-- Subtle overall glow animation -->
+            <style>
+                @keyframes logoGlow {
+                    0%, 100% { opacity: 0.9; }
+                    50% { opacity: 1; }
+                }
+                svg {
+                    animation: logoGlow 3s ease-in-out infinite;
+                }
+            </style>
         </svg>
     </div>
 </body>

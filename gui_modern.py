@@ -358,7 +358,7 @@ class Modern3DSidebar(QWidget):
             btn.setCursor(Qt.PointingHandCursor)
             btn.setProperty("module_id", module_id)
             btn.setProperty("active", False)
-            btn.setMinimumHeight(50)
+            btn.setMinimumHeight(42)
             btn.clicked.connect(lambda checked, m=module_id: self.select_module(m))
             self.module_buttons[module_id] = btn
             layout.addWidget(btn)
@@ -385,7 +385,7 @@ class Modern3DSidebar(QWidget):
                 border-left: 4px solid transparent;
                 border-radius: 0px;
                 text-align: left;
-                padding: 15px 20px;
+                padding: 10px 15px;
                 font-size: 14px;
                 font-weight: normal;
             }}
@@ -523,11 +523,11 @@ class ModernTopBar(QWidget):
 
         layout.addStretch()
 
-        # Right: License status
+        # Right: License status (aligned to top)
         self.license_label = QLabel()
         self.license_label.setCursor(Qt.PointingHandCursor)
         self.license_label.mousePressEvent = lambda e: self.license_clicked.emit()
-        layout.addWidget(self.license_label)
+        layout.addWidget(self.license_label, alignment=Qt.AlignTop)
 
         self.setLayout(layout)
 
@@ -562,11 +562,11 @@ class ModernTopBar(QWidget):
         self.license_label.setStyleSheet(f"""
             color: {color};
             font-weight: bold;
-            font-size: 12px;
-            padding: 6px 28px;
+            font-size: 11px;
+            padding: 3px 24px;
             background: {OneSoulTheme.BG_ELEVATED};
             border: 1px solid {color};
-            border-radius: 5px;
+            border-radius: 4px;
         """)
 
 

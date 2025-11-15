@@ -10,11 +10,19 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QTimer, QSize
 from PyQt5.QtGui import QFont, QIcon
 
-from .topbar import TopBar
-from .sidebar import Sidebar
-from .content_area import ContentArea
-from ..styles.colors import Colors, Sizes, Fonts, Breakpoints
-from ..styles.stylesheet import StyleSheet
+# Handle imports for both standalone and package use
+try:
+    from .topbar import TopBar
+    from .sidebar import Sidebar
+    from .content_area import ContentArea
+    from ..styles.colors import Colors, Sizes, Fonts, Breakpoints
+    from ..styles.stylesheet import StyleSheet
+except (ImportError, ValueError):
+    from components.topbar import TopBar
+    from components.sidebar import Sidebar
+    from components.content_area import ContentArea
+    from styles.colors import Colors, Sizes, Fonts, Breakpoints
+    from styles.stylesheet import StyleSheet
 
 
 class OneSoulFlowWindow(QMainWindow):

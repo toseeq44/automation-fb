@@ -10,9 +10,15 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, pyqtSignal, QSize
 from PyQt5.QtGui import QPixmap, QFont
 from PyQt5.QtSvg import QSvgWidget
-from ..styles.colors import Colors, Sizes, Fonts
-from ..styles.stylesheet import StyleSheet
 import os
+
+# Handle imports for both standalone and package use
+try:
+    from ..styles.colors import Colors, Sizes, Fonts
+    from ..styles.stylesheet import StyleSheet
+except (ImportError, ValueError):
+    from styles.colors import Colors, Sizes, Fonts
+    from styles.stylesheet import StyleSheet
 
 
 class TopBar(QWidget):

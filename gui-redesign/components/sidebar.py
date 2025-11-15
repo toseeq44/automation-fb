@@ -9,8 +9,14 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve, QSize
 from PyQt5.QtGui import QIcon, QFont
-from ..styles.colors import Colors, Sizes, Fonts
-from ..styles.stylesheet import StyleSheet
+
+# Handle imports for both standalone and package use
+try:
+    from ..styles.colors import Colors, Sizes, Fonts
+    from ..styles.stylesheet import StyleSheet
+except (ImportError, ValueError):
+    from styles.colors import Colors, Sizes, Fonts
+    from styles.stylesheet import StyleSheet
 
 
 class ModuleButton(QPushButton):

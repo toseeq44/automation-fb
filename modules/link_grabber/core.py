@@ -531,7 +531,6 @@ def _method_instaloader(url: str, platform_key: str, cookie_file: str = None) ->
         loader = instaloader.Instaloader(
             quiet=True,
             download_videos=False,
-            save_metadata=False,
             download_pictures=False,
             download_video_thumbnails=False,
             download_geotags=False,

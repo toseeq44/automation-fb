@@ -688,10 +688,10 @@ class IXBrowserApproach(BaseApproach):
 
             except FileNotFoundError as e:
                 logger.error("[IXApproach] %s", str(e))
-                result.add_error(str(e))
+                # Note: Errors logged but profile processing continues
             except Exception as e:
                 logger.error("[IXApproach] Bookmark-folder comparison failed: %s", str(e))
-                result.add_error(f"Comparison failed: {str(e)}")
+                # Note: Errors logged but profile processing continues
 
             # Step 5: Upload Videos to Bookmarks (Phase 2: With Queue & Resume)
             logger.info("[IXApproach] ═══════════════════════════════════════════")
@@ -762,199 +762,199 @@ class IXBrowserApproach(BaseApproach):
                     logger.info("[IXApproach] User Type: %s", user_type.upper())
                     logger.info("[IXApproach] %s", limit_status['message'])
 
-                    # If limit reached for basic users, stop here
+                    # If limit reached for basic users, log warning and skip (don't throw exception)
                     if limit_status['limit_reached']:
                         logger.warning("[IXApproach] ═══════════════════════════════════════════")
-                        logger.warning("[IXApproach] DAILY LIMIT REACHED!")
+                        logger.warning("[IXApproach] DAILY LIMIT REACHED - Skipping Profile")
                         logger.warning("[IXApproach] ═══════════════════════════════════════════")
                         logger.warning("[IXApproach] User: %s", user_type.upper())
                         logger.warning("[IXApproach] Uploaded today: %d bookmarks", limit_status['current_count'])
                         logger.warning("[IXApproach] Daily limit: %d bookmarks", limit_status['limit'])
                         logger.warning("[IXApproach] ")
+                        logger.warning("[IXApproach] Skipping upload processing for this profile.")
                         logger.warning("[IXApproach] Please wait until tomorrow to upload more videos.")
                         logger.warning("[IXApproach] Or upgrade to PRO for unlimited uploads!")
                         logger.warning("[IXApproach] ═══════════════════════════════════════════")
-
-                        # Stop processing
-                        result.add_error("Daily limit reached for basic user")
-                        raise Exception("Daily limit reached")
-
-                    logger.info("[IXApproach] ═══════════════════════════════════════════")
-
-                    # Phase 2: Initialize upload helper with Phase 2 components
-                    upload_helper = VideoUploadHelper(
-                        driver,
-                        state_manager=self._state_manager,
-                        network_monitor=self._network_monitor
-                    )
-
-                    # Phase 2: Start network monitoring
-                    self._network_monitor.start_monitoring()
-                    logger.info("[IXApproach] ✓ Network monitoring started")
-
-                    upload_results = []
-                    total_uploads_this_run = 0
-
-                    logger.info("[IXApproach] Starting folder processing...")
-                    logger.info("[IXApproach] User type: %s", user_type.upper())
-                    if user_type.lower() == 'pro':
-                        logger.info("[IXApproach] Upload mode: UNLIMITED (Pro user)")
+                        # Note: upload_count stays 0, profile will be closed, multi-profile loop continues
+                        upload_count = 0  # Explicitly set to 0 and skip upload section
                     else:
-                        logger.info("[IXApproach] Upload mode: %d/%d bookmarks today",
-                                   limit_status['current_count'], limit_status['limit'])
-                    logger.info("[IXApproach] Processing one folder at a time")
-                    logger.info("[IXApproach] Press Ctrl+C to stop bot (state will be saved)")
-                    logger.info("[IXApproach] ")
+                        # Limit not reached - proceed with normal upload workflow
+                        logger.info("[IXApproach] ═══════════════════════════════════════════")
 
-                    # Track if we found any videos in current cycle (to detect empty profile)
-                    starting_cycle = self._folder_queue.get_cycle_count()
-                    folders_checked_in_cycle = 0
-                    total_folders = len(all_folders)
+                        # Phase 2: Initialize upload helper with Phase 2 components
+                        upload_helper = VideoUploadHelper(
+                            driver,
+                            state_manager=self._state_manager,
+                            network_monitor=self._network_monitor
+                        )
 
-                    # Phase 2: Process folders one at a time (unlimited - no limit)
-                    # Bot will continue until user stops it or all folders are processed
-                    while True:
-                        # Get current folder from queue
-                        current_folder = self._folder_queue.get_current_folder()
-                        if not current_folder:
-                            logger.warning("[IXApproach] No folders in queue, stopping")
-                            break
+                        # Phase 2: Start network monitoring
+                        self._network_monitor.start_monitoring()
+                        logger.info("[IXApproach] ✓ Network monitoring started")
 
-                        folder_name = os.path.basename(current_folder)
+                        upload_results = []
+                        total_uploads_this_run = 0
 
-                        # Check if this folder has a matching bookmark
-                        matching_bookmark = None
-                        for bookmark in facebook_bookmarks:
-                            if bookmark['title'] == folder_name:
-                                matching_bookmark = bookmark
+                        logger.info("[IXApproach] Starting folder processing...")
+                        logger.info("[IXApproach] User type: %s", user_type.upper())
+                        if user_type.lower() == 'pro':
+                            logger.info("[IXApproach] Upload mode: UNLIMITED (Pro user)")
+                        else:
+                            logger.info("[IXApproach] Upload mode: %d/%d bookmarks today",
+                                       limit_status['current_count'], limit_status['limit'])
+                        logger.info("[IXApproach] Processing one folder at a time")
+                        logger.info("[IXApproach] Press Ctrl+C to stop bot (state will be saved)")
+                        logger.info("[IXApproach] ")
+
+                        # Track if we found any videos in current cycle (to detect empty profile)
+                        starting_cycle = self._folder_queue.get_cycle_count()
+                        folders_checked_in_cycle = 0
+                        total_folders = len(all_folders)
+
+                        # Phase 2: Process folders one at a time (unlimited - no limit)
+                        # Bot will continue until user stops it or all folders are processed
+                        while True:
+                            # Get current folder from queue
+                            current_folder = self._folder_queue.get_current_folder()
+                            if not current_folder:
+                                logger.warning("[IXApproach] No folders in queue, stopping")
                                 break
 
-                        if not matching_bookmark:
-                            logger.info("[IXApproach] Folder '%s' has no bookmark, skipping", folder_name)
-                            self._folder_queue.move_to_next_folder()
-                            continue
+                            folder_name = os.path.basename(current_folder)
 
-                        # Get videos in folder (excludes 'uploaded videos' subfolder)
-                        videos = self._folder_queue.get_videos_in_folder(current_folder)
+                            # Check if this folder has a matching bookmark
+                            matching_bookmark = None
+                            for bookmark in facebook_bookmarks:
+                                if bookmark['title'] == folder_name:
+                                    matching_bookmark = bookmark
+                                    break
 
-                        if not videos:
-                            logger.info("[IXApproach] ───────────────────────────────────────────────")
-                            logger.info("[IXApproach] Folder: %s", folder_name)
-                            logger.info("[IXApproach] Status: No videos remaining (all uploaded or empty)")
-                            logger.info("[IXApproach] ───────────────────────────────────────────────")
+                            if not matching_bookmark:
+                                logger.info("[IXApproach] Folder '%s' has no bookmark, skipping", folder_name)
+                                self._folder_queue.move_to_next_folder()
+                                continue
 
-                            # Mark folder complete and move to next
-                            self._folder_queue.mark_current_folder_complete()
-                            self._folder_queue.move_to_next_folder()
+                            # Get videos in folder (excludes 'uploaded videos' subfolder)
+                            videos = self._folder_queue.get_videos_in_folder(current_folder)
 
-                            # Track empty folders
-                            folders_checked_in_cycle += 1
+                            if not videos:
+                                logger.info("[IXApproach] ───────────────────────────────────────────────")
+                                logger.info("[IXApproach] Folder: %s", folder_name)
+                                logger.info("[IXApproach] Status: No videos remaining (all uploaded or empty)")
+                                logger.info("[IXApproach] ───────────────────────────────────────────────")
 
-                            # Check if we've gone through ALL folders without finding videos
-                            if folders_checked_in_cycle >= total_folders:
-                                logger.info("[IXApproach] ═══════════════════════════════════════════")
-                                logger.info("[IXApproach] Profile Complete - No Videos Found")
-                                logger.info("[IXApproach] ═══════════════════════════════════════════")
-                                logger.info("[IXApproach] Checked all %d folders", total_folders)
-                                logger.info("[IXApproach] No videos remaining in any folder")
-                                logger.info("[IXApproach] This profile is complete!")
-                                logger.info("[IXApproach] ═══════════════════════════════════════════")
-                                break  # Exit upload loop - profile complete
-
-                            continue
-
-                        # Reset counter - we found videos!
-                        folders_checked_in_cycle = 0
-
-                        # Check daily limit BEFORE uploading (for basic users)
-                        if user_type.lower() == 'basic':
-                            current_limit_check = self._state_manager.check_daily_limit(
-                                user_type=user_type,
-                                limit=daily_limit
-                            )
-
-                            if current_limit_check['limit_reached']:
-                                logger.warning("[IXApproach] ═══════════════════════════════════════════")
-                                logger.warning("[IXApproach] DAILY LIMIT REACHED!")
-                                logger.warning("[IXApproach] ═══════════════════════════════════════════")
-                                logger.warning("[IXApproach] Uploaded today: %d/%d bookmarks",
-                                             current_limit_check['current_count'],
-                                             current_limit_check['limit'])
-                                logger.warning("[IXApproach] Daily limit reached during upload session.")
-                                logger.warning("[IXApproach] Please wait until tomorrow.")
-                                logger.warning("[IXApproach] ═══════════════════════════════════════════")
-                                break  # Exit upload loop
-
-                        # Process this folder
-                        logger.info("[IXApproach] ───────────────────────────────────────────────")
-                        logger.info("[IXApproach] Processing: %s", folder_name)
-                        logger.info("[IXApproach] Videos remaining: %d", len(videos))
-                        logger.info("[IXApproach] Current cycle: #%d", self._folder_queue.get_cycle_count())
-                        if user_type.lower() == 'basic':
-                            logger.info("[IXApproach] Daily usage: %d/%d bookmarks",
-                                       current_limit_check['current_count'],
-                                       current_limit_check['limit'])
-                        logger.info("[IXApproach] ───────────────────────────────────────────────")
-
-                        # Upload video to bookmark (uploads ONE video per call)
-                        success = upload_helper.upload_to_bookmark(matching_bookmark, current_folder)
-
-                        upload_results.append({
-                            'bookmark': folder_name,
-                            'success': success
-                        })
-
-                        total_uploads_this_run += 1
-
-                        if success:
-                            logger.info("[IXApproach] ✓ Upload successful")
-
-                            # Increment daily counter after successful upload
-                            self._state_manager.increment_daily_bookmarks(count=1)
-                            logger.debug("[IXApproach] Daily bookmark counter incremented")
-
-                            # Brief pause between uploads
-                            logger.info("[IXApproach] Waiting 5 seconds before next upload...")
-                            time.sleep(5)
-
-                            # Check if folder has more videos
-                            remaining = self._folder_queue.get_videos_in_folder(current_folder)
-                            if not remaining:
-                                # Folder complete - move to next
-                                logger.info("[IXApproach] ✓ Folder '%s' complete (no videos remaining)", folder_name)
+                                # Mark folder complete and move to next
                                 self._folder_queue.mark_current_folder_complete()
                                 self._folder_queue.move_to_next_folder()
+
+                                # Track empty folders
+                                folders_checked_in_cycle += 1
+
+                                # Check if we've gone through ALL folders without finding videos
+                                if folders_checked_in_cycle >= total_folders:
+                                    logger.info("[IXApproach] ═══════════════════════════════════════════")
+                                    logger.info("[IXApproach] Profile Complete - No Videos Found")
+                                    logger.info("[IXApproach] ═══════════════════════════════════════════")
+                                    logger.info("[IXApproach] Checked all %d folders", total_folders)
+                                    logger.info("[IXApproach] No videos remaining in any folder")
+                                    logger.info("[IXApproach] This profile is complete!")
+                                    logger.info("[IXApproach] ═══════════════════════════════════════════")
+                                    break  # Exit upload loop - profile complete
+
+                                continue
+
+                            # Reset counter - we found videos!
+                            folders_checked_in_cycle = 0
+
+                            # Check daily limit BEFORE uploading (for basic users)
+                            if user_type.lower() == 'basic':
+                                current_limit_check = self._state_manager.check_daily_limit(
+                                    user_type=user_type,
+                                    limit=daily_limit
+                                )
+
+                                if current_limit_check['limit_reached']:
+                                    logger.warning("[IXApproach] ═══════════════════════════════════════════")
+                                    logger.warning("[IXApproach] DAILY LIMIT REACHED!")
+                                    logger.warning("[IXApproach] ═══════════════════════════════════════════")
+                                    logger.warning("[IXApproach] Uploaded today: %d/%d bookmarks",
+                                                 current_limit_check['current_count'],
+                                                 current_limit_check['limit'])
+                                    logger.warning("[IXApproach] Daily limit reached during upload session.")
+                                    logger.warning("[IXApproach] Please wait until tomorrow.")
+                                    logger.warning("[IXApproach] ═══════════════════════════════════════════")
+                                    break  # Exit upload loop
+
+                            # Process this folder
+                            logger.info("[IXApproach] ───────────────────────────────────────────────")
+                            logger.info("[IXApproach] Processing: %s", folder_name)
+                            logger.info("[IXApproach] Videos remaining: %d", len(videos))
+                            logger.info("[IXApproach] Current cycle: #%d", self._folder_queue.get_cycle_count())
+                            if user_type.lower() == 'basic':
+                                logger.info("[IXApproach] Daily usage: %d/%d bookmarks",
+                                           current_limit_check['current_count'],
+                                           current_limit_check['limit'])
+                            logger.info("[IXApproach] ───────────────────────────────────────────────")
+
+                            # Upload video to bookmark (uploads ONE video per call)
+                            success = upload_helper.upload_to_bookmark(matching_bookmark, current_folder)
+
+                            upload_results.append({
+                                'bookmark': folder_name,
+                                'success': success
+                            })
+
+                            total_uploads_this_run += 1
+
+                            if success:
+                                logger.info("[IXApproach] ✓ Upload successful")
+
+                                # Increment daily counter after successful upload
+                                self._state_manager.increment_daily_bookmarks(count=1)
+                                logger.debug("[IXApproach] Daily bookmark counter incremented")
+
+                                # Brief pause between uploads
+                                logger.info("[IXApproach] Waiting 5 seconds before next upload...")
+                                time.sleep(5)
+
+                                # Check if folder has more videos
+                                remaining = self._folder_queue.get_videos_in_folder(current_folder)
+                                if not remaining:
+                                    # Folder complete - move to next
+                                    logger.info("[IXApproach] ✓ Folder '%s' complete (no videos remaining)", folder_name)
+                                    self._folder_queue.mark_current_folder_complete()
+                                    self._folder_queue.move_to_next_folder()
+                                else:
+                                    logger.info("[IXApproach] Folder '%s' has %d video(s) remaining", folder_name, len(remaining))
+                                    # Continue with same folder (will upload next video)
                             else:
-                                logger.info("[IXApproach] Folder '%s' has %d video(s) remaining", folder_name, len(remaining))
-                                # Continue with same folder (will upload next video)
-                        else:
-                            logger.error("[IXApproach] ✗ Upload failed")
-                            # Failed upload (video already deleted by upload_helper after 3 retries)
-                            # Move to next video in same folder
-                            continue
+                                logger.error("[IXApproach] ✗ Upload failed")
+                                # Failed upload (video already deleted by upload_helper after 3 retries)
+                                # Move to next video in same folder
+                                continue
 
-                    # Phase 2: Stop network monitoring
-                    self._network_monitor.stop_monitoring()
+                        # Phase 2: Stop network monitoring
+                        self._network_monitor.stop_monitoring()
 
-                    # Calculate summary statistics
-                    successful = sum(1 for r in upload_results if r['success'])
-                    failed = sum(1 for r in upload_results if not r['success'])
+                        # Calculate summary statistics
+                        successful = sum(1 for r in upload_results if r['success'])
+                        failed = sum(1 for r in upload_results if not r['success'])
 
-                    # Display upload summary for this profile
-                    logger.info("[IXApproach] ═══════════════════════════════════════════")
-                    logger.info("[IXApproach] Profile Upload Summary: %s", profile_name)
-                    logger.info("[IXApproach] ═══════════════════════════════════════════")
-                    logger.info("[IXApproach] Total uploads attempted: %d", len(upload_results))
-                    logger.info("[IXApproach] Successful: %d", successful)
-                    logger.info("[IXApproach] Failed: %d", failed)
-                    logger.info("[IXApproach] Current queue position:")
-                    queue_status = self._folder_queue.get_queue_status()
-                    logger.info("[IXApproach]   Folder: %d/%d", queue_status['current_index'] + 1, queue_status['total_folders'])
-                    logger.info("[IXApproach]   Cycle: #%d", queue_status['cycle'])
-                    logger.info("[IXApproach] ═══════════════════════════════════════════")
+                        # Display upload summary for this profile
+                        logger.info("[IXApproach] ═══════════════════════════════════════════")
+                        logger.info("[IXApproach] Profile Upload Summary: %s", profile_name)
+                        logger.info("[IXApproach] ═══════════════════════════════════════════")
+                        logger.info("[IXApproach] Total uploads attempted: %d", len(upload_results))
+                        logger.info("[IXApproach] Successful: %d", successful)
+                        logger.info("[IXApproach] Failed: %d", failed)
+                        logger.info("[IXApproach] Current queue position:")
+                        queue_status = self._folder_queue.get_queue_status()
+                        logger.info("[IXApproach]   Folder: %d/%d", queue_status['current_index'] + 1, queue_status['total_folders'])
+                        logger.info("[IXApproach]   Cycle: #%d", queue_status['cycle'])
+                        logger.info("[IXApproach] ═══════════════════════════════════════════")
 
-                    # Track upload count for this profile
-                    upload_count = successful
+                        # Track upload count for this profile
+                        upload_count = successful
 
             except Exception as e:
                 logger.error("[IXApproach] Video upload failed: %s", str(e))

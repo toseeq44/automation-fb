@@ -192,6 +192,7 @@ class AutoUploaderPage(QWidget):
         self.current_mode = self.settings.get_automation_mode()
 
         self._build_ui()
+        self._update_daily_limit_display()  # Load and display user type and daily limit
         self._append_log(f"Current approach: {self.current_mode}")
 
     # ------------------------------------------------------------------ #
@@ -241,15 +242,33 @@ class AutoUploaderPage(QWidget):
         outer_layout.setContentsMargins(24, 24, 24, 24)
         outer_layout.setSpacing(16)
 
-        title = QLabel("Facebook Auto Uploader")
-        title.setObjectName("titleLabel")
-        title.setAlignment(Qt.AlignCenter)
-        outer_layout.addWidget(title)
+        # Daily limit and user type info section
+        info_layout = QHBoxLayout()
+        info_layout.setSpacing(20)
+        info_layout.addStretch()
 
-        subtitle = QLabel("Manage uploads using modular automation approaches.")
-        subtitle.setAlignment(Qt.AlignCenter)
-        subtitle.setStyleSheet("color: #B9BBBE;")
-        outer_layout.addWidget(subtitle)
+        # User Type Label
+        user_type_label = QLabel("User Type:")
+        user_type_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #B9BBBE;")
+        info_layout.addWidget(user_type_label)
+
+        self.user_type_value = QLabel("Loading...")
+        self.user_type_value.setStyleSheet("font-size: 14px; font-weight: bold; color: #1ABC9C;")
+        info_layout.addWidget(self.user_type_value)
+
+        info_layout.addSpacing(30)
+
+        # Daily Limit Label
+        daily_limit_label = QLabel("Daily Limit:")
+        daily_limit_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #B9BBBE;")
+        info_layout.addWidget(daily_limit_label)
+
+        self.daily_limit_value = QLabel("Loading...")
+        self.daily_limit_value.setStyleSheet("font-size: 14px; font-weight: bold; color: #3498DB;")
+        info_layout.addWidget(self.daily_limit_value)
+
+        info_layout.addStretch()
+        outer_layout.addLayout(info_layout)
 
         status_layout = QHBoxLayout()
         status_layout.setSpacing(10)
@@ -320,7 +339,7 @@ class AutoUploaderPage(QWidget):
 
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
-        self.log_output.setMinimumHeight(260)
+        self.log_output.setMinimumHeight(450)  # Increased from 260 to 450 for more space
         outer_layout.addWidget(self.log_output)
 
         outer_layout.addStretch()
@@ -474,6 +493,9 @@ class AutoUploaderPage(QWidget):
         self._append_log("=" * 70)
         self._append_log(f"[{datetime.now():%H:%M:%S}] Ready for next upload")
 
+        # Update daily limit display after upload completes
+        self._update_daily_limit_display()
+
     # ------------------------------------------------------------------ #
     # Logging helper                                                     #
     # ------------------------------------------------------------------ #
@@ -481,3 +503,57 @@ class AutoUploaderPage(QWidget):
         stamped = message if message.startswith("[") else f"[{datetime.now():%H:%M:%S}] {message}"
         self.log_output.append(stamped)
         self.log_output.verticalScrollBar().setValue(self.log_output.verticalScrollBar().maximum())
+
+    # ------------------------------------------------------------------ #
+    # Daily Limit Display                                                #
+    # ------------------------------------------------------------------ #
+    def _update_daily_limit_display(self) -> None:
+        """Update daily limit and user type display in UI."""
+        try:
+            # Import here to avoid circular dependency
+            from ..approaches.ixbrowser.config.upload_config import USER_CONFIG
+            from ..approaches.ixbrowser.core.state_manager import StateManager
+
+            # Get user config
+            user_type = USER_CONFIG.get('user_type', 'basic').upper()
+            daily_limit = USER_CONFIG.get('daily_limit_basic', 200)
+
+            # Update user type display
+            if user_type == 'PRO':
+                self.user_type_value.setText("PRO ⭐")
+                self.user_type_value.setStyleSheet("font-size: 14px; font-weight: bold; color: #F39C12;")
+            else:
+                self.user_type_value.setText("BASIC")
+                self.user_type_value.setStyleSheet("font-size: 14px; font-weight: bold; color: #3498DB;")
+
+            # Get daily stats from state manager
+            state_manager = StateManager()
+            daily_stats = state_manager.get_daily_stats()
+            current_count = daily_stats.get('bookmarks_uploaded', 0)
+
+            # Update daily limit display
+            if user_type == 'PRO':
+                self.daily_limit_value.setText("Unlimited ∞")
+                self.daily_limit_value.setStyleSheet("font-size: 14px; font-weight: bold; color: #43B581;")
+            else:
+                remaining = max(0, daily_limit - current_count)
+                if remaining == 0:
+                    # Limit reached
+                    self.daily_limit_value.setText(f"{current_count}/{daily_limit} (Limit Reached!)")
+                    self.daily_limit_value.setStyleSheet("font-size: 14px; font-weight: bold; color: #E74C3C;")
+                elif remaining <= 20:
+                    # Low remaining
+                    self.daily_limit_value.setText(f"{current_count}/{daily_limit} ({remaining} left)")
+                    self.daily_limit_value.setStyleSheet("font-size: 14px; font-weight: bold; color: #F39C12;")
+                else:
+                    # Normal
+                    self.daily_limit_value.setText(f"{current_count}/{daily_limit} ({remaining} left)")
+                    self.daily_limit_value.setStyleSheet("font-size: 14px; font-weight: bold; color: #43B581;")
+
+        except Exception as e:
+            # Fallback on error
+            self.user_type_value.setText("Unknown")
+            self.user_type_value.setStyleSheet("font-size: 14px; font-weight: bold; color: #95A5A6;")
+            self.daily_limit_value.setText("Error loading")
+            self.daily_limit_value.setStyleSheet("font-size: 14px; font-weight: bold; color: #95A5A6;")
+            logging.debug(f"Error loading daily limit display: {e}")

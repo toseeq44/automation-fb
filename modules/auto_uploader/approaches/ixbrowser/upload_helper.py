@@ -288,7 +288,7 @@ class VideoUploadHelper:
             try:
                 if attempt > 1:
                     logger.info("[Upload] Retry %d/%d (searching with star animation...)", attempt, retries)
-                    self.star_idle_movement(duration=2.0, base_radius=90)
+                    self.idle_mouse_activity(duration=2.0, base_radius=90)
 
                 # Method 1: ANY element containing "Add Videos" text (divs, spans, buttons, etc)
                 try:
@@ -386,7 +386,7 @@ class VideoUploadHelper:
             try:
                 if attempt > 1:
                     logger.info("[Upload] Retry %d/%d (searching with star animation...)", attempt, retries)
-                    self.star_idle_movement(duration=2.0, base_radius=90)
+                    self.idle_mouse_activity(duration=2.0, base_radius=90)
 
                 # Find all matches on screen
                 logger.info("[Upload] Searching for button image...")
@@ -664,7 +664,7 @@ class VideoUploadHelper:
 
             # Wait for upload to start with star animation
             logger.info("[Upload] Waiting for upload to initialize (with star animation)...")
-            self.star_idle_movement(duration=3.0, base_radius=85)
+            self.idle_mouse_activity(duration=3.0, base_radius=85)
 
             logger.info("[Upload] ═══════════════════════════════════════════")
             logger.info("[Upload] ✓ File Upload Initiated (No Dialog Shown)")
@@ -1241,7 +1241,7 @@ class VideoUploadHelper:
 
             # Wait before next check with star movement (shows bot is active)
             logger.debug("[Upload] Waiting 5 seconds before next check (with star animation)...")
-            self.star_idle_movement(duration=5.0, base_radius=80)
+            self.idle_mouse_activity(duration=5.0, base_radius=80)
 
         # Timeout reached
         elapsed = time.time() - start_time
@@ -1633,86 +1633,332 @@ class VideoUploadHelper:
             logger.error("[Upload] Error in detect_and_hover_publish_button: %s", str(e))
             return False
 
-    def star_idle_movement(self, duration: float = 3.0, base_radius: int = 100) -> None:
+    def idle_mouse_activity(self, duration: float = 3.0, base_radius: int = 100) -> None:
         """
-        Move mouse in star pattern during idle/wait periods.
-        Shows user that bot is active and working with natural human-like behavior.
+        Move mouse with random human-like patterns during idle/wait periods.
+        Shows user that bot is active and working naturally.
 
-        Creates a 5-pointed star pattern with random variations to appear natural.
-        After animation, returns mouse to mid-screen.
+        Randomly selects from 10 different movement patterns with imperfect,
+        human-like behavior. Patterns may be incomplete based on duration.
 
         Args:
-            duration: How long to animate (seconds)
-            base_radius: Base star size in pixels from center (randomized ±20%)
+            duration: How long to animate (seconds) - patterns adapt to available time
+            base_radius: Base size for patterns in pixels (randomized per pattern)
         """
-        try:
-            logger.debug("[Mouse] ⭐ Starting star idle movement (duration=%.1fs, radius=%dpx)",
-                        duration, base_radius)
+        # Get screen dimensions
+        screen_width, screen_height = pyautogui.size()
+        center_x = screen_width // 2
+        center_y = screen_height // 2
 
-            # Get screen dimensions
-            screen_width, screen_height = pyautogui.size()
-            center_x = screen_width // 2
-            center_y = screen_height // 2
+        # Define 10 movement patterns
+        def shrinking_circles(dur, radius):
+            """Circles from large to small (10 rounds)"""
+            logger.debug("[Mouse] 🔵 Shrinking circles pattern")
+            start = time.time()
+            max_radius = int(radius * 1.5)  # Start big
+            min_radius = int(radius * 0.2)  # End small
 
-            # Calculate how many star cycles to complete
-            time_per_cycle = 2.0  # seconds for one complete star (5 points + return)
-            num_cycles = max(1, int(duration / time_per_cycle))
-
-            start_time = time.time()
-
-            for cycle in range(num_cycles):
-                # Add random variation to radius (80-120% of base)
-                radius_variation = random.uniform(0.8, 1.2)
-                current_radius = int(base_radius * radius_variation)
-
-                # 5-pointed star angles: 0°, 72°, 144°, 216°, 288°
-                # We draw from point to point, skipping one each time for star shape
-                star_points = []
-                for i in range(5):
-                    angle = i * 72  # 72° apart for 5 points
-                    # Add small random wobble (±3°) for natural look
-                    wobble = random.uniform(-3, 3)
-                    actual_angle = math.radians(angle + wobble)
-
-                    point_x = center_x + int(current_radius * math.cos(actual_angle))
-                    point_y = center_y + int(current_radius * math.sin(actual_angle))
-                    star_points.append((point_x, point_y))
-
-                # Draw star by connecting points in order: 0→2→4→1→3→0
-                # This creates the classic 5-pointed star shape
-                draw_order = [0, 2, 4, 1, 3, 0]
-
-                for idx in draw_order:
-                    point_x, point_y = star_points[idx]
-
-                    # Random movement duration (0.15-0.35s per line)
-                    move_duration = random.uniform(0.15, 0.35)
-
-                    pyautogui.moveTo(point_x, point_y, duration=move_duration)
-
-                    # Small random pause at each point (0.05-0.15s)
-                    pause_duration = random.uniform(0.05, 0.15)
-                    time.sleep(pause_duration)
-
-                    # Check if we've exceeded duration
-                    if time.time() - start_time >= duration:
-                        break
-
-                # Return to center after each cycle
-                pyautogui.moveTo(center_x, center_y, duration=0.2)
-
-                if time.time() - start_time >= duration:
+            for round_num in range(10):
+                if time.time() - start >= dur:
                     break
 
-            logger.debug("[Mouse] ⭐ Star movement complete (%.1f seconds)",
-                        time.time() - start_time)
+                # Decrease radius each round
+                current_radius = max_radius - (round_num * (max_radius - min_radius) // 10)
+                # Add wobble (±5%)
+                current_radius = int(current_radius * random.uniform(0.95, 1.05))
+
+                # Random points per circle (12-20 for natural imperfection)
+                num_points = random.randint(12, 20)
+
+                for i in range(num_points):
+                    if time.time() - start >= dur:
+                        return  # Incomplete circle OK
+
+                    angle = (360 / num_points) * i
+                    # Add wobble to angle (±3°)
+                    angle += random.uniform(-3, 3)
+                    rad_angle = math.radians(angle)
+
+                    # Add wobble to radius (±3%)
+                    wobble_radius = current_radius * random.uniform(0.97, 1.03)
+
+                    x = center_x + int(wobble_radius * math.cos(rad_angle))
+                    y = center_y + int(wobble_radius * math.sin(rad_angle))
+
+                    # Variable speed
+                    move_dur = random.uniform(0.05, 0.15)
+                    pyautogui.moveTo(x, y, duration=move_dur)
+
+                    # Random pause (sometimes none)
+                    if random.random() < 0.3:
+                        time.sleep(random.uniform(0.02, 0.08))
+
+        def expanding_circles(dur, radius):
+            """Circles from small to large (10 rounds)"""
+            logger.debug("[Mouse] 🔴 Expanding circles pattern")
+            start = time.time()
+            min_radius = int(radius * 0.2)  # Start small
+            max_radius = int(radius * 1.5)  # End big
+
+            for round_num in range(10):
+                if time.time() - start >= dur:
+                    break
+
+                # Increase radius each round
+                current_radius = min_radius + (round_num * (max_radius - min_radius) // 10)
+                current_radius = int(current_radius * random.uniform(0.95, 1.05))
+
+                num_points = random.randint(12, 20)
+
+                for i in range(num_points):
+                    if time.time() - start >= dur:
+                        return
+
+                    angle = (360 / num_points) * i + random.uniform(-3, 3)
+                    rad_angle = math.radians(angle)
+                    wobble_radius = current_radius * random.uniform(0.97, 1.03)
+
+                    x = center_x + int(wobble_radius * math.cos(rad_angle))
+                    y = center_y + int(wobble_radius * math.sin(rad_angle))
+
+                    pyautogui.moveTo(x, y, duration=random.uniform(0.05, 0.15))
+
+                    if random.random() < 0.3:
+                        time.sleep(random.uniform(0.02, 0.08))
+
+        def figure_eight(dur, radius):
+            """Infinity/figure-8 pattern"""
+            logger.debug("[Mouse] ∞ Figure-8 pattern")
+            start = time.time()
+
+            # Parameter for lemniscate (figure-8)
+            a = radius * random.uniform(0.8, 1.2)
+            num_points = int(dur * 15)  # Adapt to duration
+
+            for i in range(num_points):
+                if time.time() - start >= dur:
+                    return
+
+                t = (i / num_points) * 4 * math.pi  # Full figure-8
+                # Add wobble
+                t += random.uniform(-0.1, 0.1)
+
+                # Lemniscate equations with wobble
+                denominator = 1 + math.sin(t) ** 2
+                x = center_x + int((a * math.cos(t) / denominator) * random.uniform(0.95, 1.05))
+                y = center_y + int((a * math.sin(t) * math.cos(t) / denominator) * random.uniform(0.95, 1.05))
+
+                pyautogui.moveTo(x, y, duration=random.uniform(0.08, 0.2))
+
+                if random.random() < 0.2:
+                    time.sleep(random.uniform(0.01, 0.05))
+
+        def spiral_outward(dur, radius):
+            """Spiral from center outward"""
+            logger.debug("[Mouse] 🌀 Spiral outward pattern")
+            start = time.time()
+
+            max_radius = radius * random.uniform(1.2, 1.5)
+            num_points = int(dur * 20)
+
+            for i in range(num_points):
+                if time.time() - start >= dur:
+                    return
+
+                # Gradually increasing radius
+                current_r = (i / num_points) * max_radius
+                angle = i * 25  # Degrees per point (creates spiral)
+                angle += random.uniform(-5, 5)  # Wobble
+
+                rad_angle = math.radians(angle)
+                x = center_x + int(current_r * math.cos(rad_angle) * random.uniform(0.95, 1.05))
+                y = center_y + int(current_r * math.sin(rad_angle) * random.uniform(0.95, 1.05))
+
+                pyautogui.moveTo(x, y, duration=random.uniform(0.05, 0.12))
+
+                if random.random() < 0.25:
+                    time.sleep(random.uniform(0.01, 0.06))
+
+        def spiral_inward(dur, radius):
+            """Spiral from outside inward"""
+            logger.debug("[Mouse] 🌀 Spiral inward pattern")
+            start = time.time()
+
+            max_radius = radius * random.uniform(1.2, 1.5)
+            num_points = int(dur * 20)
+
+            for i in range(num_points):
+                if time.time() - start >= dur:
+                    return
+
+                # Gradually decreasing radius
+                current_r = max_radius - ((i / num_points) * max_radius)
+                angle = i * 25
+                angle += random.uniform(-5, 5)
+
+                rad_angle = math.radians(angle)
+                x = center_x + int(current_r * math.cos(rad_angle) * random.uniform(0.95, 1.05))
+                y = center_y + int(current_r * math.sin(rad_angle) * random.uniform(0.95, 1.05))
+
+                pyautogui.moveTo(x, y, duration=random.uniform(0.05, 0.12))
+
+                if random.random() < 0.25:
+                    time.sleep(random.uniform(0.01, 0.06))
+
+        def random_wander(dur, radius):
+            """Random wandering within safe area"""
+            logger.debug("[Mouse] 🔀 Random wandering pattern")
+            start = time.time()
+
+            # Safe area (60% of screen centered)
+            safe_width = int(screen_width * 0.6)
+            safe_height = int(screen_height * 0.6)
+            min_x = center_x - safe_width // 2
+            max_x = center_x + safe_width // 2
+            min_y = center_y - safe_height // 2
+            max_y = center_y + safe_height // 2
+
+            while time.time() - start < dur:
+                # Random destination within safe area
+                dest_x = random.randint(min_x, max_x)
+                dest_y = random.randint(min_y, max_y)
+
+                # Smooth movement with variable speed
+                move_dur = random.uniform(0.3, 0.8)
+                pyautogui.moveTo(dest_x, dest_y, duration=move_dur)
+
+                # Random pause
+                pause = random.uniform(0.1, 0.4)
+                time.sleep(min(pause, dur - (time.time() - start)))
+
+        def wave_horizontal(dur, radius):
+            """Horizontal wave pattern"""
+            logger.debug("[Mouse] 〰️ Horizontal wave pattern")
+            start = time.time()
+
+            amplitude = radius * random.uniform(0.6, 1.0)
+            wavelength = screen_width * 0.3
+            num_points = int(dur * 25)
+
+            start_x = center_x - int(wavelength)
+
+            for i in range(num_points):
+                if time.time() - start >= dur:
+                    return
+
+                x = start_x + (i / num_points) * (wavelength * 2)
+                # Sine wave with wobble
+                y = center_y + int(amplitude * math.sin((x - start_x) / wavelength * 2 * math.pi) * random.uniform(0.9, 1.1))
+
+                pyautogui.moveTo(int(x), int(y), duration=random.uniform(0.06, 0.15))
+
+                if random.random() < 0.2:
+                    time.sleep(random.uniform(0.01, 0.05))
+
+        def wave_vertical(dur, radius):
+            """Vertical wave pattern"""
+            logger.debug("[Mouse] 〰️ Vertical wave pattern")
+            start = time.time()
+
+            amplitude = radius * random.uniform(0.6, 1.0)
+            wavelength = screen_height * 0.3
+            num_points = int(dur * 25)
+
+            start_y = center_y - int(wavelength)
+
+            for i in range(num_points):
+                if time.time() - start >= dur:
+                    return
+
+                y = start_y + (i / num_points) * (wavelength * 2)
+                x = center_x + int(amplitude * math.sin((y - start_y) / wavelength * 2 * math.pi) * random.uniform(0.9, 1.1))
+
+                pyautogui.moveTo(int(x), int(y), duration=random.uniform(0.06, 0.15))
+
+                if random.random() < 0.2:
+                    time.sleep(random.uniform(0.01, 0.05))
+
+        def zigzag_pattern(dur, radius):
+            """Sharp zigzag movements"""
+            logger.debug("[Mouse] ⚡ Zigzag pattern")
+            start = time.time()
+
+            amplitude = radius * random.uniform(0.8, 1.2)
+            num_zigs = int(dur * 3)  # 3 zigs per second
+
+            for i in range(num_zigs):
+                if time.time() - start >= dur:
+                    return
+
+                # Alternate left-right
+                direction = 1 if i % 2 == 0 else -1
+                x = center_x + int(direction * amplitude * random.uniform(0.8, 1.2))
+                y = center_y + int((i - num_zigs/2) * (amplitude / 2) * random.uniform(0.9, 1.1))
+
+                pyautogui.moveTo(x, int(y), duration=random.uniform(0.2, 0.4))
+
+                if random.random() < 0.3:
+                    time.sleep(random.uniform(0.05, 0.15))
+
+        def butterfly_pattern(dur, radius):
+            """Butterfly/Lissajous curve"""
+            logger.debug("[Mouse] 🦋 Butterfly pattern")
+            start = time.time()
+
+            a = radius * random.uniform(0.8, 1.2)
+            b = radius * random.uniform(0.7, 1.1)
+            num_points = int(dur * 20)
+
+            for i in range(num_points):
+                if time.time() - start >= dur:
+                    return
+
+                t = (i / num_points) * 4 * math.pi
+                t += random.uniform(-0.05, 0.05)
+
+                # Parametric butterfly curve with wobble
+                x = center_x + int(a * math.sin(t) * random.uniform(0.95, 1.05))
+                y = center_y + int(b * math.sin(2*t) * random.uniform(0.95, 1.05))
+
+                pyautogui.moveTo(x, y, duration=random.uniform(0.08, 0.18))
+
+                if random.random() < 0.2:
+                    time.sleep(random.uniform(0.01, 0.06))
+
+        # List of all 10 patterns
+        patterns = [
+            shrinking_circles,
+            expanding_circles,
+            figure_eight,
+            spiral_outward,
+            spiral_inward,
+            random_wander,
+            wave_horizontal,
+            wave_vertical,
+            zigzag_pattern,
+            butterfly_pattern
+        ]
+
+        # Randomly select one pattern
+        selected_pattern = random.choice(patterns)
+
+        try:
+            logger.debug("[Mouse] 🎨 Starting idle mouse activity (duration=%.1fs)", duration)
+            start_time = time.time()
+
+            # Execute selected pattern
+            selected_pattern(duration, base_radius)
+
+            elapsed = time.time() - start_time
+            logger.debug("[Mouse] ✓ Mouse activity complete (%.1f seconds)", elapsed)
 
         except Exception as e:
-            logger.warning("[Mouse] Star movement failed: %s", str(e))
-            # Even if star fails, try to return to center
+            logger.warning("[Mouse] Mouse activity failed: %s", str(e))
+        finally:
+            # Always try to return to center gracefully
             try:
-                screen_width, screen_height = pyautogui.size()
-                pyautogui.moveTo(screen_width // 2, screen_height // 2, duration=0.3)
+                remaining_time = max(0.1, duration - (time.time() - start_time))
+                pyautogui.moveTo(center_x, center_y, duration=min(0.3, remaining_time))
             except:
                 pass
 
@@ -1791,7 +2037,7 @@ class VideoUploadHelper:
 
                 # Step 3: Wait for page to stabilize with star animation
                 logger.info("[Upload] Waiting for page to fully stabilize (with star animation)...")
-                self.star_idle_movement(duration=3.0, base_radius=95)  # Give Facebook time to load all elements
+                self.idle_mouse_activity(duration=3.0, base_radius=95)  # Give Facebook time to load all elements
 
                 # Step 3-Priority2: Dismiss any popups/notifications before proceeding
                 self.dismiss_notifications()
@@ -1850,7 +2096,7 @@ class VideoUploadHelper:
                         logger.info("[Upload] ✓✓✓ FILE PRE-LOADED SUCCESSFULLY! ✓✓✓")
                         logger.info("[Upload] ═══════════════════════════════════════════")
                         logger.info("[Upload] Letting file settle (with star animation)...")
-                        self.star_idle_movement(duration=2.0, base_radius=85)  # Let it settle
+                        self.idle_mouse_activity(duration=2.0, base_radius=85)  # Let it settle
                     else:
                         logger.warning("[Upload] ⚠ File pre-load verification failed")
                 else:
@@ -1944,7 +2190,7 @@ class VideoUploadHelper:
                         logger.debug("[Upload] Dialog check failed: %s", str(e))
 
                 logger.info("[Upload] Waiting for page response (with star animation)...")
-                self.star_idle_movement(duration=2.0, base_radius=90)  # Wait for page response
+                self.idle_mouse_activity(duration=2.0, base_radius=90)  # Wait for page response
 
                 if file_preloaded:
                     logger.info("[Upload] ═══════════════════════════════════════════")

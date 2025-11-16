@@ -439,10 +439,54 @@ class IXBrowserApproach(BaseApproach):
                 # Move to next profile
                 has_more = self._profile_manager.move_to_next_profile()
                 if not has_more:
+                    # All profiles processed - check if we should start new round
                     logger.info("[IXApproach] ═══════════════════════════════════════════")
-                    logger.info("[IXApproach] ALL PROFILES PROCESSED!")
+                    logger.info("[IXApproach] ALL PROFILES PROCESSED - Round Complete!")
                     logger.info("[IXApproach] ═══════════════════════════════════════════")
-                    break
+
+                    # Check daily limit status
+                    round_limit_status = self._state_manager.check_daily_limit(
+                        user_type=user_type,
+                        limit=daily_limit
+                    )
+
+                    # Pro users or Basic users with remaining uploads → Start new round
+                    if not round_limit_status['limit_reached']:
+                        logger.info("[IXApproach] ═══════════════════════════════════════════")
+                        logger.info("[IXApproach] STARTING NEW ROUND")
+                        logger.info("[IXApproach] ═══════════════════════════════════════════")
+                        logger.info("[IXApproach] User type: %s", user_type.upper())
+                        if user_type.lower() == 'basic':
+                            logger.info("[IXApproach] Daily usage: %d/%d bookmarks",
+                                       round_limit_status['current_count'],
+                                       round_limit_status['limit'])
+                            logger.info("[IXApproach] Remaining: %d uploads",
+                                       round_limit_status['remaining'])
+                        else:
+                            logger.info("[IXApproach] Pro user - unlimited uploads")
+                        logger.info("[IXApproach] Resetting to first profile...")
+                        logger.info("[IXApproach] ═══════════════════════════════════════════")
+
+                        # Reset to first profile and continue loop
+                        self._profile_manager.reset_to_first_profile()
+                        logger.info("[IXApproach] ✓ Profile index reset to 0")
+                        logger.info("[IXApproach] Starting new round in 10 seconds...")
+                        time.sleep(10)
+                        continue  # Continue the while loop with first profile
+                    else:
+                        # Daily limit reached - stop here
+                        logger.info("[IXApproach] ═══════════════════════════════════════════")
+                        logger.info("[IXApproach] DAILY LIMIT REACHED - Stopping Workflow")
+                        logger.info("[IXApproach] ═══════════════════════════════════════════")
+                        logger.info("[IXApproach] Uploaded today: %d/%d bookmarks",
+                                   round_limit_status['current_count'],
+                                   round_limit_status['limit'])
+                        logger.info("[IXApproach] All profiles processed")
+                        logger.info("[IXApproach] Daily limit exhausted")
+                        logger.info("[IXApproach] Workflow will stop here")
+                        logger.info("[IXApproach] Please wait until tomorrow or upgrade to PRO")
+                        logger.info("[IXApproach] ═══════════════════════════════════════════")
+                        break  # Exit loop - daily limit reached
 
                 # Brief pause between profiles
                 logger.info("[IXApproach] Waiting 5 seconds before next profile...")

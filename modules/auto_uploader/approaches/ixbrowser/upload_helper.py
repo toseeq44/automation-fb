@@ -287,8 +287,8 @@ class VideoUploadHelper:
         for attempt in range(1, retries + 1):
             try:
                 if attempt > 1:
-                    logger.info("[Upload] Retry %d/%d", attempt, retries)
-                    time.sleep(2)
+                    logger.info("[Upload] Retry %d/%d (searching with star animation...)", attempt, retries)
+                    self.star_idle_movement(duration=2.0, base_radius=90)
 
                 # Method 1: ANY element containing "Add Videos" text (divs, spans, buttons, etc)
                 try:
@@ -385,8 +385,8 @@ class VideoUploadHelper:
         for attempt in range(1, retries + 1):
             try:
                 if attempt > 1:
-                    logger.info("[Upload] Retry %d/%d", attempt, retries)
-                    time.sleep(2)
+                    logger.info("[Upload] Retry %d/%d (searching with star animation...)", attempt, retries)
+                    self.star_idle_movement(duration=2.0, base_radius=90)
 
                 # Find all matches on screen
                 logger.info("[Upload] Searching for button image...")
@@ -662,9 +662,9 @@ class VideoUploadHelper:
             except:
                 pass
 
-            # Wait for upload to start
-            logger.info("[Upload] Waiting for upload to initialize...")
-            time.sleep(3)
+            # Wait for upload to start with star animation
+            logger.info("[Upload] Waiting for upload to initialize (with star animation)...")
+            self.star_idle_movement(duration=3.0, base_radius=85)
 
             logger.info("[Upload] ═══════════════════════════════════════════")
             logger.info("[Upload] ✓ File Upload Initiated (No Dialog Shown)")
@@ -1239,9 +1239,9 @@ class VideoUploadHelper:
                 import traceback
                 logger.debug("[Upload] Traceback: %s", traceback.format_exc())
 
-            # Wait before next check (increased from 3 to 5 seconds)
-            logger.debug("[Upload] Waiting 5 seconds before next check...")
-            time.sleep(5)
+            # Wait before next check with star movement (shows bot is active)
+            logger.debug("[Upload] Waiting 5 seconds before next check (with star animation)...")
+            self.star_idle_movement(duration=5.0, base_radius=80)
 
         # Timeout reached
         elapsed = time.time() - start_time
@@ -1462,35 +1462,64 @@ class VideoUploadHelper:
                        element_rect['x'], element_rect['y'],
                        element_rect['width'], element_rect['height'])
 
-            # Step 3: Get browser window position on screen
+            # Step 3: Get browser window position and chrome height
             try:
-                # Get window position using JavaScript (viewport position on screen)
-                window_pos = self.driver.execute_script("""
+                # Get window position and browser chrome dimensions using JavaScript
+                browser_info = self.driver.execute_script("""
                     return {
-                        x: window.screenX,
-                        y: window.screenY
+                        windowX: window.screenX,
+                        windowY: window.screenY,
+                        outerWidth: window.outerWidth,
+                        outerHeight: window.outerHeight,
+                        innerWidth: window.innerWidth,
+                        innerHeight: window.innerHeight
                     };
                 """)
 
+                # Calculate browser chrome dimensions
+                # Chrome width = left border + right border + scrollbar
+                chrome_width = browser_info['outerWidth'] - browser_info['innerWidth']
+                # Chrome height = title bar + address bar + bookmarks bar + tabs
+                chrome_height = browser_info['outerHeight'] - browser_info['innerHeight']
+
                 logger.info("[Upload] Browser window position: x=%s, y=%s",
-                           window_pos['x'], window_pos['y'])
+                           browser_info['windowX'], browser_info['windowY'])
+                logger.info("[Upload] Browser chrome: width=%dpx, height=%dpx",
+                           chrome_width, chrome_height)
+
+                window_pos = {
+                    'x': browser_info['windowX'],
+                    'y': browser_info['windowY']
+                }
+
+                # Typical browser chrome includes:
+                # - Left/right borders: ~8-10px total
+                # - Top: title bar + address bar + tabs + bookmarks = chrome_height
+                chrome_offset_x = chrome_width // 2  # Split border width evenly
+                chrome_offset_y = chrome_height  # Full chrome height at top
 
             except Exception as js_error:
                 logger.warning("[Upload] Could not get window position via JS: %s", str(js_error))
-                # Fallback: assume window is at top-left
+                # Fallback: assume window is at top-left with typical chrome
                 window_pos = {'x': 0, 'y': 0}
+                chrome_offset_x = 8  # Default border width
+                chrome_offset_y = 130  # Default chrome height (title+address+tabs)
 
             # Step 4: Calculate absolute screen coordinates
-            # Element center point
+            # Element center point (relative to viewport)
             element_center_x = element_rect['x'] + (element_rect['width'] / 2)
             element_center_y = element_rect['y'] + (element_rect['height'] / 2)
 
-            # Absolute screen coordinates
-            screen_x = window_pos['x'] + element_center_x
-            screen_y = window_pos['y'] + element_center_y
+            # Absolute screen coordinates = window position + chrome offset + element position
+            screen_x = window_pos['x'] + chrome_offset_x + element_center_x
+            screen_y = window_pos['y'] + chrome_offset_y + element_center_y
 
             logger.info("[Upload] Calculated screen coordinates: x=%d, y=%d",
                        int(screen_x), int(screen_y))
+            logger.info("[Upload]   Formula: window(%d,%d) + chrome(%d,%d) + element(%d,%d)",
+                       int(window_pos['x']), int(window_pos['y']),
+                       int(chrome_offset_x), int(chrome_offset_y),
+                       int(element_center_x), int(element_center_y))
 
             # Step 5: Move ACTUAL physical mouse using PyAutoGUI
             logger.info("[Upload] Moving PHYSICAL mouse to button...")
@@ -1533,6 +1562,9 @@ class VideoUploadHelper:
             logger.info("[Upload] ✓ Hover complete!")
             logger.info("[Upload] (Production mode: NOT clicking button)")
             logger.info("[Upload] ═══════════════════════════════════════════")
+
+            # Return mouse to mid-screen after activity complete
+            self.return_to_mid_screen()
 
             return True
 
@@ -1601,6 +1633,105 @@ class VideoUploadHelper:
             logger.error("[Upload] Error in detect_and_hover_publish_button: %s", str(e))
             return False
 
+    def star_idle_movement(self, duration: float = 3.0, base_radius: int = 100) -> None:
+        """
+        Move mouse in star pattern during idle/wait periods.
+        Shows user that bot is active and working with natural human-like behavior.
+
+        Creates a 5-pointed star pattern with random variations to appear natural.
+        After animation, returns mouse to mid-screen.
+
+        Args:
+            duration: How long to animate (seconds)
+            base_radius: Base star size in pixels from center (randomized ±20%)
+        """
+        try:
+            logger.debug("[Mouse] ⭐ Starting star idle movement (duration=%.1fs, radius=%dpx)",
+                        duration, base_radius)
+
+            # Get screen dimensions
+            screen_width, screen_height = pyautogui.size()
+            center_x = screen_width // 2
+            center_y = screen_height // 2
+
+            # Calculate how many star cycles to complete
+            time_per_cycle = 2.0  # seconds for one complete star (5 points + return)
+            num_cycles = max(1, int(duration / time_per_cycle))
+
+            start_time = time.time()
+
+            for cycle in range(num_cycles):
+                # Add random variation to radius (80-120% of base)
+                radius_variation = random.uniform(0.8, 1.2)
+                current_radius = int(base_radius * radius_variation)
+
+                # 5-pointed star angles: 0°, 72°, 144°, 216°, 288°
+                # We draw from point to point, skipping one each time for star shape
+                star_points = []
+                for i in range(5):
+                    angle = i * 72  # 72° apart for 5 points
+                    # Add small random wobble (±3°) for natural look
+                    wobble = random.uniform(-3, 3)
+                    actual_angle = math.radians(angle + wobble)
+
+                    point_x = center_x + int(current_radius * math.cos(actual_angle))
+                    point_y = center_y + int(current_radius * math.sin(actual_angle))
+                    star_points.append((point_x, point_y))
+
+                # Draw star by connecting points in order: 0→2→4→1→3→0
+                # This creates the classic 5-pointed star shape
+                draw_order = [0, 2, 4, 1, 3, 0]
+
+                for idx in draw_order:
+                    point_x, point_y = star_points[idx]
+
+                    # Random movement duration (0.15-0.35s per line)
+                    move_duration = random.uniform(0.15, 0.35)
+
+                    pyautogui.moveTo(point_x, point_y, duration=move_duration)
+
+                    # Small random pause at each point (0.05-0.15s)
+                    pause_duration = random.uniform(0.05, 0.15)
+                    time.sleep(pause_duration)
+
+                    # Check if we've exceeded duration
+                    if time.time() - start_time >= duration:
+                        break
+
+                # Return to center after each cycle
+                pyautogui.moveTo(center_x, center_y, duration=0.2)
+
+                if time.time() - start_time >= duration:
+                    break
+
+            logger.debug("[Mouse] ⭐ Star movement complete (%.1f seconds)",
+                        time.time() - start_time)
+
+        except Exception as e:
+            logger.warning("[Mouse] Star movement failed: %s", str(e))
+            # Even if star fails, try to return to center
+            try:
+                screen_width, screen_height = pyautogui.size()
+                pyautogui.moveTo(screen_width // 2, screen_height // 2, duration=0.3)
+            except:
+                pass
+
+    def return_to_mid_screen(self) -> None:
+        """
+        Return mouse to center of screen after completing an activity.
+        Provides visual closure and prepares for next action.
+        """
+        try:
+            screen_width, screen_height = pyautogui.size()
+            center_x = screen_width // 2
+            center_y = screen_height // 2
+
+            logger.debug("[Mouse] Returning to mid-screen (%d, %d)", center_x, center_y)
+            pyautogui.moveTo(center_x, center_y, duration=0.4)
+
+        except Exception as e:
+            logger.warning("[Mouse] Failed to return to mid-screen: %s", str(e))
+
     def upload_to_bookmark(self, bookmark: Dict[str, str], folder_path: str, max_retries: int = 3) -> bool:
         """
         Complete upload workflow for single bookmark.
@@ -1658,9 +1789,9 @@ class VideoUploadHelper:
                 )
                 logger.debug("[Upload] ✓ State saved (video: %s, attempt: %d)", video_name, attempt)
 
-                # Step 3: Wait for page to stabilize
-                logger.info("[Upload] Waiting for page to fully stabilize...")
-                time.sleep(3)  # Give Facebook time to load all elements
+                # Step 3: Wait for page to stabilize with star animation
+                logger.info("[Upload] Waiting for page to fully stabilize (with star animation)...")
+                self.star_idle_movement(duration=3.0, base_radius=95)  # Give Facebook time to load all elements
 
                 # Step 3-Priority2: Dismiss any popups/notifications before proceeding
                 self.dismiss_notifications()
@@ -1718,7 +1849,8 @@ class VideoUploadHelper:
                         logger.info("[Upload] ═══════════════════════════════════════════")
                         logger.info("[Upload] ✓✓✓ FILE PRE-LOADED SUCCESSFULLY! ✓✓✓")
                         logger.info("[Upload] ═══════════════════════════════════════════")
-                        time.sleep(2)  # Let it settle
+                        logger.info("[Upload] Letting file settle (with star animation)...")
+                        self.star_idle_movement(duration=2.0, base_radius=85)  # Let it settle
                     else:
                         logger.warning("[Upload] ⚠ File pre-load verification failed")
                 else:
@@ -1811,7 +1943,8 @@ class VideoUploadHelper:
                     except Exception as e:
                         logger.debug("[Upload] Dialog check failed: %s", str(e))
 
-                time.sleep(2)  # Wait for page response
+                logger.info("[Upload] Waiting for page response (with star animation)...")
+                self.star_idle_movement(duration=2.0, base_radius=90)  # Wait for page response
 
                 if file_preloaded:
                     logger.info("[Upload] ═══════════════════════════════════════════")

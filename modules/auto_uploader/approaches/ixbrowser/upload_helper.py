@@ -9,6 +9,9 @@ import time
 import glob
 import pyautogui
 import random
+import shutil
+import pyperclip
+import math
 from typing import Optional, List, Dict, Any, Tuple
 from pathlib import Path
 from selenium.webdriver.common.keys import Keys
@@ -16,27 +19,125 @@ from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from ...browser.mouse_controller import MouseController
+
+# Phase 2: Import core modules for robustness
+from .core.state_manager import StateManager
+from .core.network_monitor import NetworkMonitor
+from .utils.file_handler import FileHandler
 
 logger = logging.getLogger(__name__)
 
-# Image path for Add Videos button
+# Image paths for buttons
 ADD_VIDEOS_BUTTON_IMAGE = "/home/user/automation-fb/modules/auto_uploader/helper_images/add_videos_button.png"
+PUBLISH_BUTTON_ENABLED_IMAGE = "/home/user/automation-fb/modules/auto_uploader/helper_images/publish_button_after_data.png"
+PUBLISH_BUTTON_DISABLED_IMAGE = "/home/user/automation-fb/modules/auto_uploader/helper_images/publish_button_befor_data.png"
 
 
 class VideoUploadHelper:
     """Helper class for uploading videos to Facebook via bookmarks."""
 
-    def __init__(self, driver: Any):
+    def __init__(self, driver: Any, state_manager: StateManager = None,
+                 network_monitor: NetworkMonitor = None):
         """
         Initialize upload helper.
 
         Args:
             driver: Selenium WebDriver instance
+            state_manager: Optional StateManager for persistence (Phase 2)
+            network_monitor: Optional NetworkMonitor for resilience (Phase 2)
         """
         self.driver = driver
         self.upload_timeout = 600  # 10 minutes max per video
-        self.mouse = MouseController()
+
+        # Phase 2: Robustness components
+        self.state_manager = state_manager or StateManager()
+        self.network_monitor = network_monitor or NetworkMonitor(check_interval=10)
+        self.file_handler = FileHandler()
+
+        # Track current upload session
+        self.current_video = None
+        self.current_bookmark = None
+        self.current_attempt = 0
+
+        logger.info("[Upload] ✓ VideoUploadHelper initialized with Phase 2 robustness")
+
+    def ensure_window_ready(self, operation_name: str = "operation") -> bool:
+        """
+        **DEFENSIVE CHECK** - Ensure browser window is ready before any critical operation.
+
+        This method performs 3 checks before proceeding:
+        1. Activate browser window (bring to foreground)
+        2. Dismiss any visible notifications/popups
+        3. Verify window is responsive
+
+        Call this before EVERY critical step to prevent failures.
+
+        Args:
+            operation_name: Name of operation (for logging)
+
+        Returns:
+            True if window is ready, False if issues detected
+        """
+        try:
+            logger.info("[Upload] ═══════════════════════════════════════════")
+            logger.info("[Upload] DEFENSIVE CHECK: Preparing for %s", operation_name)
+            logger.info("[Upload] ═══════════════════════════════════════════")
+
+            # Step 1: Activate browser window (bring to foreground)
+            try:
+                logger.info("[Upload] Step 1/3: Activating browser window...")
+
+                # Maximize window
+                self.driver.maximize_window()
+
+                # Bring to front using JavaScript
+                self.driver.execute_script("window.focus();")
+
+                # Switch to window (ensure it's active)
+                self.driver.switch_to.window(self.driver.current_window_handle)
+
+                logger.info("[Upload] ✓ Browser window activated")
+
+            except Exception as e:
+                logger.warning("[Upload] ⚠ Window activation failed: %s", str(e))
+                # Continue anyway - not critical
+
+            # Step 2: Dismiss any notifications/popups
+            logger.info("[Upload] Step 2/3: Checking for notifications/popups...")
+
+            dismissed_count = self.dismiss_notifications()
+
+            if dismissed_count > 0:
+                logger.info("[Upload] ✓ Dismissed %d notification(s)", dismissed_count)
+            else:
+                logger.info("[Upload] ✓ No notifications found (clear)")
+
+            # Step 3: Verify window is responsive
+            try:
+                logger.info("[Upload] Step 3/3: Verifying window responsiveness...")
+
+                # Try to get current URL (simple check for responsiveness)
+                current_url = self.driver.current_url
+
+                if current_url:
+                    logger.info("[Upload] ✓ Window is responsive")
+                else:
+                    logger.warning("[Upload] ⚠ Window may not be responsive")
+                    return False
+
+            except Exception as e:
+                logger.error("[Upload] ✗ Window responsiveness check failed: %s", str(e))
+                return False
+
+            logger.info("[Upload] ═══════════════════════════════════════════")
+            logger.info("[Upload] ✓ WINDOW READY - Proceeding with %s", operation_name)
+            logger.info("[Upload] ═══════════════════════════════════════════")
+
+            return True
+
+        except Exception as e:
+            logger.error("[Upload] ensure_window_ready() failed: %s", str(e))
+            return False
 
     def navigate_to_bookmark(self, bookmark: Dict[str, str]) -> bool:
         """
@@ -66,8 +167,19 @@ class VideoUploadHelper:
 
             logger.info("[Upload] ✓ Page loaded successfully")
 
+            # IMPORTANT: Bring browser to front after navigation (keep visible)
+            try:
+                self.driver.maximize_window()
+                self.driver.execute_script("window.focus(); window.scrollTo(0, 0);")
+                logger.info("[Upload] ✓ Browser window focused and maximized")
+            except:
+                pass
+
             # Debug: See what's on the page
             self.debug_page_content(title)
+
+            # Priority 2: Dismiss any notifications/popups after page load
+            self.dismiss_notifications()
 
             return True
 
@@ -113,6 +225,51 @@ class VideoUploadHelper:
 
         except Exception as e:
             logger.error("[Upload] DEBUG: Failed - %s", str(e))
+
+    def dismiss_notifications(self) -> int:
+        """
+        Priority 2: Detect and dismiss any Facebook notifications/popups.
+
+        Returns:
+            Number of notifications/popups dismissed
+        """
+        try:
+            from .config.upload_config import NOTIFICATION_CONFIG
+
+            # Check if active dismissal is enabled
+            if not NOTIFICATION_CONFIG.get('active_dismissal_enabled', True):
+                return 0
+
+            dismiss_patterns = NOTIFICATION_CONFIG.get('dismiss_patterns', [])
+            dismissed_count = 0
+
+            for pattern in dismiss_patterns:
+                try:
+                    elements = self.driver.find_elements(By.XPATH, pattern)
+                    for elem in elements:
+                        try:
+                            # Check if element is visible
+                            if elem.is_displayed():
+                                # Try to click it
+                                elem.click()
+                                dismissed_count += 1
+                                logger.info("[Upload] ✓ Dismissed notification/popup (pattern: %s...)", pattern[:50])
+                                time.sleep(0.3)  # Brief pause after dismissal
+                        except:
+                            # Element might have disappeared or not clickable
+                            pass
+                except:
+                    # Pattern might not match anything - that's OK
+                    pass
+
+            if dismissed_count > 0:
+                logger.info("[Upload] ✓ Total notifications dismissed: %d", dismissed_count)
+
+            return dismissed_count
+
+        except Exception as e:
+            logger.debug("[Upload] Notification dismissal error: %s", str(e))
+            return 0
 
     def find_add_videos_button_text(self, retries: int = 3) -> Optional[Any]:
         """
@@ -348,9 +505,72 @@ class VideoUploadHelper:
             logger.error("[Upload] Error finding video: %s", str(e))
             return None
 
+    def move_video_to_uploaded_folder(self, video_file: str, creator_folder: str) -> bool:
+        """
+        Move uploaded video to 'uploaded videos' subfolder to prevent duplicate uploads.
+
+        Args:
+            video_file: Full path to the uploaded video file
+            creator_folder: Path to the creator's main folder
+
+        Returns:
+            True if moved successfully, False otherwise
+        """
+        try:
+            logger.info("[Upload] ═══════════════════════════════════════════")
+            logger.info("[Upload] Moving Video to 'Uploaded' Folder")
+            logger.info("[Upload] ═══════════════════════════════════════════")
+
+            # Check if video file exists
+            if not os.path.exists(video_file):
+                logger.error("[Upload] ✗ Video file not found: %s", video_file)
+                return False
+
+            # Create 'uploaded videos' subfolder path
+            uploaded_folder = os.path.join(creator_folder, "uploaded videos")
+
+            # Create folder if it doesn't exist
+            if not os.path.exists(uploaded_folder):
+                os.makedirs(uploaded_folder)
+                logger.info("[Upload] ✓ Created 'uploaded videos' folder: %s", uploaded_folder)
+            else:
+                logger.info("[Upload] 'uploaded videos' folder exists: %s", uploaded_folder)
+
+            # Get video filename
+            video_filename = os.path.basename(video_file)
+
+            # Destination path
+            destination = os.path.join(uploaded_folder, video_filename)
+
+            # Check if file already exists at destination
+            if os.path.exists(destination):
+                logger.warning("[Upload] ⚠ File already exists at destination, adding timestamp")
+                # Add timestamp to avoid overwrite
+                name, ext = os.path.splitext(video_filename)
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                video_filename = f"{name}_{timestamp}{ext}"
+                destination = os.path.join(uploaded_folder, video_filename)
+
+            # Move the file (cut operation)
+            shutil.move(video_file, destination)
+
+            logger.info("[Upload] ✓ Video moved successfully!")
+            logger.info("[Upload]   From: %s", video_file)
+            logger.info("[Upload]   To: %s", destination)
+            logger.info("[Upload] ═══════════════════════════════════════════")
+
+            return True
+
+        except Exception as e:
+            logger.error("[Upload] ✗ Failed to move video: %s", str(e))
+            logger.error("[Upload]   Video: %s", video_file)
+            logger.error("[Upload]   Destination: %s", creator_folder)
+            return False
+
     def upload_video_file(self, video_path: str) -> bool:
         """
-        Upload video via file input element.
+        Upload video via file input element WITHOUT opening file dialog.
+        Uses direct file path injection to avoid UI dialog.
 
         Args:
             video_path: Full path to video file
@@ -359,7 +579,18 @@ class VideoUploadHelper:
             True if upload initiated
         """
         try:
-            logger.info("[Upload] Initiating file upload...")
+            logger.info("[Upload] ═══════════════════════════════════════════")
+            logger.info("[Upload] Uploading Video File (NO DIALOG)")
+            logger.info("[Upload] ═══════════════════════════════════════════")
+            logger.info("[Upload] File: %s", video_path)
+
+            # Verify file exists
+            if not os.path.exists(video_path):
+                logger.error("[Upload] ✗ File not found: %s", video_path)
+                return False
+
+            logger.info("[Upload] ✓ File exists (%.2f MB)",
+                       os.path.getsize(video_path) / (1024 * 1024))
 
             # Find file input elements (usually hidden)
             file_inputs = self.driver.find_elements(By.XPATH, "//input[@type='file']")
@@ -368,20 +599,85 @@ class VideoUploadHelper:
                 logger.error("[Upload] ✗ File input element not found")
                 return False
 
-            # Try first input
-            file_input = file_inputs[0]
+            logger.info("[Upload] ✓ Found %d file input(s)", len(file_inputs))
 
-            logger.info("[Upload] Sending file path to input...")
-            file_input.send_keys(video_path)
+            # Use first visible or first available input
+            file_input = None
+            for idx, inp in enumerate(file_inputs, 1):
+                try:
+                    # Don't check visibility - file inputs are often hidden
+                    file_input = inp
+                    logger.info("[Upload] Using file input #%d", idx)
+                    break
+                except:
+                    continue
+
+            if not file_input:
+                logger.error("[Upload] ✗ No usable file input found")
+                return False
+
+            # CRITICAL: Send file path DIRECTLY without clicking (avoids dialog)
+            logger.info("[Upload] Injecting file path directly (bypassing dialog)...")
+
+            # Method 1: Direct send_keys (should NOT open dialog)
+            try:
+                # Make sure element is NOT clicked first
+                logger.info("[Upload] Method 1: Using send_keys (direct injection)...")
+                file_input.send_keys(video_path)
+                logger.info("[Upload] ✓ File path injected successfully")
+            except Exception as e:
+                logger.warning("[Upload] Direct send_keys failed: %s", str(e))
+
+                # Method 2: JavaScript injection (absolutely no dialog)
+                logger.info("[Upload] Method 2: Using JavaScript injection...")
+                try:
+                    # Create a DataTransfer object with the file
+                    js_script = """
+                    var input = arguments[0];
+                    var filePath = arguments[1];
+
+                    // Set the value directly (some browsers allow this)
+                    try {
+                        input.value = filePath;
+                    } catch(e) {
+                        console.log('Could not set value directly:', e);
+                    }
+
+                    // Trigger change event
+                    var event = new Event('change', { bubbles: true });
+                    input.dispatchEvent(event);
+
+                    return true;
+                    """
+
+                    self.driver.execute_script(js_script, file_input, video_path)
+                    logger.info("[Upload] ✓ JavaScript injection completed")
+                except Exception as js_error:
+                    logger.error("[Upload] JavaScript injection failed: %s", str(js_error))
+                    raise
+
+            # Keep browser window focused (prevent any popups from stealing focus)
+            try:
+                self.driver.execute_script("window.focus();")
+            except:
+                pass
 
             # Wait for upload to start
+            logger.info("[Upload] Waiting for upload to initialize...")
             time.sleep(3)
 
-            logger.info("[Upload] ✓ File sent to uploader")
+            logger.info("[Upload] ═══════════════════════════════════════════")
+            logger.info("[Upload] ✓ File Upload Initiated (No Dialog Shown)")
+            logger.info("[Upload] ═══════════════════════════════════════════")
             return True
 
         except Exception as e:
-            logger.error("[Upload] File upload failed: %s", str(e))
+            logger.error("[Upload] ═══════════════════════════════════════════")
+            logger.error("[Upload] ✗ File Upload FAILED")
+            logger.error("[Upload]   Error: %s", str(e))
+            logger.error("[Upload] ═══════════════════════════════════════════")
+            import traceback
+            logger.error("[Upload] Traceback: %s", traceback.format_exc())
             return False
 
     def _clear_field_with_human_behavior(self, field) -> bool:
@@ -460,6 +756,7 @@ class VideoUploadHelper:
     def _type_with_human_behavior(self, field, text: str) -> bool:
         """
         Type text with human-like behavior (random delays between keystrokes).
+        Supports emojis and special characters via clipboard paste fallback.
 
         Args:
             field: WebElement to type into
@@ -471,27 +768,65 @@ class VideoUploadHelper:
         try:
             logger.info("[Upload] Typing with human behavior: '%s'", text)
 
-            for char in text:
-                field.send_keys(char)
-                # Random delay between 50-150ms (realistic typing speed)
-                delay = random.uniform(0.05, 0.15)
-                time.sleep(delay)
+            # Method 1: Try character-by-character typing (works for ASCII)
+            typing_success = False
+            try:
+                for char in text:
+                    field.send_keys(char)
+                    # Random delay between 50-150ms (realistic typing speed)
+                    delay = random.uniform(0.05, 0.15)
+                    time.sleep(delay)
 
-            # Brief pause after typing
-            time.sleep(0.3)
+                # Brief pause after typing
+                time.sleep(0.3)
 
-            # Verify text was entered
-            entered_text = field.get_attribute("value") or ""
-            if text in entered_text:
-                logger.info("[Upload] ✓ Text typed successfully")
-                return True
+                # Verify text was entered
+                entered_text = field.get_attribute("value") or ""
+                if text in entered_text:
+                    logger.info("[Upload] ✓ Text typed successfully (character-by-character)")
+                    typing_success = True
+                else:
+                    logger.warning("[Upload] ⚠ Character typing verification failed")
+                    typing_success = False
+
+            except Exception as e:
+                logger.warning("[Upload] Character typing failed (probably emojis/unicode): %s", str(e))
+                typing_success = False
+
+            # Method 2: Fallback to clipboard paste (works for emojis/special characters)
+            if not typing_success:
+                logger.info("[Upload] Attempting clipboard paste fallback...")
+                try:
+                    # Copy text to clipboard
+                    pyperclip.copy(text)
+                    time.sleep(0.2)
+
+                    # Click field to focus
+                    field.click()
+                    time.sleep(0.2)
+
+                    # Paste using Ctrl+V
+                    field.send_keys(Keys.CONTROL + 'v')
+                    time.sleep(0.5)
+
+                    # Verify pasted text
+                    entered_text = field.get_attribute("value") or ""
+                    if text in entered_text:
+                        logger.info("[Upload] ✓ Text pasted successfully (clipboard method)")
+                        return True
+                    else:
+                        logger.warning("[Upload] ⚠ Paste verification failed. Expected: '%s', Got: '%s'",
+                                     text, entered_text)
+                        return False
+
+                except Exception as paste_error:
+                    logger.error("[Upload] Clipboard paste failed: %s", str(paste_error))
+                    return False
             else:
-                logger.warning("[Upload] ⚠ Text verification failed. Expected: '%s', Got: '%s'",
-                             text, entered_text)
-                return False
+                return True
 
         except Exception as e:
-            logger.error("[Upload] Typing failed: %s", str(e))
+            logger.error("[Upload] All typing methods failed: %s", str(e))
             return False
 
     def set_video_title(self, title: str, retries: int = 3) -> bool:
@@ -515,11 +850,11 @@ class VideoUploadHelper:
             try:
                 if attempt > 1:
                     logger.info("[Upload] Retry attempt %d/%d", attempt, retries)
-                    time.sleep(3)
+                    time.sleep(1)
 
-                # Wait for page to be ready
-                logger.info("[Upload] Waiting for page to load completely...")
-                time.sleep(2)  # Give Facebook time to render fields
+                # Minimal wait - upload interface should be ready
+                logger.info("[Upload] Looking for title field...")
+                time.sleep(0.5)  # Just 0.5 seconds - field should be visible now
 
                 # Enhanced title field selectors (prioritized order) - PROPER SELENIUM SYNTAX
                 title_selectors = [
@@ -633,7 +968,8 @@ class VideoUploadHelper:
                                     logger.info("[Upload] ═══════════════════════════════════════════")
                                     logger.info("[Upload] ✓✓✓ SUCCESS: Title Set! ✓✓✓")
                                     logger.info("[Upload]   Method: %s", selector_name)
-                                    logger.info("[Upload]   Selector: %s", selector)
+                                    logger.info("[Upload]   " \
+                                    ": %s", selector)
                                     logger.info("[Upload]   Title: %s", title)
                                     logger.info("[Upload] ═══════════════════════════════════════════")
 
@@ -722,6 +1058,7 @@ class VideoUploadHelper:
     def monitor_upload_progress(self) -> bool:
         """
         Monitor upload progress until 100% complete.
+        Enhanced with extensive logging and multiple fallback methods.
 
         Returns:
             True if upload completed successfully
@@ -730,199 +1067,539 @@ class VideoUploadHelper:
 
         start_time = time.time()
         last_progress = 0
+        stuck_count = 0
+        max_stuck_iterations = 10  # Alert if stuck for 50 seconds (10 * 5s)
 
         while (time.time() - start_time) < self.upload_timeout:
             try:
-                # Method 1: Progress bar with aria-valuenow
+                # Method 1: Progress bar with role="progressbar"
+                logger.debug("[Upload] Looking for progress bars...")
                 progress_bars = self.driver.find_elements(By.XPATH, "//*[@role='progressbar']")
 
+                logger.info("[Upload] Found %d element(s) with role='progressbar'", len(progress_bars))
+
                 if progress_bars:
-                    for bar in progress_bars:
-                        value = bar.get_attribute("aria-valuenow")
-                        if value:
+                    for idx, bar in enumerate(progress_bars, 1):
+                        try:
+                            # Check visibility
+                            is_visible = bar.is_displayed()
+                            logger.info("[Upload] Progress bar #%d - Visible: %s", idx, is_visible)
+
+                            if not is_visible:
+                                logger.debug("[Upload] Skipping hidden progress bar #%d", idx)
+                                continue
+
+                            # Get all ARIA attributes for debugging
+                            aria_valuenow = bar.get_attribute("aria-valuenow")
+                            aria_valuemin = bar.get_attribute("aria-valuemin")
+                            aria_valuemax = bar.get_attribute("aria-valuemax")
+
+                            logger.info("[Upload] Progress bar #%d attributes:", idx)
+                            logger.info("[Upload]   aria-valuenow: '%s'", aria_valuenow)
+                            logger.info("[Upload]   aria-valuemin: '%s'", aria_valuemin)
+                            logger.info("[Upload]   aria-valuemax: '%s'", aria_valuemax)
+
+                            # Method 1A: Try aria-valuenow attribute
+                            if aria_valuenow:
+                                try:
+                                    progress = int(float(aria_valuenow))
+                                    logger.info("[Upload] ✓ Got progress from aria-valuenow: %d%%", progress)
+
+                                    if progress != last_progress:
+                                        logger.info("[Upload] Progress: %d%%", progress)
+                                        last_progress = progress
+                                        stuck_count = 0  # Reset stuck counter
+
+                                        # Phase 2: Save progress to state
+                                        self.state_manager.update_current_upload(progress=progress)
+
+                                    if progress >= 100:
+                                        logger.info("[Upload] ✓ Upload 100% complete!")
+                                        # Phase 2: Update state to 100%
+                                        self.state_manager.update_current_upload(progress=100, status="completed")
+                                        return True
+
+                                    # Successfully got progress, continue monitoring
+                                    break  # Exit bar loop, wait and check again
+
+                                except Exception as parse_error:
+                                    logger.warning("[Upload] ⚠ Failed to parse aria-valuenow '%s': %s",
+                                                 aria_valuenow, str(parse_error))
+
+                            else:
+                                logger.warning("[Upload] ⚠ Progress bar #%d has NO aria-valuenow attribute!", idx)
+
+                            # Method 1B: Fallback - Find percentage text INSIDE progress bar
+                            logger.info("[Upload] Trying fallback: looking for %% text inside progress bar #%d", idx)
                             try:
-                                progress = int(float(value))
+                                # Find span elements inside this progress bar
+                                inner_spans = bar.find_elements(By.XPATH, ".//span")
+                                logger.info("[Upload] Found %d span(s) inside progress bar #%d", len(inner_spans), idx)
+
+                                for span_idx, span in enumerate(inner_spans, 1):
+                                    span_text = span.text.strip()
+                                    logger.debug("[Upload] Span #%d text: '%s'", span_idx, span_text)
+
+                                    if "%" in span_text:
+                                        try:
+                                            # Extract number (e.g., "5%" -> 5)
+                                            progress_str = span_text.replace("%", "").strip()
+                                            progress = int(float(progress_str))
+
+                                            logger.info("[Upload] ✓ Got progress from inner span text: %d%%", progress)
+
+                                            if progress != last_progress:
+                                                logger.info("[Upload] Progress: %d%%", progress)
+                                                last_progress = progress
+                                                stuck_count = 0
+
+                                                # Phase 2: Save progress to state
+                                                self.state_manager.update_current_upload(progress=progress)
+
+                                            if progress >= 100:
+                                                logger.info("[Upload] ✓ Upload 100% complete!")
+                                                # Phase 2: Update state to 100%
+                                                self.state_manager.update_current_upload(progress=100, status="completed")
+                                                return True
+
+                                            # Successfully got progress
+                                            break
+
+                                        except Exception as span_parse_error:
+                                            logger.debug("[Upload] Failed to parse span text '%s': %s",
+                                                       span_text, str(span_parse_error))
+
+                            except Exception as inner_error:
+                                logger.debug("[Upload] Inner span search failed: %s", str(inner_error))
+
+                        except Exception as bar_error:
+                            logger.warning("[Upload] Error processing progress bar #%d: %s", idx, str(bar_error))
+                            continue
+
+                # Method 2: Text-based percentage anywhere on page (broader search)
+                logger.debug("[Upload] Method 2: Searching for percentage text on page...")
+                progress_texts = self.driver.find_elements(By.XPATH, "//*[contains(text(), '%')]")
+
+                logger.debug("[Upload] Found %d element(s) with %% symbol", len(progress_texts))
+
+                for text_elem in progress_texts:
+                    text = text_elem.text.strip()
+                    if "%" in text and text_elem.is_displayed():
+                        try:
+                            # Extract number before % (handle "Uploading: 95%" or just "95%")
+                            progress_str = text.split("%")[0].strip().split()[-1]
+                            progress = int(float(progress_str))
+
+                            # Validate it's a reasonable percentage (0-100)
+                            if 0 <= progress <= 100:
+                                logger.info("[Upload] ✓ Got progress from page text: %d%% (text: '%s')", progress, text)
 
                                 if progress != last_progress:
                                     logger.info("[Upload] Progress: %d%%", progress)
                                     last_progress = progress
+                                    stuck_count = 0
+
+                                    # Phase 2: Save progress to state
+                                    self.state_manager.update_current_upload(progress=progress)
 
                                 if progress >= 100:
                                     logger.info("[Upload] ✓ Upload 100% complete!")
+                                    # Phase 2: Update state to 100%
+                                    self.state_manager.update_current_upload(progress=100, status="completed")
                                     return True
-                            except:
-                                pass
 
-                # Method 2: Text-based percentage (e.g., "95%")
-                progress_texts = self.driver.find_elements(By.XPATH, "//*[contains(text(), '%')]")
+                                break  # Got valid progress
 
-                for text_elem in progress_texts:
-                    text = text_elem.text
-                    if "%" in text:
-                        try:
-                            # Extract number before %
-                            progress_str = text.split("%")[0].strip().split()[-1]
-                            progress = int(progress_str)
-
-                            if progress != last_progress:
-                                logger.info("[Upload] Progress: %d%%", progress)
-                                last_progress = progress
-
-                            if progress >= 100:
-                                logger.info("[Upload] ✓ Upload 100% complete!")
-                                return True
-                        except:
-                            pass
+                        except Exception as text_parse_error:
+                            logger.debug("[Upload] Failed to parse text '%s': %s", text, str(text_parse_error))
 
                 # Method 3: "Complete" or "Published" indicators
+                logger.debug("[Upload] Method 3: Checking for completion indicators...")
                 complete_indicators = self.driver.find_elements(By.XPATH,
                     "//*[contains(text(), 'Complete') or contains(text(), 'Published') or contains(text(), 'Done')]")
 
                 if complete_indicators:
-                    logger.info("[Upload] ✓ Upload completed (indicator found)!")
-                    return True
+                    for indicator in complete_indicators:
+                        if indicator.is_displayed():
+                            logger.info("[Upload] ✓ Upload completed (indicator found: '%s')!", indicator.text)
+                            # Phase 2: Update state to 100%
+                            self.state_manager.update_current_upload(progress=100, status="completed")
+                            return True
+
+                # Check if progress is stuck
+                if last_progress > 0:
+                    stuck_count += 1
+                    if stuck_count >= max_stuck_iterations:
+                        logger.warning("[Upload] ⚠ Progress stuck at %d%% for %d seconds",
+                                     last_progress, stuck_count * 5)
+                        stuck_count = 0  # Reset to avoid spam
 
             except Exception as e:
-                logger.debug("[Upload] Progress check error: %s", str(e))
+                logger.warning("[Upload] Progress check error: %s", str(e))
+                import traceback
+                logger.debug("[Upload] Traceback: %s", traceback.format_exc())
 
-            # Wait before next check
-            time.sleep(3)
+            # Wait before next check (increased from 3 to 5 seconds)
+            logger.debug("[Upload] Waiting 5 seconds before next check...")
+            time.sleep(5)
 
         # Timeout reached
-        logger.error("[Upload] ✗ Upload timeout after %d seconds", self.upload_timeout)
+        elapsed = time.time() - start_time
+        logger.error("[Upload] ✗ Upload timeout after %.0f seconds (limit: %d seconds)",
+                    elapsed, self.upload_timeout)
+        logger.error("[Upload]   Last detected progress: %d%%", last_progress)
         return False
 
-    def find_publish_button_text(self, retries: int = 3) -> Optional[Any]:
+    def find_publish_button(self) -> Optional[Any]:
         """
-        Find 'Publish' button using text-based detection.
-        Checks buttons, divs, spans, and all clickable elements.
-
-        Args:
-            retries: Number of retry attempts
+        Find publish button using multiple detection methods.
 
         Returns:
-            WebElement or None
+            WebElement if found, None otherwise
         """
-        logger.info("[Upload] Looking for 'Publish' button (text-based detection)...")
+        logger.info("[Upload] ═══════════════════════════════════════════")
+        logger.info("[Upload] Searching for Publish Button")
+        logger.info("[Upload] ═══════════════════════════════════════════")
 
-        for attempt in range(1, retries + 1):
-            try:
-                if attempt > 1:
-                    logger.info("[Upload] Retry %d/%d", attempt, retries)
-                    time.sleep(2)
+        # Method 1: Exact text match "Publish" (most reliable for div with text)
+        try:
+            logger.info("[Upload] Method 1: Exact text 'Publish'")
+            buttons = self.driver.find_elements(By.XPATH, "//*[text()='Publish']")
 
-                # Method 1: ANY element containing "Publish" or "Post" text
+            logger.info("[Upload] Found %d element(s) with exact text 'Publish'", len(buttons))
+
+            for idx, btn in enumerate(buttons, 1):
                 try:
-                    elements = self.driver.find_elements(By.XPATH,
-                        "//*[contains(text(), 'Publish') or contains(text(), 'Post') or contains(text(), 'Share')]")
-                    if elements:
-                        logger.info("[Upload] ✓ Found button (broad text search) - %d match(es)", len(elements))
-                        # Return the first visible element
-                        for elem in elements:
-                            if elem.is_displayed():
-                                logger.info("[Upload]   Using element: tag=%s, text=%s", elem.tag_name, elem.text[:30])
-                                return elem
-                except Exception as e:
-                    logger.debug("[Upload] Broad text search failed: %s", str(e))
+                    is_visible = btn.is_displayed()
+                    logger.info("[Upload] Button #%d - Visible: %s", idx, is_visible)
 
-                # Method 2: Divs with role=button containing text
-                try:
-                    elements = self.driver.find_elements(By.XPATH,
-                        "//div[@role='button' and (contains(., 'Publish') or contains(., 'Post'))]")
-                    if elements:
-                        logger.info("[Upload] ✓ Found button (div role=button)")
-                        return elements[0]
-                except Exception as e:
-                    logger.debug("[Upload] Div role=button search failed: %s", str(e))
-
-                # Method 3: Button elements
-                try:
-                    elements = self.driver.find_elements(By.XPATH,
-                        "//button[contains(text(), 'Publish') or contains(text(), 'Post')]")
-                    if elements:
-                        logger.info("[Upload] ✓ Found button (button tag)")
-                        return elements[0]
-                except Exception as e:
-                    logger.debug("[Upload] Button tag search failed: %s", str(e))
-
-                # Method 4: Spans containing text
-                try:
-                    elements = self.driver.find_elements(By.XPATH,
-                        "//span[contains(text(), 'Publish') or contains(text(), 'Post')]")
-                    if elements:
-                        # Get the parent element (likely the clickable container)
-                        parent = elements[0].find_element(By.XPATH, "..")
-                        logger.info("[Upload] ✓ Found button (span parent)")
-                        return parent
-                except Exception as e:
-                    logger.debug("[Upload] Span search failed: %s", str(e))
-
-            except Exception as e:
-                logger.error("[Upload] Error in text-based detection attempt %d: %s", attempt, str(e))
-                if attempt < retries:
+                    if is_visible:
+                        logger.info("[Upload] ✓ Found visible Publish button (Method 1)")
+                        return btn
+                except:
                     continue
 
-        logger.warning("[Upload] Text-based detection found no 'Publish' button")
+        except Exception as e:
+            logger.debug("[Upload] Method 1 failed: %s", str(e))
+
+        # Method 2: Contains text "Publish" (case variations, partial match)
+        try:
+            logger.info("[Upload] Method 2: Contains text 'Publish'")
+            buttons = self.driver.find_elements(By.XPATH, "//*[contains(text(), 'Publish')]")
+
+            logger.info("[Upload] Found %d element(s) containing 'Publish'", len(buttons))
+
+            for idx, btn in enumerate(buttons, 1):
+                try:
+                    if btn.is_displayed():
+                        logger.info("[Upload] ✓ Found visible Publish button (Method 2)")
+                        return btn
+                except:
+                    continue
+
+        except Exception as e:
+            logger.debug("[Upload] Method 2 failed: %s", str(e))
+
+        # Method 3: div/button with role and text
+        try:
+            logger.info("[Upload] Method 3: Role-based with text")
+            selectors = [
+                "//div[@role='button'][text()='Publish']",
+                "//div[@role='button'][contains(text(), 'Publish')]",
+                "//button[text()='Publish']",
+                "//button[contains(text(), 'Publish')]",
+            ]
+
+            for selector in selectors:
+                buttons = self.driver.find_elements(By.XPATH, selector)
+                if buttons:
+                    for btn in buttons:
+                        try:
+                            if btn.is_displayed():
+                                logger.info("[Upload] ✓ Found visible Publish button (Method 3: %s)", selector)
+                                return btn
+                        except:
+                            continue
+
+        except Exception as e:
+            logger.debug("[Upload] Method 3 failed: %s", str(e))
+
+        # Method 4: Image recognition (enabled state)
+        try:
+            logger.info("[Upload] Method 4: Image recognition (enabled button)")
+
+            # Take screenshot to search in
+            screenshot = pyautogui.screenshot()
+
+            # Find button using image matching
+            button_location = pyautogui.locateOnScreen(
+                PUBLISH_BUTTON_ENABLED_IMAGE,
+                confidence=0.8
+            )
+
+            if button_location:
+                logger.info("[Upload] ✓ Found Publish button via image recognition!")
+                logger.info("[Upload]   Location: %s", button_location)
+
+                # Get center coordinates
+                center_x, center_y = pyautogui.center(button_location)
+
+                # Find element at those coordinates using JavaScript
+                element = self.driver.execute_script("""
+                    return document.elementFromPoint(arguments[0], arguments[1]);
+                """, center_x, center_y)
+
+                if element:
+                    logger.info("[Upload] ✓ Got WebElement from image coordinates")
+                    return element
+
+        except Exception as e:
+            logger.debug("[Upload] Method 4 (image recognition) failed: %s", str(e))
+
+        logger.warning("[Upload] ⚠ Publish button NOT found after trying all methods")
         return None
 
-    def find_publish_button(self, retries: int = 3):
+    def is_publish_button_enabled(self, button) -> bool:
         """
-        Find 'Publish' button using text-based detection.
+        Check if publish button is enabled (not disabled/grayed out).
 
         Args:
-            retries: Number of retry attempts
+            button: WebElement of publish button
 
         Returns:
-            WebElement or None
-        """
-        logger.info("[Upload] Attempting to find Publish button...")
-        result = self.find_publish_button_text(retries=retries)
-        if result:
-            logger.info("[Upload] ✓ Publish button found successfully")
-            return result
-
-        logger.error("[Upload] ✗ Publish button not found")
-        return None
-
-    def close_file_dialog(self) -> bool:
-        """
-        Close file upload dialog if still open.
-        Attempts to press ESC key or find and click close button.
-
-        Returns:
-            True if dialog closed or not present
+            True if enabled, False if disabled
         """
         try:
-            logger.info("[Upload] Attempting to close file dialog...")
+            # Method 1: Check aria-disabled attribute
+            aria_disabled = button.get_attribute("aria-disabled")
+            if aria_disabled == "true":
+                logger.debug("[Upload] Button is disabled (aria-disabled='true')")
+                return False
 
-            # Method 1: Press ESC key
-            try:
-                actions = ActionChains(self.driver)
-                actions.send_keys(Keys.ESCAPE).perform()
-                time.sleep(1)
-                logger.info("[Upload] ✓ Sent ESC key to close dialog")
-                return True
-            except Exception as e:
-                logger.debug("[Upload] ESC key method failed: %s", str(e))
+            # Method 2: Check disabled attribute
+            disabled = button.get_attribute("disabled")
+            if disabled:
+                logger.debug("[Upload] Button is disabled (disabled attribute)")
+                return False
 
-            # Method 2: Look for close button (X button or Cancel)
+            # Method 3: Check if button classes contain "disabled"
+            button_class = button.get_attribute("class") or ""
+            if "disabled" in button_class.lower():
+                logger.debug("[Upload] Button appears disabled (class contains 'disabled')")
+                return False
+
+            # Method 4: Image recognition - check if it matches ENABLED state image
             try:
-                close_buttons = self.driver.find_elements(By.XPATH,
-                    "//div[@aria-label='Close' or @aria-label='Cancel'] | //button[contains(text(), 'Close') or contains(text(), 'Cancel')]")
-                if close_buttons:
-                    close_buttons[0].click()
-                    time.sleep(1)
-                    logger.info("[Upload] ✓ Clicked close button")
+                # Get button location and screenshot
+                location = button.location
+                size = button.size
+
+                # Use image recognition to verify enabled state
+                enabled_match = pyautogui.locateOnScreen(
+                    PUBLISH_BUTTON_ENABLED_IMAGE,
+                    confidence=0.75
+                )
+
+                if enabled_match:
+                    logger.info("[Upload] ✓ Button is ENABLED (image match confirmed)")
                     return True
-            except Exception as e:
-                logger.debug("[Upload] Close button method failed: %s", str(e))
+                else:
+                    # Try matching disabled state
+                    disabled_match = pyautogui.locateOnScreen(
+                        PUBLISH_BUTTON_DISABLED_IMAGE,
+                        confidence=0.75
+                    )
 
-            logger.info("[Upload] No file dialog to close or already closed")
+                    if disabled_match:
+                        logger.debug("[Upload] Button is DISABLED (disabled image match)")
+                        return False
+
+            except Exception as img_error:
+                logger.debug("[Upload] Image state check failed: %s", str(img_error))
+
+            # Default: Assume enabled if no disabled indicators found
+            logger.info("[Upload] ✓ Button appears ENABLED (no disabled indicators)")
             return True
 
         except Exception as e:
-            logger.warning("[Upload] Error closing file dialog: %s", str(e))
-            return True  # Don't fail the whole upload for this
+            logger.warning("[Upload] Error checking button state: %s", str(e))
+            return False
+
+    def hover_on_publish_button(self, button) -> bool:
+        """
+        Move ACTUAL physical mouse to publish button and hover for visual confirmation.
+        Uses PyAutoGUI for real mouse movement (visible on screen).
+        Does NOT click (production mode).
+
+        Args:
+            button: WebElement of publish button
+
+        Returns:
+            True if hover successful
+        """
+        try:
+            logger.info("[Upload] ═══════════════════════════════════════════")
+            logger.info("[Upload] Hovering on Publish Button (Physical Mouse)")
+            logger.info("[Upload] ═══════════════════════════════════════════")
+
+            # Step 1: Scroll button into view (center of screen)
+            logger.info("[Upload] Scrolling button into view...")
+            self.driver.execute_script("""
+                arguments[0].scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'center',
+                    inline: 'center'
+                });
+            """, button)
+
+            time.sleep(0.5)  # Let scroll complete and element settle
+
+            # Step 2: Get element position relative to viewport
+            logger.info("[Upload] Getting element coordinates...")
+            element_rect = button.rect  # x, y, width, height
+
+            logger.info("[Upload] Element rect: x=%s, y=%s, width=%s, height=%s",
+                       element_rect['x'], element_rect['y'],
+                       element_rect['width'], element_rect['height'])
+
+            # Step 3: Get browser window position on screen
+            try:
+                # Get window position using JavaScript (viewport position on screen)
+                window_pos = self.driver.execute_script("""
+                    return {
+                        x: window.screenX,
+                        y: window.screenY
+                    };
+                """)
+
+                logger.info("[Upload] Browser window position: x=%s, y=%s",
+                           window_pos['x'], window_pos['y'])
+
+            except Exception as js_error:
+                logger.warning("[Upload] Could not get window position via JS: %s", str(js_error))
+                # Fallback: assume window is at top-left
+                window_pos = {'x': 0, 'y': 0}
+
+            # Step 4: Calculate absolute screen coordinates
+            # Element center point
+            element_center_x = element_rect['x'] + (element_rect['width'] / 2)
+            element_center_y = element_rect['y'] + (element_rect['height'] / 2)
+
+            # Absolute screen coordinates
+            screen_x = window_pos['x'] + element_center_x
+            screen_y = window_pos['y'] + element_center_y
+
+            logger.info("[Upload] Calculated screen coordinates: x=%d, y=%d",
+                       int(screen_x), int(screen_y))
+
+            # Step 5: Move ACTUAL physical mouse using PyAutoGUI
+            logger.info("[Upload] Moving PHYSICAL mouse to button...")
+
+            # Get current mouse position
+            current_x, current_y = pyautogui.position()
+            logger.info("[Upload] Current mouse position: x=%d, y=%d", current_x, current_y)
+
+            # Smooth movement to button (duration makes it visible)
+            pyautogui.moveTo(
+                int(screen_x),
+                int(screen_y),
+                duration=0.5  # 0.5 seconds smooth movement (very visible!)
+            )
+
+            logger.info("[Upload] ✓ Physical mouse moved to Publish button!")
+
+            # Step 6: Hover for additional 0.5 seconds (visual confirmation)
+            logger.info("[Upload] Hovering for 0.5 seconds...")
+            time.sleep(0.5)
+
+            # Step 7: Move mouse in small circle (visual emphasis)
+            logger.info("[Upload] Moving mouse in small circle (visual confirmation)...")
+
+            # Small circular motion around button (8 points)
+            radius = 10  # Small 10px circle
+            for angle in range(0, 360, 45):  # 45° increments = 8 points
+                offset_x = int(radius * math.cos(math.radians(angle)))
+                offset_y = int(radius * math.sin(math.radians(angle)))
+
+                pyautogui.moveTo(
+                    int(screen_x + offset_x),
+                    int(screen_y + offset_y),
+                    duration=0.05  # Fast small movements
+                )
+
+            # Return to button center
+            pyautogui.moveTo(int(screen_x), int(screen_y), duration=0.1)
+
+            logger.info("[Upload] ✓ Hover complete!")
+            logger.info("[Upload] (Production mode: NOT clicking button)")
+            logger.info("[Upload] ═══════════════════════════════════════════")
+
+            return True
+
+        except Exception as e:
+            logger.error("[Upload] Failed to hover on button: %s", str(e))
+            import traceback
+            logger.debug("[Upload] Traceback: %s", traceback.format_exc())
+            return False
+
+    def detect_and_hover_publish_button(self) -> bool:
+        """
+        Complete workflow: Find publish button, check if enabled, and hover on it.
+        This is called after upload completes.
+
+        Returns:
+            True if button found and hovered, False otherwise
+        """
+        try:
+            # Step 1: Find the button
+            button = self.find_publish_button()
+
+            if not button:
+                logger.warning("[Upload] ⚠ Could not find Publish button")
+                logger.warning("[Upload] Continuing to next bookmark anyway...")
+                return False
+
+            logger.info("[Upload] ✓ Publish button found!")
+
+            # Step 2: Check if enabled
+            logger.info("[Upload] Checking button state...")
+            is_enabled = self.is_publish_button_enabled(button)
+
+            if is_enabled:
+                logger.info("[Upload] ✓ Publish button is ENABLED")
+            else:
+                logger.warning("[Upload] ⚠ Publish button is DISABLED")
+                logger.warning("[Upload] (Upload might not be complete yet)")
+
+            # Step 3: Hover on button (regardless of enabled state, for visual confirmation)
+            hover_success = self.hover_on_publish_button(button)
+
+            # Step 4: Wait for Facebook "bulk upload processing" notification
+            # Facebook shows this notification after publish button appears
+            # User's smart solution: Let it show, then navigate to next page (dismisses automatically)
+            try:
+                from .config.upload_config import NOTIFICATION_CONFIG
+                post_publish_wait = NOTIFICATION_CONFIG.get('post_publish_wait', 3)
+
+                logger.info("[Upload] ═══════════════════════════════════════════")
+                logger.info("[Upload] Waiting %d seconds for Facebook notifications...", post_publish_wait)
+                logger.info("[Upload] Note: 'Bulk upload processing' notification will appear")
+                logger.info("[Upload] It will auto-dismiss when moving to next page")
+                logger.info("[Upload] ═══════════════════════════════════════════")
+
+                time.sleep(post_publish_wait)
+
+                # Optional: Try to dismiss any notifications that appeared
+                self.dismiss_notifications()
+
+            except Exception as e:
+                logger.debug("[Upload] Post-publish wait failed: %s", str(e))
+
+            return hover_success
+
+        except Exception as e:
+            logger.error("[Upload] Error in detect_and_hover_publish_button: %s", str(e))
+            return False
 
     def upload_to_bookmark(self, bookmark: Dict[str, str], folder_path: str, max_retries: int = 3) -> bool:
         """
@@ -938,6 +1615,13 @@ class VideoUploadHelper:
         """
         bookmark_title = bookmark['title']
 
+        # Phase 2: Check network before starting
+        if not self.network_monitor.is_network_stable():
+            logger.warning("[Upload] Network unstable, waiting for recovery...")
+            if not self.network_monitor.wait_for_reconnection(max_wait=300):
+                logger.error("[Upload] Network timeout, cannot start upload")
+                return False
+
         for attempt in range(1, max_retries + 1):
             try:
                 logger.info("[Upload] ═══════════════════════════════════════════")
@@ -951,7 +1635,105 @@ class VideoUploadHelper:
                         continue
                     raise Exception("Failed to navigate to bookmark")
 
-                # Step 2: Find Add Videos button (text-based or image recognition)
+                # Step 2: Get video file FIRST (before clicking button!)
+                video_file = self.get_first_video_from_folder(folder_path)
+                if not video_file:
+                    raise Exception("No video found in folder")
+
+                video_name = os.path.splitext(os.path.basename(video_file))[0]
+                logger.info("[Upload] ✓ Video ready: %s", video_name)
+
+                # Phase 2: Track current upload in state
+                self.current_video = video_file
+                self.current_bookmark = bookmark_title
+                self.current_attempt = attempt
+
+                self.state_manager.update_current_upload(
+                    video_file=video_file,
+                    video_name=video_name,
+                    bookmark=bookmark_title,
+                    status="uploading",
+                    progress=0,
+                    attempt=attempt
+                )
+                logger.debug("[Upload] ✓ State saved (video: %s, attempt: %d)", video_name, attempt)
+
+                # Step 3: Wait for page to stabilize
+                logger.info("[Upload] Waiting for page to fully stabilize...")
+                time.sleep(3)  # Give Facebook time to load all elements
+
+                # Step 3-Priority2: Dismiss any popups/notifications before proceeding
+                self.dismiss_notifications()
+
+                # Step 3a: Find file input element (BEFORE clicking "Add Videos" button)
+                logger.info("[Upload] ═══════════════════════════════════════════")
+                logger.info("[Upload] PRE-LOADING File (Prevents Dialog)")
+                logger.info("[Upload] ═══════════════════════════════════════════")
+
+                file_inputs = self.driver.find_elements(By.XPATH, "//input[@type='file']")
+                file_preloaded = False
+
+                if file_inputs:
+                    logger.info("[Upload] ✓ Found %d file input(s) BEFORE button click", len(file_inputs))
+
+                    # Inject file path into ALL file inputs (prevents dialog)
+                    for idx, file_input in enumerate(file_inputs, 1):
+                        try:
+                            logger.info("[Upload] Injecting file into input #%d...", idx)
+
+                            # Make input visible temporarily (helps with some implementations)
+                            try:
+                                self.driver.execute_script("""
+                                    arguments[0].style.display = 'block';
+                                    arguments[0].style.visibility = 'visible';
+                                    arguments[0].style.opacity = '1';
+                                """, file_input)
+                            except:
+                                pass
+
+                            # Inject file path
+                            file_input.send_keys(video_file)
+                            time.sleep(0.5)
+
+                            # Verify injection
+                            value = file_input.get_attribute("value")
+                            if value and video_file in value:
+                                logger.info("[Upload] ✓ File verified in input #%d: %s", idx, value[-50:])
+                                file_preloaded = True
+                            else:
+                                logger.warning("[Upload] ⚠ File not verified in input #%d", idx)
+
+                            # Hide input again
+                            try:
+                                self.driver.execute_script("""
+                                    arguments[0].style.display = 'none';
+                                """, file_input)
+                            except:
+                                pass
+
+                        except Exception as e:
+                            logger.warning("[Upload] Input #%d injection failed: %s", idx, str(e))
+
+                    if file_preloaded:
+                        logger.info("[Upload] ═══════════════════════════════════════════")
+                        logger.info("[Upload] ✓✓✓ FILE PRE-LOADED SUCCESSFULLY! ✓✓✓")
+                        logger.info("[Upload] ═══════════════════════════════════════════")
+                        time.sleep(2)  # Let it settle
+                    else:
+                        logger.warning("[Upload] ⚠ File pre-load verification failed")
+                else:
+                    logger.warning("[Upload] ⚠ No file inputs found yet (will try after button click)")
+                    file_preloaded = False
+
+                # Step 4: Now find and click "Add Videos" button
+                logger.info("[Upload] ───────────────────────────────────────────")
+                logger.info("[Upload] Finding 'Add Videos' button...")
+                logger.info("[Upload] ───────────────────────────────────────────")
+
+                # DEFENSIVE CHECK: Ensure window is ready before finding button
+                if not self.ensure_window_ready("finding Add Videos button"):
+                    logger.warning("[Upload] ⚠ Window readiness check failed, but continuing...")
+
                 button_result = self.find_add_videos_button()
                 if not button_result:
                     if attempt < max_retries:
@@ -959,79 +1741,126 @@ class VideoUploadHelper:
                         continue
                     raise Exception("Add Videos button not found")
 
-                # Click the button (handle both WebElement and coordinates)
+                # Click the button (file is ALREADY injected, so NO DIALOG!)
+                logger.info("[Upload] ═══════════════════════════════════════════")
+                logger.info("[Upload] Clicking 'Add Videos' Button...")
+                logger.info("[Upload] ═══════════════════════════════════════════")
+
                 if isinstance(button_result, tuple):
                     # Image recognition result - use PyAutoGUI
                     button_x, button_y = button_result
-                    logger.info("[Upload] Clicking button at (%d, %d) using PyAutoGUI...", button_x, button_y)
+                    logger.info("[Upload] Using PyAutoGUI click at (%d, %d)...", button_x, button_y)
                     pyautogui.click(button_x, button_y)
                 else:
                     # Text-based result - use Selenium click
-                    logger.info("[Upload] Clicking button using Selenium (tag: %s)...", button_result.tag_name)
+                    logger.info("[Upload] Using Selenium click (tag: %s)...", button_result.tag_name)
                     button_result.click()
 
-                time.sleep(2)  # Wait for click response
-                logger.info("[Upload] ✓ Button clicked")
+                logger.info("[Upload] ✓ Button clicked!")
 
-                # Step 3: Get video file
-                video_file = self.get_first_video_from_folder(folder_path)
-                if not video_file:
-                    raise Exception("No video found in folder")
+                # CRITICAL: Monitor for file dialog and close it if it appears
+                logger.info("[Upload] Monitoring for unwanted file dialog...")
+                time.sleep(1)  # Give time for dialog to appear if it's going to
 
-                video_name = os.path.splitext(os.path.basename(video_file))[0]
+                # Check if dialog opened (Windows-specific)
+                import platform
+                if platform.system() == "Windows":
+                    try:
+                        import subprocess
+                        # Check for "Open" dialog window
+                        ps_check = '''
+                        $windows = Get-Process | Where-Object {$_.MainWindowTitle -like "*Open*" -or $_.MainWindowTitle -like "*Browse*"}
+                        if ($windows) { Write-Output "DialogFound" } else { Write-Output "NoDialog" }
+                        '''
 
-                # Step 4: Upload video
-                if not self.upload_video_file(video_file):
-                    if attempt < max_retries:
-                        logger.warning("[Upload] Upload failed, retrying...")
-                        continue
-                    raise Exception("File upload failed")
+                        result = subprocess.run(
+                            ["powershell", "-Command", ps_check],
+                            capture_output=True,
+                            text=True,
+                            timeout=2
+                        )
 
-                # Step 5: Set title
-                self.set_video_title(video_name)
+                        if "DialogFound" in result.stdout:
+                            logger.warning("[Upload] ⚠ File dialog detected! Closing it...")
 
-                # Step 6: Monitor progress
+                            # Send ESC key to close dialog
+                            ps_close = '''
+                            Add-Type @"
+                            using System;
+                            using System.Runtime.InteropServices;
+                            public class KeySend {
+                                [DllImport("user32.dll")]
+                                public static extern void keybd_event(byte bVk, byte bScan, int dwFlags, int dwExtraInfo);
+                            }
+"@
+                            [KeySend]::keybd_event(0x1B, 0, 0, 0)  # ESC key down
+                            Start-Sleep -Milliseconds 100
+                            [KeySend]::keybd_event(0x1B, 0, 2, 0)  # ESC key up
+                            '''
+
+                            subprocess.run(
+                                ["powershell", "-ExecutionPolicy", "Bypass", "-Command", ps_close],
+                                timeout=2
+                            )
+
+                            logger.info("[Upload] ✓ Dialog closed with ESC key")
+                            time.sleep(0.5)
+                        else:
+                            logger.info("[Upload] ✓ No file dialog detected (good!)")
+
+                    except Exception as e:
+                        logger.debug("[Upload] Dialog check failed: %s", str(e))
+
+                time.sleep(2)  # Wait for page response
+
+                if file_preloaded:
+                    logger.info("[Upload] ═══════════════════════════════════════════")
+                    logger.info("[Upload] ✓ Button clicked (file was pre-loaded)")
+                    logger.info("[Upload] ✓ NO FILE DIALOG SHOULD HAVE APPEARED!")
+                    logger.info("[Upload] ═══════════════════════════════════════════")
+                else:
+                    logger.warning("[Upload] ⚠ Button clicked but file was not pre-loaded")
+                    logger.warning("[Upload] ⚠ Dialog may have appeared")
+
+                # Step 5: If file input wasn't available before, inject now
+                if not file_inputs:
+                    logger.info("[Upload] Injecting file NOW (after button click)...")
+                    if not self.upload_video_file(video_file):
+                        if attempt < max_retries:
+                            logger.warning("[Upload] Upload failed, retrying...")
+                            continue
+                        raise Exception("File upload failed")
+
+                # Step 6: Set title IMMEDIATELY (while upload is in progress)
+                # Don't wait for 100% - title field appears as soon as upload starts
+                logger.info("[Upload] ═══════════════════════════════════════════")
+                logger.info("[Upload] Setting Title (Upload In Progress)")
+                logger.info("[Upload] ═══════════════════════════════════════════")
+
+                # Short wait for upload interface to fully appear
+                time.sleep(1)
+
+                # Set title NOW (upload running in background)
+                title_set = self.set_video_title(video_name)
+                if title_set:
+                    logger.info("[Upload] ✓ Title set while video uploading!")
+                else:
+                    logger.warning("[Upload] ⚠ Could not set title (continuing anyway)")
+
+                # Step 7: Monitor progress (upload continues in background)
+                logger.info("[Upload] ═══════════════════════════════════════════")
+                logger.info("[Upload] Monitoring Upload Progress")
+                logger.info("[Upload] ═══════════════════════════════════════════")
+
+                # DEFENSIVE CHECK: Ensure window is ready before monitoring
+                if not self.ensure_window_ready("monitoring upload progress"):
+                    logger.warning("[Upload] ⚠ Window readiness check failed, but continuing...")
+
                 if not self.monitor_upload_progress():
                     if attempt < max_retries:
                         logger.warning("[Upload] Upload did not complete, retrying...")
                         continue
                     raise Exception("Upload did not complete")
-
-                # Step 7: Close file dialog
-                logger.info("[Upload] Step 7: Closing file dialog...")
-                self.close_file_dialog()
-                time.sleep(2)
-
-                # Step 8: Find publish button
-                logger.info("[Upload] Step 8: Finding Publish button...")
-                publish_button = self.find_publish_button(retries=3)
-                if not publish_button:
-                    logger.warning("[Upload] Publish button not found, skipping mouse movement")
-                else:
-                    # Step 9: Move mouse to publish button and get position
-                    logger.info("[Upload] Step 9: Moving mouse to Publish button...")
-                    try:
-                        # Get button location
-                        button_location = publish_button.location
-                        button_size = publish_button.size
-
-                        # Calculate center position
-                        button_x = button_location['x'] + button_size['width'] // 2
-                        button_y = button_location['y'] + button_size['height'] // 2
-
-                        logger.info("[Upload]   Button position: (%d, %d)", button_x, button_y)
-
-                        # Move mouse to button and hover
-                        self.mouse.hover_over_position(button_x, button_y, hover_duration=1.0)
-                        logger.info("[Upload] ✓ Mouse moved to Publish button")
-
-                        # Step 10: Circular mouse movement (testing phase - no click)
-                        logger.info("[Upload] Step 10: Performing circular movement (testing phase)...")
-                        self.mouse.circular_idle_movement(duration=2.0, radius=30)
-                        logger.info("[Upload] ✓ Circular movement complete")
-
-                    except Exception as e:
-                        logger.warning("[Upload] Mouse movement failed: %s", str(e))
 
                 # Success!
                 logger.info("[Upload] ═══════════════════════════════════════════")
@@ -1040,18 +1869,66 @@ class VideoUploadHelper:
                 logger.info("[Upload]   Video: %s", video_name)
                 logger.info("[Upload]   Status: 100%% Complete")
                 logger.info("[Upload] ═══════════════════════════════════════════")
+
+                # DEFENSIVE CHECK: Ensure window is ready before finding publish button
+                if not self.ensure_window_ready("finding publish button"):
+                    logger.warning("[Upload] ⚠ Window readiness check failed, but continuing...")
+
+                # Detect and hover on Publish button (production mode: no click)
+                self.detect_and_hover_publish_button()
+
+                # Phase 2: Move video using FileHandler (robust file operations)
+                moved_to = self.file_handler.move_video_to_uploaded(video_file, folder_path)
+                if moved_to:
+                    logger.info("[Upload] ✓ Video moved to 'uploaded videos' folder")
+
+                    # Phase 2: Mark video as uploaded in permanent history
+                    self.state_manager.mark_video_uploaded(
+                        video_file=video_file,
+                        bookmark=bookmark_title,
+                        moved_to=moved_to
+                    )
+                else:
+                    logger.warning("[Upload] ⚠ Could not move video (continuing anyway)")
+
+                # Phase 2: Clear current upload state
+                self.state_manager.clear_current_upload()
+                logger.debug("[Upload] ✓ State cleared after successful upload")
+
                 return True
 
             except Exception as e:
                 logger.error("[Upload] Attempt %d failed: %s", attempt, str(e))
+
+                # Phase 2: Update state with failure info
+                self.state_manager.update_current_upload(
+                    status="failed",
+                    attempt=attempt
+                )
+
                 if attempt < max_retries:
                     logger.info("[Upload] Retrying in 5 seconds...")
                     time.sleep(5)
                 else:
+                    # Phase 2: All retries exhausted - delete failed video
                     logger.error("[Upload] ═══════════════════════════════════════════")
                     logger.error("[Upload] ✗ FAILED: %s", bookmark_title)
                     logger.error("[Upload]   Error: %s", str(e))
+                    logger.error("[Upload]   Video: %s", video_name)
                     logger.error("[Upload] ═══════════════════════════════════════════")
+
+                    # Delete video after 3 failed attempts
+                    if self.file_handler.delete_failed_video(
+                        video_file,
+                        reason=f"failed after {max_retries} retries: {str(e)}"
+                    ):
+                        logger.warning("[Upload] ✓ Failed video deleted to prevent re-upload")
+                    else:
+                        logger.error("[Upload] ✗ Could not delete failed video")
+
+                    # Phase 2: Clear state after failure
+                    self.state_manager.clear_current_upload()
+
                     return False
 
         return False

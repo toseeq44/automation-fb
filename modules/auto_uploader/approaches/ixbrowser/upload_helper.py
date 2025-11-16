@@ -16,6 +16,7 @@ from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from ...browser.mouse_controller import MouseController
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ class VideoUploadHelper:
         """
         self.driver = driver
         self.upload_timeout = 600  # 10 minutes max per video
+        self.mouse = MouseController()
 
     def navigate_to_bookmark(self, bookmark: Dict[str, str]) -> bool:
         """
@@ -790,6 +792,138 @@ class VideoUploadHelper:
         logger.error("[Upload] ✗ Upload timeout after %d seconds", self.upload_timeout)
         return False
 
+    def find_publish_button_text(self, retries: int = 3) -> Optional[Any]:
+        """
+        Find 'Publish' button using text-based detection.
+        Checks buttons, divs, spans, and all clickable elements.
+
+        Args:
+            retries: Number of retry attempts
+
+        Returns:
+            WebElement or None
+        """
+        logger.info("[Upload] Looking for 'Publish' button (text-based detection)...")
+
+        for attempt in range(1, retries + 1):
+            try:
+                if attempt > 1:
+                    logger.info("[Upload] Retry %d/%d", attempt, retries)
+                    time.sleep(2)
+
+                # Method 1: ANY element containing "Publish" or "Post" text
+                try:
+                    elements = self.driver.find_elements(By.XPATH,
+                        "//*[contains(text(), 'Publish') or contains(text(), 'Post') or contains(text(), 'Share')]")
+                    if elements:
+                        logger.info("[Upload] ✓ Found button (broad text search) - %d match(es)", len(elements))
+                        # Return the first visible element
+                        for elem in elements:
+                            if elem.is_displayed():
+                                logger.info("[Upload]   Using element: tag=%s, text=%s", elem.tag_name, elem.text[:30])
+                                return elem
+                except Exception as e:
+                    logger.debug("[Upload] Broad text search failed: %s", str(e))
+
+                # Method 2: Divs with role=button containing text
+                try:
+                    elements = self.driver.find_elements(By.XPATH,
+                        "//div[@role='button' and (contains(., 'Publish') or contains(., 'Post'))]")
+                    if elements:
+                        logger.info("[Upload] ✓ Found button (div role=button)")
+                        return elements[0]
+                except Exception as e:
+                    logger.debug("[Upload] Div role=button search failed: %s", str(e))
+
+                # Method 3: Button elements
+                try:
+                    elements = self.driver.find_elements(By.XPATH,
+                        "//button[contains(text(), 'Publish') or contains(text(), 'Post')]")
+                    if elements:
+                        logger.info("[Upload] ✓ Found button (button tag)")
+                        return elements[0]
+                except Exception as e:
+                    logger.debug("[Upload] Button tag search failed: %s", str(e))
+
+                # Method 4: Spans containing text
+                try:
+                    elements = self.driver.find_elements(By.XPATH,
+                        "//span[contains(text(), 'Publish') or contains(text(), 'Post')]")
+                    if elements:
+                        # Get the parent element (likely the clickable container)
+                        parent = elements[0].find_element(By.XPATH, "..")
+                        logger.info("[Upload] ✓ Found button (span parent)")
+                        return parent
+                except Exception as e:
+                    logger.debug("[Upload] Span search failed: %s", str(e))
+
+            except Exception as e:
+                logger.error("[Upload] Error in text-based detection attempt %d: %s", attempt, str(e))
+                if attempt < retries:
+                    continue
+
+        logger.warning("[Upload] Text-based detection found no 'Publish' button")
+        return None
+
+    def find_publish_button(self, retries: int = 3):
+        """
+        Find 'Publish' button using text-based detection.
+
+        Args:
+            retries: Number of retry attempts
+
+        Returns:
+            WebElement or None
+        """
+        logger.info("[Upload] Attempting to find Publish button...")
+        result = self.find_publish_button_text(retries=retries)
+        if result:
+            logger.info("[Upload] ✓ Publish button found successfully")
+            return result
+
+        logger.error("[Upload] ✗ Publish button not found")
+        return None
+
+    def close_file_dialog(self) -> bool:
+        """
+        Close file upload dialog if still open.
+        Attempts to press ESC key or find and click close button.
+
+        Returns:
+            True if dialog closed or not present
+        """
+        try:
+            logger.info("[Upload] Attempting to close file dialog...")
+
+            # Method 1: Press ESC key
+            try:
+                actions = ActionChains(self.driver)
+                actions.send_keys(Keys.ESCAPE).perform()
+                time.sleep(1)
+                logger.info("[Upload] ✓ Sent ESC key to close dialog")
+                return True
+            except Exception as e:
+                logger.debug("[Upload] ESC key method failed: %s", str(e))
+
+            # Method 2: Look for close button (X button or Cancel)
+            try:
+                close_buttons = self.driver.find_elements(By.XPATH,
+                    "//div[@aria-label='Close' or @aria-label='Cancel'] | //button[contains(text(), 'Close') or contains(text(), 'Cancel')]")
+                if close_buttons:
+                    close_buttons[0].click()
+                    time.sleep(1)
+                    logger.info("[Upload] ✓ Clicked close button")
+                    return True
+            except Exception as e:
+                logger.debug("[Upload] Close button method failed: %s", str(e))
+
+            logger.info("[Upload] No file dialog to close or already closed")
+            return True
+
+        except Exception as e:
+            logger.warning("[Upload] Error closing file dialog: %s", str(e))
+            return True  # Don't fail the whole upload for this
+
     def upload_to_bookmark(self, bookmark: Dict[str, str], folder_path: str, max_retries: int = 3) -> bool:
         """
         Complete upload workflow for single bookmark.
@@ -862,6 +996,42 @@ class VideoUploadHelper:
                         logger.warning("[Upload] Upload did not complete, retrying...")
                         continue
                     raise Exception("Upload did not complete")
+
+                # Step 7: Close file dialog
+                logger.info("[Upload] Step 7: Closing file dialog...")
+                self.close_file_dialog()
+                time.sleep(2)
+
+                # Step 8: Find publish button
+                logger.info("[Upload] Step 8: Finding Publish button...")
+                publish_button = self.find_publish_button(retries=3)
+                if not publish_button:
+                    logger.warning("[Upload] Publish button not found, skipping mouse movement")
+                else:
+                    # Step 9: Move mouse to publish button and get position
+                    logger.info("[Upload] Step 9: Moving mouse to Publish button...")
+                    try:
+                        # Get button location
+                        button_location = publish_button.location
+                        button_size = publish_button.size
+
+                        # Calculate center position
+                        button_x = button_location['x'] + button_size['width'] // 2
+                        button_y = button_location['y'] + button_size['height'] // 2
+
+                        logger.info("[Upload]   Button position: (%d, %d)", button_x, button_y)
+
+                        # Move mouse to button and hover
+                        self.mouse.hover_over_position(button_x, button_y, hover_duration=1.0)
+                        logger.info("[Upload] ✓ Mouse moved to Publish button")
+
+                        # Step 10: Circular mouse movement (testing phase - no click)
+                        logger.info("[Upload] Step 10: Performing circular movement (testing phase)...")
+                        self.mouse.circular_idle_movement(duration=2.0, radius=30)
+                        logger.info("[Upload] ✓ Circular movement complete")
+
+                    except Exception as e:
+                        logger.warning("[Upload] Mouse movement failed: %s", str(e))
 
                 # Success!
                 logger.info("[Upload] ═══════════════════════════════════════════")

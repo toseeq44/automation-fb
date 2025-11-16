@@ -580,99 +580,111 @@ class IXBrowserApproach(BaseApproach):
                     raise FileNotFoundError(error_msg)
 
                 if not os.path.exists(profile_folder):
-                    error_msg = f"Profile folder not found: {profile_folder}"
-                    logger.error("[IXApproach] %s", error_msg)
-                    logger.error("[IXApproach] Please create: Desktop/creators data/%s/", profile_name)
-                    raise FileNotFoundError(error_msg)
+                    # Profile folder missing - SKIP this profile and continue
+                    logger.warning("[IXApproach] ═══════════════════════════════════════════")
+                    logger.warning("[IXApproach] Profile Folder Not Found - SKIPPING")
+                    logger.warning("[IXApproach] ═══════════════════════════════════════════")
+                    logger.warning("[IXApproach] Profile: %s", profile_name)
+                    logger.warning("[IXApproach] Expected path: %s", profile_folder)
+                    logger.warning("[IXApproach] Please create: Desktop/creators data/%s/", profile_name)
+                    logger.warning("[IXApproach] Skipping to next profile...")
+                    logger.warning("[IXApproach] ═══════════════════════════════════════════")
 
-                # 3. Get all creator folders (subfolders)
-                creator_folders = [
-                    f for f in os.listdir(profile_folder)
-                    if os.path.isdir(os.path.join(profile_folder, f))
-                ]
-                logger.info("[IXApproach] ✓ Found %d creator folder(s)", len(creator_folders))
+                    # Don't throw error, just skip by not executing upload code
+                    # Set flags to skip upload section
+                    facebook_bookmarks = []
+                    matched = []
+                else:
+                    # Profile folder exists - proceed with normal workflow
 
-                # 4. Open new tab for bookmarks
-                logger.info("[IXApproach] Opening new tab...")
-                driver.execute_script("window.open('about:blank', '_blank');")
-                driver.switch_to.window(driver.window_handles[-1])
-                logger.info("[IXApproach] ✓ New tab opened")
+                    # 3. Get all creator folders (subfolders)
+                    creator_folders = [
+                        f for f in os.listdir(profile_folder)
+                        if os.path.isdir(os.path.join(profile_folder, f))
+                    ]
+                    logger.info("[IXApproach] ✓ Found %d creator folder(s)", len(creator_folders))
 
-                # 5. Navigate to bookmarks
-                logger.info("[IXApproach] Accessing bookmarks...")
-                driver.get("chrome://bookmarks/")
-                time.sleep(2)
+                    # 4. Open new tab for bookmarks
+                    logger.info("[IXApproach] Opening new tab...")
+                    driver.execute_script("window.open('about:blank', '_blank');")
+                    driver.switch_to.window(driver.window_handles[-1])
+                    logger.info("[IXApproach] ✓ New tab opened")
 
-                # 6. Get all bookmarks with titles and URLs
-                bookmark_script = """
-                    return new Promise((resolve) => {
-                        chrome.bookmarks.getTree((tree) => {
-                            let bookmarks = [];
-                            function extractBookmarks(nodes) {
-                                nodes.forEach(node => {
-                                    if (node.url) {
-                                        bookmarks.push({
-                                            title: node.title,
-                                            url: node.url
-                                        });
-                                    }
-                                    if (node.children) {
-                                        extractBookmarks(node.children);
-                                    }
-                                });
-                            }
-                            extractBookmarks(tree);
-                            resolve(bookmarks);
+                    # 5. Navigate to bookmarks
+                    logger.info("[IXApproach] Accessing bookmarks...")
+                    driver.get("chrome://bookmarks/")
+                    time.sleep(2)
+
+                    # 6. Get all bookmarks with titles and URLs
+                    bookmark_script = """
+                        return new Promise((resolve) => {
+                            chrome.bookmarks.getTree((tree) => {
+                                let bookmarks = [];
+                                function extractBookmarks(nodes) {
+                                    nodes.forEach(node => {
+                                        if (node.url) {
+                                            bookmarks.push({
+                                                title: node.title,
+                                                url: node.url
+                                            });
+                                        }
+                                        if (node.children) {
+                                            extractBookmarks(node.children);
+                                        }
+                                    });
+                                }
+                                extractBookmarks(tree);
+                                resolve(bookmarks);
+                            });
                         });
-                    });
-                """
+                    """
 
-                all_bookmarks = driver.execute_script(bookmark_script)
-                logger.info("[IXApproach] ✓ Retrieved %d total bookmark(s)", len(all_bookmarks))
+                    all_bookmarks = driver.execute_script(bookmark_script)
+                    logger.info("[IXApproach] ✓ Retrieved %d total bookmark(s)", len(all_bookmarks))
 
-                # 7. Filter Facebook bookmarks only
-                facebook_bookmarks = [
-                    b for b in all_bookmarks
-                    if "facebook.com" in b['url']
-                ]
-                logger.info("[IXApproach] ✓ Filtered %d Facebook bookmark(s)", len(facebook_bookmarks))
+                    # 7. Filter Facebook bookmarks only
+                    facebook_bookmarks = [
+                        b for b in all_bookmarks
+                        if "facebook.com" in b['url']
+                    ]
+                    logger.info("[IXApproach] ✓ Filtered %d Facebook bookmark(s)", len(facebook_bookmarks))
 
-                # 8. Extract bookmark titles (creator names)
-                bookmark_names = [b['title'] for b in facebook_bookmarks]
+                    # 8. Extract bookmark titles (creator names)
+                    bookmark_names = [b['title'] for b in facebook_bookmarks]
 
-                # 9. Compare bookmarks with folders
-                matched = [name for name in bookmark_names if name in creator_folders]
-                missing = [name for name in bookmark_names if name not in creator_folders]
-                extra = [folder for folder in creator_folders if folder not in bookmark_names]
+                    # 9. Compare bookmarks with folders
+                    matched = [name for name in bookmark_names if name in creator_folders]
+                    missing = [name for name in bookmark_names if name not in creator_folders]
+                    extra = [folder for folder in creator_folders if folder not in bookmark_names]
 
-                # 10. Console Output - Summary
-                logger.info("[IXApproach] ═══════════════════════════════════════════")
-                logger.info("[IXApproach] Bookmark-Folder Comparison Result")
-                logger.info("[IXApproach] ═══════════════════════════════════════════")
-                logger.info("[IXApproach] Profile: %s", profile_name)
-                logger.info("[IXApproach] Creator Folder: %s", profile_folder)
-                logger.info("[IXApproach] ")
-                logger.info("[IXApproach] Total bookmarks: %d", len(all_bookmarks))
-                logger.info("[IXApproach] Facebook bookmarks: %d", len(facebook_bookmarks))
-                logger.info("[IXApproach] Matched folders: %d", len(matched))
-                logger.info("[IXApproach] Missing folders: %d", len(missing))
-                logger.info("[IXApproach] Extra folders: %d", len(extra))
-                logger.info("[IXApproach] ")
-                logger.info("[IXApproach] Details:")
+                    # 10. Console Output - Summary
+                    logger.info("[IXApproach] ═══════════════════════════════════════════")
+                    logger.info("[IXApproach] Bookmark-Folder Comparison Result")
+                    logger.info("[IXApproach] ═══════════════════════════════════════════")
+                    logger.info("[IXApproach] Profile: %s", profile_name)
+                    logger.info("[IXApproach] Creator Folder: %s", profile_folder)
+                    logger.info("[IXApproach] ")
+                    logger.info("[IXApproach] Total bookmarks: %d", len(all_bookmarks))
+                    logger.info("[IXApproach] Facebook bookmarks: %d", len(facebook_bookmarks))
+                    logger.info("[IXApproach] Matched folders: %d", len(matched))
+                    logger.info("[IXApproach] Missing folders: %d", len(missing))
+                    logger.info("[IXApproach] Extra folders: %d", len(extra))
+                    logger.info("[IXApproach] ")
+                    logger.info("[IXApproach] Details:")
 
-                # Show matched
-                for name in matched:
-                    logger.info("[IXApproach] ✓ %s - Folder exists", name)
+                    # Show matched
+                    for name in matched:
+                        logger.info("[IXApproach] ✓ %s - Folder exists", name)
 
-                # Show missing
-                for name in missing:
-                    logger.info("[IXApproach] ✗ %s - Folder missing", name)
+                    # Show missing
+                    for name in missing:
+                        logger.info("[IXApproach] ✗ %s - Folder missing", name)
 
-                # Show extra
-                for name in extra:
-                    logger.info("[IXApproach] ⚠ %s - Extra folder (no bookmark)", name)
+                    # Show extra
+                    for name in extra:
+                        logger.info("[IXApproach] ⚠ %s - Extra folder (no bookmark)", name)
 
-                logger.info("[IXApproach] ═══════════════════════════════════════════")
+                    logger.info("[IXApproach] ═══════════════════════════════════════════")
 
             except FileNotFoundError as e:
                 logger.error("[IXApproach] %s", str(e))

@@ -102,14 +102,19 @@ def _detect_platform_key(url: str) -> str:
 
 
 def _find_cookie_file(cookies_dir: Path, platform_key: str) -> typing.Optional[str]:
-    """Find cookie file in root cookies folder"""
+    """Find cookie file - prioritize chrome_cookies.txt master file"""
     try:
-        # Platform-specific files: cookies/youtube.txt, cookies/instagram.txt
+        # PRIORITY 1: Master chrome_cookies.txt (2025 approach - one file for all platforms)
+        master_cookie = cookies_dir / "chrome_cookies.txt"
+        if master_cookie.exists() and master_cookie.stat().st_size > 10:
+            return str(master_cookie)
+
+        # PRIORITY 2: Platform-specific files (legacy support)
         cookie_file = cookies_dir / f"{platform_key}.txt"
         if cookie_file.exists() and cookie_file.stat().st_size > 10:
             return str(cookie_file)
 
-        # Fallback: cookies/cookies.txt
+        # PRIORITY 3: Generic fallback
         fallback = cookies_dir / "cookies.txt"
         if fallback.exists() and fallback.stat().st_size > 10:
             return str(fallback)
@@ -293,12 +298,15 @@ def _retry_on_failure(func, max_retries=3, delay=2):
     return None
 
 
-def _method_ytdlp_dump_json(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0) -> typing.List[dict]:
+def _method_ytdlp_dump_json(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, cookie_browser: str = None) -> typing.List[dict]:
     """METHOD 1: yt-dlp --dump-json (WITH DATES) - PRIMARY METHOD"""
     try:
         cmd = ['yt-dlp', '--dump-json', '--flat-playlist', '--ignore-errors', '--no-warnings']
 
-        if cookie_file:
+        # Cookie handling: browser OR file (2025 approach)
+        if cookie_browser:
+            cmd.extend(['--cookies-from-browser', cookie_browser])
+        elif cookie_file:
             cmd.extend(['--cookies', cookie_file])
 
         if max_videos > 0:
@@ -348,12 +356,15 @@ def _method_ytdlp_dump_json(url: str, platform_key: str, cookie_file: str = None
     return []
 
 
-def _method_ytdlp_get_url(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0) -> typing.List[dict]:
+def _method_ytdlp_get_url(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, cookie_browser: str = None) -> typing.List[dict]:
     """METHOD 2: yt-dlp --get-url (FAST, NO DATES)"""
     try:
         cmd = ['yt-dlp', '--get-url', '--flat-playlist', '--ignore-errors', '--no-warnings']
 
-        if cookie_file:
+        # Cookie handling: browser OR file
+        if cookie_browser:
+            cmd.extend(['--cookies-from-browser', cookie_browser])
+        elif cookie_file:
             cmd.extend(['--cookies', cookie_file])
 
         if max_videos > 0:
@@ -406,14 +417,17 @@ def _method_ytdlp_get_url(url: str, platform_key: str, cookie_file: str = None, 
     return []
 
 
-def _method_ytdlp_with_retry(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0) -> typing.List[dict]:
+def _method_ytdlp_with_retry(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, cookie_browser: str = None) -> typing.List[dict]:
     """METHOD 3: yt-dlp with retries (PERSISTENT)"""
     try:
         cmd = ['yt-dlp', '--dump-json', '--flat-playlist', '--ignore-errors',
                '--retries', '10', '--fragment-retries', '10', '--extractor-retries', '5',
                '--socket-timeout', '30']
 
-        if cookie_file:
+        # Cookie handling: browser OR file
+        if cookie_browser:
+            cmd.extend(['--cookies-from-browser', cookie_browser])
+        elif cookie_file:
             cmd.extend(['--cookies', cookie_file])
 
         if max_videos > 0:
@@ -456,7 +470,7 @@ def _method_ytdlp_with_retry(url: str, platform_key: str, cookie_file: str = Non
     return []
 
 
-def _method_ytdlp_user_agent(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0) -> typing.List[dict]:
+def _method_ytdlp_user_agent(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, cookie_browser: str = None) -> typing.List[dict]:
     """METHOD 4: yt-dlp with different user agent (ANTI-BLOCK)"""
     user_agents = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0",
@@ -469,7 +483,10 @@ def _method_ytdlp_user_agent(url: str, platform_key: str, cookie_file: str = Non
             cmd = ['yt-dlp', '--dump-json', '--flat-playlist', '--ignore-errors',
                    '--user-agent', ua]
 
-            if cookie_file:
+            # Cookie handling: browser OR file
+            if cookie_browser:
+                cmd.extend(['--cookies-from-browser', cookie_browser])
+            elif cookie_file:
                 cmd.extend(['--cookies', cookie_file])
 
             if max_videos > 0:
@@ -792,41 +809,50 @@ def extract_links_intelligent(
         options = options or {}
         max_videos = int(options.get('max_videos', 0) or 0)
         force_all_methods = bool(options.get('force_all_methods', False))
+        cookie_browser = options.get('cookie_browser')  # "chrome", "firefox", "edge", or None
         creator = _extract_creator_from_url(url, platform_key)
 
         # Get learning system
         learning_system = get_learning_system()
 
-        # Find cookies
-        cookie_file = _find_cookie_file(cookies_dir, platform_key)
+        # Cookie handling: browser OR file
+        cookie_file = None
         temp_cookie_file = None
 
-        if not cookie_file:
-            temp_cookie_file = _extract_browser_cookies(platform_key)
-            cookie_file = temp_cookie_file
+        if cookie_browser:
+            # Use browser cookies directly (2025 approach)
+            if progress_callback:
+                progress_callback(f"🍪 Using {cookie_browser.title()} browser cookies directly")
+        else:
+            # Use cookie file (traditional approach)
+            cookie_file = _find_cookie_file(cookies_dir, platform_key)
+            if not cookie_file:
+                temp_cookie_file = _extract_browser_cookies(platform_key)
+                cookie_file = temp_cookie_file
 
-        if cookie_file and progress_callback:
-            progress_callback(f"🍪 Using cookies: cookies/{platform_key}.txt")
+            if cookie_file and progress_callback:
+                cookie_name = Path(cookie_file).name
+                progress_callback(f"🍪 Using cookies: {cookie_name}")
 
         entries: typing.List[dict] = []
         seen_normalized: typing.Set[str] = set()
 
-        # Define all available methods
+        # Define all available methods (pass cookie_browser to yt-dlp methods)
         all_methods = [
             ("Method 1: yt-dlp --dump-json (with dates)",
-             lambda: _method_ytdlp_dump_json(url, platform_key, cookie_file, max_videos),
+             lambda: _method_ytdlp_dump_json(url, platform_key, cookie_file, max_videos, cookie_browser),
              True),
 
             ("Method 2: yt-dlp --get-url (fast)",
-             lambda: _method_ytdlp_get_url(url, platform_key, cookie_file, max_videos),
+             lambda: _method_ytdlp_get_url(url, platform_key, cookie_file, max_videos, cookie_browser),
              True),
 
             ("Method 3: yt-dlp with retries",
-             lambda: _method_ytdlp_with_retry(url, platform_key, cookie_file, max_videos),
+             lambda: _method_ytdlp_with_retry(url, platform_key, cookie_file, max_videos, cookie_browser),
              True),
 
             ("Method 4: yt-dlp with user agent",
-             lambda: _method_ytdlp_user_agent(url, platform_key, cookie_file, max_videos),
+             lambda: _method_ytdlp_user_agent(url, platform_key, cookie_file, max_videos, cookie_browser),
              True),
 
             ("Method 5: Instaloader",

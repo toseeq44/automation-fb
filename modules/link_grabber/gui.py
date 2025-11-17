@@ -101,12 +101,12 @@ class LinkGrabberPage(QWidget):
         """)
         cookie_layout = QVBoxLayout()
 
-        # Platform selector
-        platform_row = QHBoxLayout()
-        platform_label = QLabel("Platform:")
-        self.platform_combo = QComboBox()
-        self.platform_combo.addItems(["Auto-Detect", "youtube", "instagram", "tiktok", "facebook", "twitter"])
-        self.platform_combo.setStyleSheet("""
+        # Cookie source selector
+        source_row = QHBoxLayout()
+        source_label = QLabel("Cookie Source:")
+        self.cookie_source_combo = QComboBox()
+        self.cookie_source_combo.addItems(["Upload File", "Use Browser (Chrome)", "Use Browser (Firefox)", "Use Browser (Edge)"])
+        self.cookie_source_combo.setStyleSheet("""
             QComboBox {
                 background-color: #2C2F33;
                 color: #F5F6F5;
@@ -115,15 +115,17 @@ class LinkGrabberPage(QWidget):
                 border-radius: 5px;
             }
         """)
-        platform_row.addWidget(platform_label)
-        platform_row.addWidget(self.platform_combo)
-        platform_row.addStretch()
-        cookie_layout.addLayout(platform_row)
+        self.cookie_source_combo.currentTextChanged.connect(self.on_cookie_source_changed)
+        source_row.addWidget(source_label)
+        source_row.addWidget(self.cookie_source_combo)
+        source_row.addStretch()
+        cookie_layout.addLayout(source_row)
 
-        # Cookie text area
+        # Cookie text area (only for Upload File mode)
         self.cookie_text = QTextEdit()
         self.cookie_text.setPlaceholderText(
-            "Paste cookies here (Netscape format)...\n"
+            "Paste Chrome cookies here (Netscape format)...\n"
+            "TIP: Use 'Get cookies.txt' Chrome extension to export\n"
             "Example: .youtube.com\tTRUE\t/\tTRUE\t1234567890\tSSID\tvalue123"
         )
         self.cookie_text.setMaximumHeight(80)
@@ -141,7 +143,7 @@ class LinkGrabberPage(QWidget):
 
         # Cookie buttons
         cookie_btn_row = QHBoxLayout()
-        self.upload_cookie_btn = QPushButton("📤 Upload")
+        self.upload_cookie_btn = QPushButton("📤 Upload Cookie File")
         self.save_cookie_btn = QPushButton("💾 Save")
         self.clear_cookie_btn = QPushButton("🧹 Clear")
 
@@ -165,7 +167,7 @@ class LinkGrabberPage(QWidget):
         cookie_layout.addLayout(cookie_btn_row)
 
         # Cookie status
-        self.cookie_status = QLabel("No cookies loaded")
+        self.cookie_status = QLabel("💡 No cookies loaded - Using browser cookies or public access")
         self.cookie_status.setStyleSheet("color: #888; font-size: 11px;")
         cookie_layout.addWidget(self.cookie_status)
 
@@ -176,7 +178,6 @@ class LinkGrabberPage(QWidget):
         self.upload_cookie_btn.clicked.connect(self.upload_cookie_file)
         self.save_cookie_btn.clicked.connect(self.save_cookies)
         self.clear_cookie_btn.clicked.connect(self.clear_cookies)
-        self.platform_combo.currentTextChanged.connect(self.check_existing_cookies)
 
         options_row = QHBoxLayout()
         options_row.setSpacing(10)
@@ -385,7 +386,18 @@ class LinkGrabberPage(QWidget):
         self.start_btn.setEnabled(False)
 
         max_videos = 0 if self.all_videos_check.isChecked() else self.limit_spin.value()
-        options = {"max_videos": max_videos}
+
+        # Get cookie source
+        cookie_source = self.cookie_source_combo.currentText()
+        browser = None
+        if cookie_source != "Upload File":
+            # Extract browser name (e.g., "Use Browser (Chrome)" -> "chrome")
+            browser = cookie_source.split("(")[1].split(")")[0].lower()
+
+        options = {
+            "max_videos": max_videos,
+            "cookie_browser": browser  # None for file, "chrome"/"firefox"/"edge" for browser
+        }
         if len(urls) == 1:
             self.thread = LinkGrabberThread(urls[0], options)
             try:
@@ -498,6 +510,24 @@ class LinkGrabberPage(QWidget):
             self.download_btn.setEnabled(True)
 
     # ========== COOKIE MANAGEMENT METHODS ==========
+    def on_cookie_source_changed(self, source):
+        """Handle cookie source selection change"""
+        if source == "Upload File":
+            self.cookie_text.setEnabled(True)
+            self.upload_cookie_btn.setEnabled(True)
+            self.save_cookie_btn.setEnabled(True)
+            self.clear_cookie_btn.setEnabled(True)
+            self.cookie_status.setText("💡 Upload your Chrome cookie file (Netscape format)")
+        else:
+            # Browser mode - disable file upload controls
+            self.cookie_text.setEnabled(False)
+            self.upload_cookie_btn.setEnabled(False)
+            self.save_cookie_btn.setEnabled(False)
+            self.clear_cookie_btn.setEnabled(False)
+            browser = source.split("(")[1].split(")")[0]  # Extract browser name
+            self.cookie_status.setText(f"✅ Will use cookies directly from {browser} browser")
+            self.cookie_status.setStyleSheet("color: #1ABC9C; font-size: 11px;")
+
     def upload_cookie_file(self):
         """Upload cookie file from disk"""
         file_path, _ = QFileDialog.getOpenFileName(
@@ -509,36 +539,34 @@ class LinkGrabberPage(QWidget):
                     cookies = f.read()
                 self.cookie_text.setPlainText(cookies)
                 self.log_area.append(f"✅ Cookie file loaded: {Path(file_path).name}")
-                self.auto_detect_platform_from_cookies(cookies)
+                self.detect_cookie_platforms(cookies)
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Failed to load cookie file: {str(e)}")
 
-    def auto_detect_platform_from_cookies(self, cookies):
-        """Auto-detect platform from cookie domains"""
+    def detect_cookie_platforms(self, cookies):
+        """Detect which platforms are in the cookie file"""
         cookies_lower = cookies.lower()
+        platforms = []
         if 'youtube.com' in cookies_lower or 'google.com' in cookies_lower:
-            self.platform_combo.setCurrentText("youtube")
-            self.cookie_status.setText("✅ Detected YouTube cookies")
+            platforms.append("YouTube")
+        if 'instagram.com' in cookies_lower:
+            platforms.append("Instagram")
+        if 'tiktok.com' in cookies_lower:
+            platforms.append("TikTok")
+        if 'facebook.com' in cookies_lower:
+            platforms.append("Facebook")
+        if 'twitter.com' in cookies_lower or 'x.com' in cookies_lower:
+            platforms.append("Twitter")
+
+        if platforms:
+            self.cookie_status.setText(f"✅ Detected: {', '.join(platforms)}")
             self.cookie_status.setStyleSheet("color: #1ABC9C; font-size: 11px;")
-        elif 'instagram.com' in cookies_lower:
-            self.platform_combo.setCurrentText("instagram")
-            self.cookie_status.setText("✅ Detected Instagram cookies")
-            self.cookie_status.setStyleSheet("color: #1ABC9C; font-size: 11px;")
-        elif 'tiktok.com' in cookies_lower:
-            self.platform_combo.setCurrentText("tiktok")
-            self.cookie_status.setText("✅ Detected TikTok cookies")
-            self.cookie_status.setStyleSheet("color: #1ABC9C; font-size: 11px;")
-        elif 'facebook.com' in cookies_lower:
-            self.platform_combo.setCurrentText("facebook")
-            self.cookie_status.setText("✅ Detected Facebook cookies")
-            self.cookie_status.setStyleSheet("color: #1ABC9C; font-size: 11px;")
-        elif 'twitter.com' in cookies_lower or 'x.com' in cookies_lower:
-            self.platform_combo.setCurrentText("twitter")
-            self.cookie_status.setText("✅ Detected Twitter cookies")
-            self.cookie_status.setStyleSheet("color: #1ABC9C; font-size: 11px;")
+        else:
+            self.cookie_status.setText("⚠️ No known platforms detected")
+            self.cookie_status.setStyleSheet("color: #E74C3C; font-size: 11px;")
 
     def save_cookies(self):
-        """Save cookies to root cookies folder"""
+        """Save cookies as master chrome_cookies.txt file"""
         cookies = self.cookie_text.toPlainText().strip()
         if not cookies:
             QMessageBox.warning(self, "Error", "No cookies to save!")
@@ -548,29 +576,26 @@ class LinkGrabberPage(QWidget):
             QMessageBox.warning(
                 self, "Invalid Format",
                 "Cookies must be in Netscape format!\n\n"
-                "Expected: .domain.com  TRUE  /  TRUE  expiry  name  value"
+                "Expected: .domain.com  TRUE  /  TRUE  expiry  name  value\n\n"
+                "TIP: Use 'Get cookies.txt' Chrome extension"
             )
             return
 
-        platform = self.platform_combo.currentText().lower()
-        if platform == "auto-detect":
-            self.auto_detect_platform_from_cookies(cookies)
-            platform = self.platform_combo.currentText().lower()
-            if platform == "auto-detect":
-                QMessageBox.warning(self, "Error", "Please select a platform manually!")
-                return
-
-        cookie_file = self.cookies_dir / f"{platform}.txt"
+        # Save as master cookie file for all platforms
+        cookie_file = self.cookies_dir / "chrome_cookies.txt"
         try:
             with open(cookie_file, 'w', encoding='utf-8') as f:
                 f.write(cookies)
-            self.cookie_status.setText(f"✅ Saved to cookies/{platform}.txt")
-            self.cookie_status.setStyleSheet("color: #1ABC9C; font-size: 11px; font-weight: bold;")
-            self.log_area.append(f"✅ Cookies saved to: cookies/{platform}.txt")
+
+            # Detect platforms in cookies
+            self.detect_cookie_platforms(cookies)
+
+            self.log_area.append(f"✅ Cookies saved to: cookies/chrome_cookies.txt")
             QMessageBox.information(
                 self, "Success",
-                f"Cookies saved successfully!\n\nFile: cookies/{platform}.txt\n"
-                f"These will be used automatically for {platform.title()}."
+                f"Cookies saved successfully!\n\n"
+                f"File: cookies/chrome_cookies.txt\n"
+                f"This master file will be used for ALL platforms automatically."
             )
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Failed to save cookies: {str(e)}")
@@ -587,24 +612,6 @@ class LinkGrabberPage(QWidget):
     def clear_cookies(self):
         """Clear cookie text area"""
         self.cookie_text.clear()
-        self.cookie_status.setText("No cookies loaded")
+        self.cookie_status.setText("💡 No cookies loaded - Using browser cookies or public access")
         self.cookie_status.setStyleSheet("color: #888; font-size: 11px;")
         self.log_area.append("🧹 Cookie text area cleared")
-
-    def check_existing_cookies(self, platform_text):
-        """Check if cookies already exist for selected platform"""
-        if platform_text == "Auto-Detect":
-            return
-        platform = platform_text.lower()
-        cookie_file = self.cookies_dir / f"{platform}.txt"
-        if cookie_file.exists():
-            try:
-                file_size = cookie_file.stat().st_size
-                self.cookie_status.setText(f"✅ Found {platform} cookies ({file_size} bytes)")
-                self.cookie_status.setStyleSheet("color: #1ABC9C; font-size: 11px;")
-            except Exception:
-                self.cookie_status.setText("⚠️ Error reading cookie file")
-                self.cookie_status.setStyleSheet("color: #E74C3C; font-size: 11px;")
-        else:
-            self.cookie_status.setText(f"No {platform} cookies found")
-            self.cookie_status.setStyleSheet("color: #888; font-size: 11px;")

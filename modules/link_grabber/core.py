@@ -5,7 +5,7 @@ ULTIMATE LINK GRABBER - All Techniques Combined
 Features:
 - ALL extraction methods: yt-dlp, instaloader, gallery-dl, playwright, selenium, requests
 - PER-CREATOR FOLDERS for both single and bulk mode
-- Desktop/Toseeq Links Grabber/@{CreatorName}/{CreatorName}_links.txt
+- Desktop/Links Grabber/@{CreatorName}/{CreatorName}_links.txt
 - Automatic duplicate removal
 - Crash protection
 - Multi-platform support
@@ -218,7 +218,7 @@ def _remove_duplicate_entries(entries: typing.List[dict]) -> typing.List[dict]:
 def _create_creator_folder(creator_name: str) -> Path:
     """Create creator folder and return path"""
     desktop = Path.home() / "Desktop"
-    base_folder = desktop / "Toseeq Links Grabber"
+    base_folder = desktop / "Links Grabber"
     
     safe_creator = _safe_filename(f"@{creator_name}")
     creator_folder = base_folder / safe_creator
@@ -974,7 +974,7 @@ class BulkLinkGrabberThread(QThread):
     def _create_summary_file(self) -> str:
         """Create bulk extraction summary file"""
         desktop = Path.home() / "Desktop"
-        base_folder = desktop / "Toseeq Links Grabber"
+        base_folder = desktop / "Links Grabber"
         
         summary_file = base_folder / "BULK_EXTRACTION_SUMMARY.txt"
         
@@ -1016,7 +1016,7 @@ class BulkLinkGrabberThread(QThread):
         
         # Emit save signal
         desktop = Path.home() / "Desktop"
-        base_folder = desktop / "Toseeq Links Grabber"
+        base_folder = desktop / "Links Grabber"
         self.save_triggered.emit(str(base_folder), self.found_links)
 
     def cancel(self):

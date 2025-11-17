@@ -69,6 +69,15 @@ class ConfigManager:
             "max_videos": 0,  # 0 = unlimited
             "save_folder": str(Path.home() / "Desktop" / "Toseeq Links Grabber"),
             "auto_save": False
+        },
+        "folder_mapping": {
+            "enabled": True,
+            "mappings_file": str(Path.home() / ".contentflow" / "folder_mappings.json"),
+            "auto_move_after_download": False,
+            "default_daily_limit": 5,
+            "default_move_condition": "empty_only",  # empty_only or always
+            "show_confirmation": True,
+            "default_sort_by": "oldest"  # oldest or newest
         }
     }
 

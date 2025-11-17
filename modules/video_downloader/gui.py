@@ -14,6 +14,9 @@ from .core import VideoDownloaderThread
 from .url_utils import extract_urls
 from .bulk_preview_dialog import BulkPreviewDialog
 from .history_manager import HistoryManager
+from .folder_mapping_manager import FolderMappingManager
+from .folder_mapping_dialog import FolderMappingDialog
+from .move_progress_dialog import MoveProgressDialog
 
 class VideoDownloaderPage(QWidget):
     def __init__(self, back_callback=None, links=None):
@@ -22,6 +25,7 @@ class VideoDownloaderPage(QWidget):
         self.downloader_thread = None
         self.links = links if links is not None else []
         self.bulk_mode_data = None  # Stores bulk mode info
+        self.mapping_manager = FolderMappingManager()  # Initialize folder mapping manager
         self.init_ui()
 
     def init_ui(self):
@@ -235,6 +239,46 @@ class VideoDownloaderPage(QWidget):
         btn_row.addWidget(self.instagram_help_btn)
         btn_row.addStretch()
         layout.addLayout(btn_row)
+
+        # ========== FOLDER MAPPING BUTTONS ==========
+        mapping_row = QHBoxLayout()
+        mapping_row.setSpacing(10)
+
+        # Folder Mapping Configuration Button
+        self.mapping_config_btn = QPushButton("📁 Configure Folder Mapping")
+        mapping_config_btn_style = """
+            QPushButton { background-color: #9B59B6; color: #F5F6F5; border: none;
+                         padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: bold; }
+            QPushButton:hover { background-color: #8E44AD; }
+            QPushButton:pressed { background-color: #7D3C98; }
+        """
+        self.mapping_config_btn.setStyleSheet(mapping_config_btn_style)
+        self.mapping_config_btn.clicked.connect(self.open_folder_mapping_dialog)
+        self.mapping_config_btn.setToolTip("Configure folder mappings to move videos from Links Grabber to Creators Data folders")
+        mapping_row.addWidget(self.mapping_config_btn)
+
+        # Move Videos Button
+        self.move_videos_btn = QPushButton("➡️ Move Videos to Creator Data")
+        move_videos_btn_style = """
+            QPushButton { background-color: #3498DB; color: #F5F6F5; border: none;
+                         padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: bold; }
+            QPushButton:hover { background-color: #2E86C1; }
+            QPushButton:pressed { background-color: #2874A6; }
+            QPushButton:disabled { background-color: #4B5057; color: #888; }
+        """
+        self.move_videos_btn.setStyleSheet(move_videos_btn_style)
+        self.move_videos_btn.clicked.connect(self.move_videos_to_creator_data)
+        self.move_videos_btn.setToolTip("Move videos based on configured folder mappings")
+        mapping_row.addWidget(self.move_videos_btn)
+
+        # Mapping Status Label
+        self.mapping_status_label = QLabel()
+        self.mapping_status_label.setStyleSheet("color: #3498DB; font-size: 12px; font-weight: bold;")
+        self.update_mapping_status_label()
+        mapping_row.addWidget(self.mapping_status_label)
+
+        mapping_row.addStretch()
+        layout.addLayout(mapping_row)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setStyleSheet("""
@@ -754,3 +798,99 @@ class VideoDownloaderPage(QWidget):
                         subprocess.Popen(['xdg-open', folder])
         else:
             QMessageBox.critical(self, "❌ Download Failed", message)
+
+    # ========== FOLDER MAPPING METHODS ==========
+
+    def update_mapping_status_label(self):
+        """Update the mapping status label with current statistics"""
+        try:
+            stats = self.mapping_manager.get_stats()
+            active = stats.get('active_mappings', 0)
+            total = stats.get('total_mappings', 0)
+
+            if total == 0:
+                self.mapping_status_label.setText("📊 No mappings configured")
+                self.move_videos_btn.setEnabled(False)
+            else:
+                self.mapping_status_label.setText(f"📊 Mappings: {active}/{total} active")
+                self.move_videos_btn.setEnabled(active > 0)
+        except Exception as e:
+            self.mapping_status_label.setText("📊 Mappings: Error")
+            self.move_videos_btn.setEnabled(False)
+
+    def open_folder_mapping_dialog(self):
+        """Open the folder mapping configuration dialog"""
+        try:
+            dialog = FolderMappingDialog(self, self.mapping_manager)
+
+            # Connect signal to update status when mappings change
+            dialog.mappings_updated.connect(self.update_mapping_status_label)
+
+            if dialog.exec_() == QDialog.Accepted:
+                self.update_mapping_status_label()
+                self.log_message("✅ Folder mappings saved successfully")
+            else:
+                # Even on cancel, reload to reflect any changes made before cancel
+                self.mapping_manager.load()
+                self.update_mapping_status_label()
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to open folder mapping dialog:\n{str(e)}"
+            )
+            self.log_message(f"❌ Error opening folder mapping dialog: {str(e)}")
+
+    def move_videos_to_creator_data(self):
+        """Move videos based on configured folder mappings"""
+        try:
+            # Check if there are active mappings
+            active_mappings = self.mapping_manager.get_active_mappings()
+
+            if not active_mappings:
+                QMessageBox.warning(
+                    self,
+                    "No Active Mappings",
+                    "No active folder mappings found.\n\n"
+                    "Please configure folder mappings first using the 'Configure Folder Mapping' button."
+                )
+                return
+
+            # Ask user for sort preference
+            reply = QMessageBox.question(
+                self,
+                "Move Videos",
+                f"Ready to move videos from {len(active_mappings)} active mapping(s).\n\n"
+                "Sort videos by:",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                QMessageBox.Yes
+            )
+
+            if reply == QMessageBox.Cancel:
+                return
+
+            # Yes = oldest first, No = newest first
+            sort_by = "oldest" if reply == QMessageBox.Yes else "newest"
+
+            # Show progress dialog
+            progress_dialog = MoveProgressDialog(
+                self,
+                self.mapping_manager,
+                sort_by=sort_by
+            )
+
+            self.log_message(f"🚀 Starting video move operation ({sort_by} first)...")
+
+            if progress_dialog.exec_() == QDialog.Accepted:
+                # Update status after move
+                self.update_mapping_status_label()
+                self.log_message("✅ Video move operation completed")
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to move videos:\n{str(e)}"
+            )
+            self.log_message(f"❌ Error moving videos: {str(e)}")

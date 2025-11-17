@@ -100,7 +100,10 @@ class VideoToolSuiteGUI(QMainWindow):
         self.setCentralWidget(self.stacked_widget)
 
         self.main_menu = MainMenuPage()
-        self.link_grabber = LinkGrabberPage(go_back_callback=self.go_to_main_menu, shared_links=self.links)
+        self.link_grabber = LinkGrabberPage(
+            shared_links=self.links,
+            download_callback=self.open_video_downloader_from_grabber
+        )
         self.video_downloader = VideoDownloaderPage(back_callback=self.go_to_main_menu, links=self.links)
         self.combined_workflow = CombinedWorkflowPage(go_back_callback=self.go_to_main_menu, shared_links=self.links)
         self.video_editor = IntegratedVideoEditor(self.go_to_main_menu)
@@ -152,6 +155,11 @@ class VideoToolSuiteGUI(QMainWindow):
             "API Config": 7
         }
         self.stacked_widget.setCurrentIndex(module_map.get(module_title, 0))
+
+    def open_video_downloader_from_grabber(self):
+        """Called by Link Grabber to jump straight into the downloader"""
+        self.video_downloader.update_links(self.links)
+        self.stacked_widget.setCurrentIndex(2)  # Index of Video Downloader page
 
     def go_to_main_menu(self):
         self.video_downloader.update_links(self.links)  # Update downloader links before switching

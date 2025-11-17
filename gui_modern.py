@@ -577,6 +577,7 @@ class Content3DWrapper(QWidget):
 
     def __init__(self, content_widget, parent=None):
         super().__init__(parent)
+        self.content_widget = content_widget
 
         layout = QVBoxLayout()
         layout.setContentsMargins(20, 20, 20, 20)
@@ -670,7 +671,10 @@ class VideoToolSuiteGUI(QMainWindow):
 
         # Create module pages wrapped in 3D cards
         self.link_grabber = self.wrap_in_3d(
-            LinkGrabberPage(go_back_callback=self.go_to_main_menu, shared_links=self.links)
+            LinkGrabberPage(
+                shared_links=self.links,
+                download_callback=self.open_video_downloader_from_grabber
+            )
         )
         self.video_downloader = self.wrap_in_3d(
             VideoDownloaderPage(back_callback=self.go_to_main_menu, links=self.links)
@@ -748,6 +752,19 @@ class VideoToolSuiteGUI(QMainWindow):
 
         index = module_map.get(module_id, 0)
         self.stacked_widget.setCurrentIndex(index)
+
+    def open_video_downloader_from_grabber(self):
+        """Push freshly grabbed links into the downloader and switch view"""
+        downloader_wrapper = getattr(self, "video_downloader", None)
+        downloader_widget = getattr(downloader_wrapper, "content_widget", downloader_wrapper)
+
+        if downloader_widget and hasattr(downloader_widget, "update_links"):
+            downloader_widget.update_links(self.links)
+
+        if hasattr(self.sidebar, "select_module"):
+            self.sidebar.select_module("video_downloader")
+        else:
+            self.navigate_to_module("video_downloader")
 
     def go_to_main_menu(self):
         """Go back to first module"""

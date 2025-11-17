@@ -124,13 +124,8 @@ def _find_cookie_file(cookies_dir: Path, platform_key: str) -> typing.Optional[s
     return None
 
 
-def _extract_browser_cookies(platform_key: str) -> typing.Optional[str]:
-    """Extract cookies from browser (fallback)"""
-    try:
-        import browser_cookie3 as bc3
-    except ImportError:
-        return None
-
+def _get_platform_domain(platform_key: str) -> str:
+    """Return the primary cookie domain for a platform"""
     domain_map = {
         'youtube': '.youtube.com',
         'instagram': '.instagram.com',
@@ -138,13 +133,26 @@ def _extract_browser_cookies(platform_key: str) -> typing.Optional[str]:
         'facebook': '.facebook.com',
         'twitter': '.twitter.com'
     }
+    return domain_map.get(platform_key, '')
 
-    domain = domain_map.get(platform_key)
+
+def _extract_browser_cookies(platform_key: str, preferred_browser: str = None) -> typing.Optional[str]:
+    """Extract cookies from browser (fallback)"""
+    try:
+        import browser_cookie3 as bc3
+    except ImportError:
+        return None
+
+    domain = _get_platform_domain(platform_key)
     browsers = [
         ('chrome', getattr(bc3, 'chrome', None)),
         ('edge', getattr(bc3, 'edge', None)),
         ('firefox', getattr(bc3, 'firefox', None))
     ]
+
+    if preferred_browser:
+        preferred_browser = preferred_browser.lower()
+        browsers = [b for b in browsers if b[0] == preferred_browser]
 
     for browser_name, browser_func in browsers:
         if not browser_func:
@@ -181,6 +189,48 @@ def _extract_browser_cookies(platform_key: str) -> typing.Optional[str]:
             continue
 
     return None
+
+
+def _load_cookies_from_file(cookie_file: str, platform_key: str) -> typing.List[dict]:
+    """Load cookies from Netscape cookie file filtered by platform domain"""
+    cookies: typing.List[dict] = []
+    if not cookie_file or not os.path.exists(cookie_file):
+        return cookies
+
+    domain_filter = _get_platform_domain(platform_key).lstrip('.')
+
+    try:
+        with open(cookie_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                if not line or line.startswith('#'):
+                    continue
+
+                parts = line.strip().split('\t')
+                if len(parts) < 7:
+                    continue
+
+                domain, flag, path, secure, expires, name, value = parts[:7]
+
+                if domain_filter and domain_filter not in domain:
+                    continue
+
+                try:
+                    expires_int = int(float(expires))
+                except (ValueError, TypeError):
+                    expires_int = 0
+
+                cookies.append({
+                    'domain': domain.strip(),
+                    'path': path or '/',
+                    'secure': secure.upper() == 'TRUE',
+                    'expires': expires_int if expires_int > 0 else None,
+                    'name': name,
+                    'value': value
+                })
+    except Exception:
+        return []
+
+    return cookies
 
 
 def _normalize_url(url: str) -> str:
@@ -246,7 +296,7 @@ def _parse_upload_date(date_str: str) -> str:
 def _create_creator_folder(creator_name: str) -> Path:
     """Create creator folder and return path"""
     desktop = Path.home() / "Desktop"
-    base_folder = desktop / "Toseeq Links Grabber"
+    base_folder = desktop / "Links Graber"
 
     safe_creator = _safe_filename(f"@{creator_name}")
     creator_folder = base_folder / safe_creator
@@ -645,7 +695,7 @@ def _method_gallery_dl(url: str, platform_key: str, cookie_file: str = None) -> 
     return []
 
 
-def _method_playwright(url: str, platform_key: str) -> typing.List[dict]:
+def _method_playwright(url: str, platform_key: str, cookie_file: str = None) -> typing.List[dict]:
     """METHOD 7: Playwright (BROWSER AUTOMATION - LAST RESORT)"""
     if platform_key not in ['tiktok', 'instagram']:
         return []
@@ -655,11 +705,46 @@ def _method_playwright(url: str, platform_key: str) -> typing.List[dict]:
 
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
+            context = browser.new_context(
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            )
 
-            page.set_extra_http_headers({
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            })
+            # Load cookies if available so we can access private/region locked content
+            if cookie_file:
+                cookies = _load_cookies_from_file(cookie_file, platform_key)
+                playwright_cookies = []
+                for cookie in cookies:
+                    cookie_dict = {
+                        'name': cookie['name'],
+                        'value': cookie['value'],
+                        'domain': cookie.get('domain') or '',
+                        'path': cookie.get('path', '/'),
+                        'secure': cookie.get('secure', False),
+                        'httpOnly': False,
+                    }
+                    if cookie.get('expires'):
+                        cookie_dict['expires'] = cookie['expires']
+                    playwright_cookies.append(cookie_dict)
+
+                if playwright_cookies:
+                    try:
+                        context.add_cookies(playwright_cookies)
+                    except Exception:
+                        pass
+
+            page = context.new_page()
+
+            base_url_map = {
+                'tiktok': 'https://www.tiktok.com/',
+                'instagram': 'https://www.instagram.com/'
+            }
+            seed_url = base_url_map.get(platform_key, url)
+
+            try:
+                page.goto(seed_url, timeout=30000)
+                time.sleep(1)
+            except Exception:
+                pass
 
             page.goto(url, timeout=30000)
             time.sleep(3)
@@ -712,6 +797,7 @@ def _method_playwright(url: str, platform_key: str) -> typing.List[dict]:
                         full_url = f"https://www.instagram.com{href}" if not href.startswith('http') else href
                         entries.append({'url': full_url, 'title': 'Instagram Post', 'date': '00000000'})
 
+            context.close()
             browser.close()
             return entries
 
@@ -723,64 +809,120 @@ def _method_playwright(url: str, platform_key: str) -> typing.List[dict]:
     return []
 
 
-def _method_selenium(url: str, platform_key: str) -> typing.List[dict]:
-    """METHOD 8: Selenium (ABSOLUTE LAST RESORT)"""
+def _method_selenium(
+    url: str,
+    platform_key: str,
+    max_videos: int = 0,
+    cookie_file: str = None
+) -> typing.List[dict]:
+    """METHOD 8: Selenium (ABSOLUTE LAST RESORT with cookies)"""
+    driver = None
     try:
         from selenium import webdriver
         from selenium.webdriver.common.by import By
         from selenium.webdriver.chrome.options import Options
 
         options = Options()
-        options.add_argument('--headless')
+        options.add_argument('--headless=new')
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-blink-features=AutomationControlled')
         options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
+        options.add_argument('--window-size=1400,900')
 
         driver = webdriver.Chrome(options=options)
-        driver.get(url)
+        driver.set_page_load_timeout(40)
+
+        # Load cookies if available (critical for TikTok private/region locked pages)
+        cookies_loaded = False
+        cookies = _load_cookies_from_file(cookie_file, platform_key) if cookie_file else []
+        base_url_map = {
+            'tiktok': 'https://www.tiktok.com/',
+            'instagram': 'https://www.instagram.com/',
+            'youtube': 'https://www.youtube.com/'
+        }
+        seed_url = base_url_map.get(platform_key, url)
+
+        if cookies:
+            driver.get(seed_url)
+            time.sleep(2)
+            for cookie in cookies:
+                try:
+                    payload = {
+                        'name': cookie['name'],
+                        'value': cookie['value'],
+                        'path': cookie.get('path', '/'),
+                        'domain': cookie.get('domain', '').lstrip('.') or None,
+                        'secure': cookie.get('secure', False)
+                    }
+                    if cookie.get('expires'):
+                        payload['expiry'] = cookie['expires']
+                    driver.add_cookie(payload)
+                    cookies_loaded = True
+                except Exception:
+                    continue
+
+        if cookies_loaded:
+            driver.get(url)
+        else:
+            driver.get(url)
+
         time.sleep(5)
 
-        entries = []
+        selector_map = {
+            'tiktok': 'a[href*="/video/"]',
+            'instagram': 'a[href*="/p/"], a[href*="/reel/"]',
+            'youtube': 'a[href*="/watch?v="]'
+        }
+        selector = selector_map.get(platform_key, 'a')
 
-        # Adaptive scrolling
-        previous_count = 0
-        no_change_count = 0
+        seen_urls: typing.Set[str] = set()
+        scroll_attempts = 0
+        stagnant_rounds = 0
 
-        for _ in range(10):
-            if platform_key == 'instagram':
-                links = driver.find_elements(By.CSS_SELECTOR, 'a[href*="/p/"], a[href*="/reel/"]')
-            elif platform_key == 'tiktok':
-                links = driver.find_elements(By.CSS_SELECTOR, 'a[href*="/video/"]')
-            elif platform_key == 'youtube':
-                links = driver.find_elements(By.CSS_SELECTOR, 'a[href*="/watch?v="]')
-            else:
-                links = []
+        while scroll_attempts < 20 and stagnant_rounds < 3:
+            links = driver.find_elements(By.CSS_SELECTOR, selector)
+            before_count = len(seen_urls)
 
-            current_count = len(links)
-
-            if current_count == previous_count:
-                no_change_count += 1
-                if no_change_count >= 3:
+            for link in links:
+                href = link.get_attribute('href')
+                if not href:
+                    continue
+                if platform_key == 'tiktok' and '/video/' not in href:
+                    continue
+                seen_urls.add(href)
+                if max_videos and len(seen_urls) >= max_videos:
                     break
+
+            if max_videos and len(seen_urls) >= max_videos:
+                break
+
+            if len(seen_urls) == before_count:
+                stagnant_rounds += 1
             else:
-                no_change_count = 0
+                stagnant_rounds = 0
 
-            previous_count = current_count
-            driver.execute_script("window.scrollBy(0, 1000)")
+            driver.execute_script("window.scrollBy(0, 1500)")
             time.sleep(2)
+            scroll_attempts += 1
 
-        # Extract links
-        for link in links:
-            if href := link.get_attribute('href'):
-                entries.append({'url': href, 'title': '', 'date': '00000000'})
+        entries = []
+        limit = max_videos or len(seen_urls)
+        for href in list(seen_urls)[:limit]:
+            entries.append({'url': href, 'title': '', 'date': '00000000'})
 
-        driver.quit()
         return entries
 
     except ImportError:
         logging.debug("Selenium not installed")
     except Exception as e:
         logging.debug(f"Method 8 (selenium) failed: {e}")
+    finally:
+        if driver:
+            try:
+                driver.quit()
+            except Exception:
+                pass
 
     return []
 
@@ -811,22 +953,34 @@ def extract_links_intelligent(
 
         # Cookie handling: browser OR file
         cookie_file = None
-        temp_cookie_file = None
+        temp_cookie_files: typing.List[str] = []
 
         if cookie_browser:
-            # Use browser cookies directly (2025 approach)
             if progress_callback:
                 progress_callback(f"🍪 Using {cookie_browser.title()} browser cookies directly")
-        else:
-            # Use cookie file (traditional approach)
-            cookie_file = _find_cookie_file(cookies_dir, platform_key)
-            if not cookie_file:
-                temp_cookie_file = _extract_browser_cookies(platform_key)
-                cookie_file = temp_cookie_file
+            extracted = _extract_browser_cookies(platform_key, cookie_browser)
+            if extracted:
+                temp_cookie_files.append(extracted)
+                cookie_file = extracted
 
-            if cookie_file and progress_callback:
-                cookie_name = Path(cookie_file).name
-                progress_callback(f"🍪 Using cookies: {cookie_name}")
+        if not cookie_file:
+            cookie_file = _find_cookie_file(cookies_dir, platform_key)
+
+        if not cookie_file:
+            extracted = _extract_browser_cookies(platform_key)
+            if extracted:
+                temp_cookie_files.append(extracted)
+                cookie_file = extracted
+
+        if cookie_file and progress_callback:
+            cookie_name = Path(cookie_file).name
+            progress_callback(f"🍪 Using cookies: {cookie_name}")
+
+        # If we've materialized a cookie file, stop passing cookie_browser to yt-dlp.
+        # yt-dlp's --cookies-from-browser mode ignores manual files and was causing 0 results
+        # when users selected "Use Browser" but only had exported Netscape cookies.
+        if cookie_file:
+            cookie_browser = None
 
         entries: typing.List[dict] = []
         seen_normalized: typing.Set[str] = set()
@@ -859,11 +1013,11 @@ def extract_links_intelligent(
              platform_key == 'instagram'),
 
             ("Method 7: Playwright",
-             lambda: _method_playwright(url, platform_key),
+             lambda: _method_playwright(url, platform_key, cookie_file),
              platform_key in ['tiktok', 'instagram']),
 
             ("Method 8: Selenium",
-             lambda: _method_selenium(url, platform_key),
+             lambda: _method_selenium(url, platform_key, max_videos, cookie_file),
              True),
         ]
 
@@ -960,11 +1114,12 @@ def extract_links_intelligent(
                     progress_callback(f"⚠️ {method_name} → 0 links")
 
         # Cleanup temp cookies
-        if temp_cookie_file and os.path.exists(temp_cookie_file):
-            try:
-                os.unlink(temp_cookie_file)
-            except Exception:
-                pass
+        for temp_cookie_file in temp_cookie_files:
+            if temp_cookie_file and os.path.exists(temp_cookie_file):
+                try:
+                    os.unlink(temp_cookie_file)
+                except Exception:
+                    pass
 
         # Final processing
         if entries:
@@ -1000,7 +1155,6 @@ class LinkGrabberThread(QThread):
     progress_percent = pyqtSignal(int)
     link_found = pyqtSignal(str, str)
     finished = pyqtSignal(bool, str, list)
-    save_triggered = pyqtSignal(str, list)
 
     def __init__(self, url: str, options: dict = None):
         super().__init__()
@@ -1088,13 +1242,8 @@ class LinkGrabberThread(QThread):
                 self.finished.emit(False, f"⚠️ Cancelled. Got {len(self.found_links)} links.", self.found_links)
                 return
 
-            # Auto-save to creator folder
-            if self.found_links and self.creator_name:
-                self.progress.emit("💾 Auto-saving to creator folder...")
-                saved_path = self._save_to_creator_folder()
-                self.progress.emit(f"✅ Saved: {saved_path}")
-
             self.progress.emit(f"✅ Success! {len(self.found_links)} links from @{creator}")
+            self.progress.emit("💾 Use 'Save to Folder' in the GUI to export these links.")
             self.progress_percent.emit(100)
 
             self.finished.emit(True, f"✅ {len(self.found_links)} links from @{creator}", self.found_links)
@@ -1103,18 +1252,6 @@ class LinkGrabberThread(QThread):
             error_msg = f"❌ Unexpected error: {str(e)[:200]}"
             self.progress.emit(error_msg)
             self.finished.emit(False, error_msg, self.found_links)
-
-    def _save_to_creator_folder(self) -> str:
-        """Save to creator folder and return file path"""
-        if not self.found_links or not self.creator_name:
-            return ""
-
-        creator_folder = _create_creator_folder(self.creator_name)
-        filepath = _save_links_to_file(self.creator_name, self.found_links, creator_folder)
-
-        self.save_triggered.emit(filepath, self.found_links)
-
-        return filepath
 
     def cancel(self):
         self.is_cancelled = True
@@ -1127,7 +1264,6 @@ class BulkLinkGrabberThread(QThread):
     progress_percent = pyqtSignal(int)
     link_found = pyqtSignal(str, str)
     finished = pyqtSignal(bool, str, list)
-    save_triggered = pyqtSignal(str, list)
 
     def __init__(self, urls: typing.List[str], options: dict = None):
         super().__init__()
@@ -1213,11 +1349,6 @@ class BulkLinkGrabberThread(QThread):
 
                     self.link_found.emit(entry['url'], display_text)
 
-                # Save this creator immediately
-                if entries:
-                    saved_path = self._save_creator_immediately(creator)
-                    self.progress.emit(f"💾 Saved: {saved_path}")
-
                 self.progress.emit(f"✅ [{i}/{len(unique_urls)}] {len(entries)} links from @{creator}")
 
                 pct = 30 + int((i / len(unique_urls)) * 65)
@@ -1226,9 +1357,6 @@ class BulkLinkGrabberThread(QThread):
             if self.is_cancelled:
                 self.finished.emit(False, f"⚠️ Cancelled. {len(self.found_links)} total links.", self.found_links)
                 return
-
-            # Create summary file
-            summary_path = self._create_summary_file()
 
             # Final report
             self.progress.emit("\n" + "=" * 60)
@@ -1244,7 +1372,7 @@ class BulkLinkGrabberThread(QThread):
             for creator_name, data in self.creator_data.items():
                 self.progress.emit(f"  ├── @{creator_name}/ ({len(data['links'])} links)")
 
-            self.progress.emit(f"\n📄 Summary: {summary_path}")
+            self.progress.emit("\n💾 Use 'Save to Folder' to export all creators.")
             self.progress.emit("=" * 60)
 
             self.progress_percent.emit(100)
@@ -1254,54 +1382,6 @@ class BulkLinkGrabberThread(QThread):
             error_msg = f"❌ Bulk error: {str(e)[:200]}"
             self.progress.emit(error_msg)
             self.finished.emit(False, error_msg, self.found_links)
-
-    def _save_creator_immediately(self, creator_name: str) -> str:
-        """Save a creator's links immediately and return file path"""
-        if creator_name not in self.creator_data:
-            return ""
-
-        creator_folder = _create_creator_folder(creator_name)
-        filepath = _save_links_to_file(
-            creator_name,
-            self.creator_data[creator_name]['links'],
-            creator_folder
-        )
-
-        return filepath
-
-    def _create_summary_file(self) -> str:
-        """Create bulk extraction summary file"""
-        desktop = Path.home() / "Desktop"
-        base_folder = desktop / "Toseeq Links Grabber"
-
-        summary_file = base_folder / "BULK_EXTRACTION_SUMMARY.txt"
-
-        with open(summary_file, "w", encoding="utf-8") as f:
-            f.write("# BULK LINK EXTRACTION SUMMARY\n")
-            f.write(f"# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"# Total URLs: {len(self.urls)}\n")
-            f.write(f"# Unique URLs: {len(set(self.urls))}\n")
-            f.write(f"# Total Creators: {len(self.creator_data)}\n")
-            f.write(f"# Total Links: {len(self.found_links)}\n")
-            f.write("#" * 70 + "\n\n")
-
-            f.write("CREATOR BREAKDOWN:\n")
-            f.write("=" * 60 + "\n\n")
-
-            for creator_name, data in self.creator_data.items():
-                f.write(f"🎯 {creator_name}\n")
-                f.write(f"   Platform: {data.get('platform', 'unknown')}\n")
-                f.write(f"   Links: {len(data['links'])}\n")
-                f.write(f"   Source URLs: {len(data['source_urls'])}\n")
-                f.write(f"   Folder: @{_safe_filename(creator_name)}/\n")
-                f.write(f"   File: {_safe_filename(creator_name)}_links.txt\n\n")
-
-            f.write("\nPROCESSED URLs:\n")
-            f.write("=" * 60 + "\n")
-            for url in self.urls:
-                f.write(f"- {url}\n")
-
-        return str(summary_file)
 
     def cancel(self):
         self.is_cancelled = True

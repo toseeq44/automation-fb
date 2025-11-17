@@ -1,0 +1,266 @@
+{
+  "tiktok:elaime.liao": {
+    "creator": "elaime.liao",
+    "platform": "tiktok",
+    "best_method": null,
+    "total_extractions": 28,
+    "first_seen": "2025-11-17T13:17:19.785407",
+    "last_extraction": "2025-11-17T13:42:52.811883",
+    "performance_history": {
+      "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)": {
+        "success_count": 0,
+        "fail_count": 4,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 1: yt-dlp --dump-json (with dates)": {
+        "success_count": 0,
+        "fail_count": 4,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 3: yt-dlp with retries": {
+        "success_count": 0,
+        "fail_count": 4,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 4: yt-dlp with user agent": {
+        "success_count": 0,
+        "fail_count": 4,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 6: gallery-dl": {
+        "success_count": 0,
+        "fail_count": 4,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 7: Playwright": {
+        "success_count": 0,
+        "fail_count": 4,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 8: Selenium": {
+        "success_count": 0,
+        "fail_count": 4,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      }
+    }
+  },
+  "instagram:anvil.anna": {
+    "creator": "anvil.anna",
+    "platform": "instagram",
+    "best_method": "Method 5: Instaloader",
+    "total_extractions": 9,
+    "first_seen": "2025-11-17T13:28:31.261503",
+    "last_extraction": "2025-11-17T18:43:10.838173",
+    "performance_history": {
+      "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 1: yt-dlp --dump-json (with dates)": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 3: yt-dlp with retries": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 4: yt-dlp with user agent": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 6: gallery-dl": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 5: Instaloader": {
+        "success_count": 4,
+        "fail_count": 0,
+        "total_links": 50,
+        "total_time": 220.97381591796875,
+        "avg_links": 12.5,
+        "avg_time": 55.24345397949219,
+        "success_rate": 100.0,
+        "score": 194.60065460205078,
+        "last_error": null,
+        "last_success": "2025-11-17T18:43:10.838180"
+      }
+    }
+  },
+  "tiktok:anasofiafehn": {
+    "creator": "anasofiafehn",
+    "platform": "tiktok",
+    "best_method": "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)",
+    "total_extractions": 1,
+    "first_seen": "2025-11-17T13:41:36.788976",
+    "last_extraction": "2025-11-17T13:41:36.788985",
+    "performance_history": {
+      "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)": {
+        "success_count": 1,
+        "fail_count": 0,
+        "total_links": 10,
+        "total_time": 2.928061008453369,
+        "avg_links": 10.0,
+        "avg_time": 2.928061008453369,
+        "success_rate": 100.0,
+        "score": 199.80719389915467,
+        "last_error": null,
+        "last_success": "2025-11-17T13:41:36.788989"
+      }
+    }
+  },
+  "youtube:ucp3stifsd6gpkvvptqhyd8q": {
+    "creator": "ucp3stifsd6gpkvvptqhyd8q",
+    "platform": "youtube",
+    "best_method": "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)",
+    "total_extractions": 2,
+    "first_seen": "2025-11-17T13:44:57.005430",
+    "last_extraction": "2025-11-17T13:48:18.724782",
+    "performance_history": {
+      "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)": {
+        "success_count": 2,
+        "fail_count": 0,
+        "total_links": 20,
+        "total_time": 4.601473331451416,
+        "avg_links": 10.0,
+        "avg_time": 2.300736665725708,
+        "success_rate": 100.0,
+        "score": 199.86992633342743,
+        "last_error": null,
+        "last_success": "2025-11-17T13:48:18.724793"
+      }
+    }
+  },
+  "youtube:justiceworld1": {
+    "creator": "justiceworld1",
+    "platform": "youtube",
+    "best_method": "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)",
+    "total_extractions": 3,
+    "first_seen": "2025-11-17T13:48:21.549218",
+    "last_extraction": "2025-11-17T18:42:24.531656",
+    "performance_history": {
+      "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)": {
+        "success_count": 3,
+        "fail_count": 0,
+        "total_links": 40,
+        "total_time": 8.338243246078491,
+        "avg_links": 13.333333333333334,
+        "avg_time": 2.779414415359497,
+        "success_rate": 100.0,
+        "score": 199.85539189179738,
+        "last_error": null,
+        "last_success": "2025-11-17T18:42:24.531666"
+      }
+    }
+  },
+  "tiktok:talha_aesthtic": {
+    "creator": "talha_aesthtic",
+    "platform": "tiktok",
+    "best_method": "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)",
+    "total_extractions": 1,
+    "first_seen": "2025-11-17T18:42:21.744792",
+    "last_extraction": "2025-11-17T18:42:21.744802",
+    "performance_history": {
+      "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)": {
+        "success_count": 1,
+        "fail_count": 0,
+        "total_links": 10,
+        "total_time": 5.2189576625823975,
+        "avg_links": 10.0,
+        "avg_time": 5.2189576625823975,
+        "success_rate": 100.0,
+        "score": 199.57810423374175,
+        "last_error": null,
+        "last_success": "2025-11-17T18:42:21.744807"
+      }
+    }
+  }
+}

@@ -15,15 +15,25 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 from pathlib import Path
 import pyperclip
-from .core import LinkGrabberThread, BulkLinkGrabberThread, _extract_creator_from_url, _detect_platform_key, _safe_filename
+from .core import (
+    LinkGrabberThread,
+    BulkLinkGrabberThread,
+    _extract_creator_from_url,
+    _detect_platform_key,
+    _safe_filename,
+    _create_creator_folder,
+    _save_links_to_file
+)
 
 class LinkGrabberPage(QWidget):
-    def __init__(self, go_back_callback=None, shared_links=None):
+    def __init__(self, go_back_callback=None, shared_links=None, download_callback=None):
         super().__init__()
         self.thread = None
         self.go_back_callback = go_back_callback
+        self.download_callback = download_callback
         self.links = shared_links if shared_links is not None else []  # Use shared links
         self.creator = "unknown"
+        self.creator_results = {}
 
         # Root cookies folder
         self.cookies_dir = Path(__file__).parent.parent.parent / "cookies"
@@ -238,7 +248,6 @@ class LinkGrabberPage(QWidget):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(10)
 
-        self.back_btn = QPushButton("⬅ Back")
         self.start_btn = QPushButton("🎯 Start")
         self.cancel_btn = QPushButton("❌ Cancel")
         self.save_btn = QPushButton("💾 Save")
@@ -267,7 +276,6 @@ class LinkGrabberPage(QWidget):
                 color: #888;
             }
         """
-        self.back_btn.setStyleSheet(button_style)
         self.start_btn.setStyleSheet(button_style)
         self.cancel_btn.setStyleSheet(button_style)
         self.save_btn.setStyleSheet(button_style)
@@ -275,12 +283,10 @@ class LinkGrabberPage(QWidget):
         self.clear_btn.setStyleSheet(button_style)
         self.download_btn.setStyleSheet(button_style)
 
-        self.back_btn.setEnabled(bool(self.go_back_callback))
         self.save_btn.setEnabled(False)
         self.copy_btn.setEnabled(False)
         self.download_btn.setEnabled(False)
 
-        btn_row.addWidget(self.back_btn)
         btn_row.addWidget(self.start_btn)
         btn_row.addWidget(self.cancel_btn)
         btn_row.addWidget(self.save_btn)
@@ -342,7 +348,6 @@ class LinkGrabberPage(QWidget):
 
         self.setLayout(layout)
 
-        self.back_btn.clicked.connect(self.go_back)
         self.start_btn.clicked.connect(self.start_grabbing)
         self.cancel_btn.clicked.connect(self.cancel_grab)
         self.save_btn.clicked.connect(self.save_to_folder)
@@ -357,17 +362,27 @@ class LinkGrabberPage(QWidget):
             self.copy_btn.setEnabled(True)
             self.download_btn.setEnabled(True)
 
-    def go_back(self):
-        if self.go_back_callback:
-            self.go_back_callback()
-        else:
-            QMessageBox.warning(self, "Error", "No back navigation available.")
-
     def start_download_page(self):
-        if self.go_back_callback:
-            self.go_back_callback()  # Return to menu to select downloader
+        aggregated = self._collect_all_links()
+        if not aggregated:
+            QMessageBox.warning(self, "No Links", "Please grab links before sending them to the downloader.")
+            return
+
+        cleaned = self._update_shared_links(aggregated)
+        if not cleaned:
+            QMessageBox.warning(self, "Error", "Unable to prepare links for the downloader.")
+            return
+
+        if self.download_callback:
+            self.download_callback()
+            self.log_area.append(f"🚀 Sent {len(cleaned)} link(s) to Video Downloader (Single Mode).")
         else:
-            QMessageBox.warning(self, "Error", "Download page navigation not available.")
+            QMessageBox.information(
+                self,
+                "Links Ready",
+                f"Prepared {len(cleaned)} link(s). Switch to the Video Downloader module to continue."
+            )
+            self.log_area.append("ℹ️ Links ready for downloader - open the Video Downloader module to continue.")
 
     def toggle_limit_spin(self, state):
         self.limit_spin.setEnabled(state != Qt.Checked)
@@ -386,6 +401,7 @@ class LinkGrabberPage(QWidget):
         self.log_area.clear()
         self.progress_bar.setValue(0)
         self.links.clear()
+        self.creator_results = {}
         self.save_btn.setEnabled(False)
         self.copy_btn.setEnabled(False)
         self.download_btn.setEnabled(False)
@@ -419,7 +435,6 @@ class LinkGrabberPage(QWidget):
         self.thread.progress_percent.connect(self.on_progress_percent)
         self.thread.link_found.connect(self.on_link_found)
         self.thread.finished.connect(self.on_finished)
-        self.thread.save_triggered.connect(self.on_save_triggered)
         self.thread.start()
 
         self.log_area.append("🚀 Started grabbing links...")
@@ -430,27 +445,47 @@ class LinkGrabberPage(QWidget):
             self.log_area.append("⚠️ Cancelling process...")
             self.thread = None
         self.start_btn.setEnabled(True)
+        self.creator_results = {}
         self.save_btn.setEnabled(bool(self.links))
         self.copy_btn.setEnabled(bool(self.links))
         self.download_btn.setEnabled(bool(self.links))
 
     def save_to_folder(self):
-        if not self.links:
-            QMessageBox.warning(self, "Error", "No links to save.")
+        if not self.creator_results:
+            QMessageBox.warning(self, "Error", "No creator data available to save yet.")
             return
+
+        saved_details = []
+        total_links = 0
+
         try:
-            desktop = Path.home() / "Desktop" / "Toseeq Links Grabber"
-            desktop.mkdir(parents=True, exist_ok=True)
-            filename = _safe_filename(self.creator) + ".txt" if self.creator != "bulk" else "bulk_links.txt"
-            filepath = desktop / filename
-            with open(filepath, "w", encoding="utf-8") as f:
-                for link in self.links:
-                    f.write(f"{link['url']}\n")
-            self.log_area.append(f"✅ File saved to: {filepath}")
-            QMessageBox.information(self, "Saved", f"Saved {len(self.links)} links to {filepath}")
+            for creator_name, entries in self.creator_results.items():
+                if not entries:
+                    continue
+                safe_creator = creator_name or "unknown"
+                creator_folder = _create_creator_folder(safe_creator)
+                filepath = _save_links_to_file(safe_creator, entries, creator_folder)
+                saved_details.append((safe_creator, filepath, len(entries)))
+                total_links += len(entries)
+
+            if not saved_details:
+                QMessageBox.warning(self, "Error", "No links to save.")
+                return
+
+            self.log_area.append(f"✅ Saved {total_links} links across {len(saved_details)} creator folder(s).")
+
+            summary_lines = [
+                f"• @{_safe_filename(name)} → {count} links\n  {path}"
+                for name, path, count in saved_details
+            ]
+            QMessageBox.information(
+                self,
+                "Saved",
+                f"Saved {total_links} links across {len(saved_details)} creator(s).\n\n" + "\n".join(summary_lines)
+            )
         except Exception as e:
-            self.log_area.append(f"❌ Failed to save file: {str(e)[:100]}")
-            QMessageBox.warning(self, "Error", f"Failed to save file: {str(e)[:100]}")
+            self.log_area.append(f"❌ Failed to save files: {str(e)[:100]}")
+            QMessageBox.warning(self, "Error", f"Failed to save files: {str(e)[:100]}")
 
     def clear_interface(self):
         self.url_input.clear()
@@ -479,18 +514,38 @@ class LinkGrabberPage(QWidget):
         self.links.append({'url': link})
 
     def on_finished(self, success, message, links):
+        thread_ref = self.thread
         self.log_area.append(message)
         self.start_btn.setEnabled(True)
-        self.save_btn.setEnabled(success and bool(links))
-        self.copy_btn.setEnabled(success and bool(links))
-        self.download_btn.setEnabled(success and bool(links))
+
+        creator_map = {}
+        if success and thread_ref:
+            if isinstance(thread_ref, LinkGrabberThread):
+                creator_name = getattr(thread_ref, "creator_name", self.creator) or "unknown"
+                creator_map[creator_name] = links or []
+            elif isinstance(thread_ref, BulkLinkGrabberThread):
+                for creator_name, data in thread_ref.creator_data.items():
+                    creator_links = data.get('links') if isinstance(data, dict) else None
+                    if creator_links:
+                        creator_map[creator_name] = creator_links
+
+        self.creator_results = creator_map
+
+        if success and links:
+            cleaned_links = self._update_shared_links(links)
+        else:
+            cleaned_links = self._update_shared_links([])
+
+        can_save = success and bool(self.creator_results)
+        can_copy = success and bool(cleaned_links)
+        self.save_btn.setEnabled(can_save)
+        self.copy_btn.setEnabled(can_copy)
+        self.download_btn.setEnabled(can_copy)
+
         self.thread = None
+
         if success:
             QMessageBox.information(self, "Completed", f"{message}\n\nClick 'Save to Folder' or 'Download Links'.")
-
-    def on_save_triggered(self, path, links):
-        self.log_area.append(f"✅ File saved to: {path}")
-        QMessageBox.information(self, "Saved", f"Saved {len(links)} links to {path}")
 
     def show_context_menu(self, position):
         if not self.link_list.selectedItems():
@@ -514,6 +569,53 @@ class LinkGrabberPage(QWidget):
             pyperclip.copy('\n'.join(urls))
             self.log_area.append(f"✅ Copied {len(urls)} links to clipboard!")
             self.download_btn.setEnabled(True)
+
+    def _collect_all_links(self):
+        """Combine creator results into a single list of link dicts"""
+        aggregated = []
+        if self.creator_results:
+            for data in self.creator_results.values():
+                if isinstance(data, list):
+                    aggregated.extend(data)
+
+        if not aggregated and self.links:
+            for entry in self.links:
+                if isinstance(entry, dict):
+                    url = entry.get('url', '')
+                    if url:
+                        aggregated.append({'url': url})
+                elif isinstance(entry, str) and entry.strip():
+                    aggregated.append({'url': entry.strip()})
+
+        return aggregated
+
+    def _update_shared_links(self, entries):
+        """Update shared link list (keeps same list object for other modules)"""
+        if self.links is None:
+            self.links = []
+        else:
+            self.links.clear()
+
+        cleaned = []
+        seen = set()
+
+        for entry in entries or []:
+            if isinstance(entry, dict):
+                url = entry.get('url', '')
+            elif isinstance(entry, str):
+                url = entry
+            else:
+                url = str(entry)
+
+            url = (url or '').strip()
+            if not url or url in seen:
+                continue
+
+            seen.add(url)
+            cleaned.append({'url': url})
+
+        self.links.extend(cleaned)
+        return cleaned
 
     # ========== COOKIE MANAGEMENT METHODS ==========
     def on_cookie_source_changed(self, source):

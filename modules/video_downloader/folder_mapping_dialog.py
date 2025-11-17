@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QSpinBox,
     QCheckBox, QFileDialog, QMessageBox, QGroupBox, QComboBox,
     QFrame, QWidget, QSizePolicy, QAbstractItemView, QLineEdit,
-    QGridLayout, QButtonGroup, QRadioButton
+    QGridLayout, QButtonGroup, QRadioButton, QScrollArea
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QSize
 from PyQt5.QtGui import QColor, QFont, QIcon, QPalette
@@ -29,7 +29,13 @@ class FolderMappingDialog(QDialog):
         self.mapping_manager = mapping_manager or FolderMappingManager()
 
         self.setWindowTitle("📁 Folder Mapping Configuration")
-        self.setMinimumSize(1100, 650)
+
+        # Responsive sizing - set default size and minimum size
+        self.resize(1100, 700)  # Default size
+        self.setMinimumSize(800, 500)  # Minimum size for usability
+
+        # Make dialog resizable
+        self.setSizeGripEnabled(True)
 
         # Modern professional style
         self.setStyleSheet("""
@@ -213,21 +219,69 @@ class FolderMappingDialog(QDialog):
                 background-color: #3a3a4a;
                 max-height: 2px;
             }
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+            QScrollBar:vertical {
+                background-color: #1e1e2e;
+                width: 12px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #00d4ff;
+                border-radius: 6px;
+                min-height: 30px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #00f0ff;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+            QScrollBar:horizontal {
+                background-color: #1e1e2e;
+                height: 12px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:horizontal {
+                background-color: #00d4ff;
+                border-radius: 6px;
+                min-width: 30px;
+            }
+            QScrollBar::handle:horizontal:hover {
+                background-color: #00f0ff;
+            }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                width: 0px;
+            }
         """)
 
         self.init_ui()
         self.load_existing_mappings()
 
     def init_ui(self):
-        """Initialize the UI components"""
-        layout = QVBoxLayout()
-        layout.setSpacing(15)
-        layout.setContentsMargins(20, 20, 20, 20)
+        """Initialize the UI components with scrollable content"""
+        # Main layout
+        main_layout = QVBoxLayout()
+        main_layout.setSpacing(0)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Scrollable content area
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.NoFrame)
+
+        # Content widget inside scroll area
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setSpacing(15)
+        content_layout.setContentsMargins(20, 20, 20, 20)
 
         # Header
         header_label = QLabel("Folder Mapping Configuration")
         header_label.setObjectName("headerLabel")
-        layout.addWidget(header_label)
+        content_layout.addWidget(header_label)
 
         # Info label
         info_label = QLabel(
@@ -236,17 +290,18 @@ class FolderMappingDialog(QDialog):
         )
         info_label.setObjectName("infoLabel")
         info_label.setWordWrap(True)
-        layout.addWidget(info_label)
+        content_layout.addWidget(info_label)
 
         # Separator
         separator = QFrame()
         separator.setObjectName("separator")
         separator.setFrameShape(QFrame.HLine)
-        layout.addWidget(separator)
+        content_layout.addWidget(separator)
 
         # Mappings table
         self.create_mappings_table()
-        layout.addWidget(self.mappings_table)
+        self.mappings_table.setMinimumHeight(200)  # Ensure table has minimum height
+        content_layout.addWidget(self.mappings_table)
 
         # Control buttons in a more organized layout
         control_group = QGroupBox("📋 Mapping Actions")
@@ -294,15 +349,24 @@ class FolderMappingDialog(QDialog):
         control_layout.addWidget(self.export_btn, 1, 2)
 
         control_group.setLayout(control_layout)
-        layout.addWidget(control_group)
+        content_layout.addWidget(control_group)
 
         # Statistics group with enhanced design
         stats_group = self.create_stats_group()
-        layout.addWidget(stats_group)
+        content_layout.addWidget(stats_group)
 
-        # Bottom buttons
-        button_layout = QHBoxLayout()
+        # Set the content widget in scroll area
+        scroll_area.setWidget(content_widget)
+
+        # Add scroll area to main layout
+        main_layout.addWidget(scroll_area, 1)  # Stretch factor 1
+
+        # Bottom buttons (outside scroll area - always visible)
+        button_container = QWidget()
+        button_container.setStyleSheet("background-color: #1a1a2e; padding: 10px;")
+        button_layout = QHBoxLayout(button_container)
         button_layout.setSpacing(15)
+        button_layout.setContentsMargins(20, 10, 20, 10)
 
         button_layout.addStretch()
 
@@ -318,9 +382,10 @@ class FolderMappingDialog(QDialog):
         self.cancel_btn.setMinimumWidth(140)
         button_layout.addWidget(self.cancel_btn)
 
-        layout.addLayout(button_layout)
+        # Add button container to main layout
+        main_layout.addWidget(button_container, 0)  # Stretch factor 0 (fixed height)
 
-        self.setLayout(layout)
+        self.setLayout(main_layout)
 
     def create_mappings_table(self):
         """Create the mappings table widget"""
@@ -678,8 +743,13 @@ class MappingEditDialog(QDialog):
 
         title = "✏️ Edit Mapping" if self.is_edit_mode else "➕ Add New Mapping"
         self.setWindowTitle(title)
-        self.setMinimumWidth(700)
-        self.setMinimumHeight(500)
+
+        # Responsive sizing
+        self.resize(750, 600)  # Default size
+        self.setMinimumSize(600, 450)  # Minimum size for usability
+
+        # Make dialog resizable
+        self.setSizeGripEnabled(True)
 
         # Apply enhanced dark theme
         self.setStyleSheet(parent.styleSheet())
@@ -690,15 +760,27 @@ class MappingEditDialog(QDialog):
             self.load_mapping_data()
 
     def init_ui(self):
-        """Initialize the UI"""
-        layout = QVBoxLayout()
-        layout.setSpacing(20)
-        layout.setContentsMargins(25, 25, 25, 25)
+        """Initialize the UI with scrollable content"""
+        # Main layout
+        main_layout = QVBoxLayout()
+        main_layout.setSpacing(0)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Scrollable content area
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.NoFrame)
+
+        # Content widget inside scroll area
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setSpacing(20)
+        content_layout.setContentsMargins(25, 25, 25, 25)
 
         # Header
         header_label = QLabel("✏️ Edit Mapping" if self.is_edit_mode else "➕ Add New Mapping")
         header_label.setObjectName("headerLabel")
-        layout.addWidget(header_label)
+        content_layout.addWidget(header_label)
 
         # Info label
         info_label = QLabel(
@@ -707,7 +789,7 @@ class MappingEditDialog(QDialog):
         )
         info_label.setObjectName("infoLabel")
         info_label.setWordWrap(True)
-        layout.addWidget(info_label)
+        content_layout.addWidget(info_label)
 
         # Source folder group
         source_group = QGroupBox("📂 Source Folder (Links Grabber)")
@@ -744,7 +826,7 @@ class MappingEditDialog(QDialog):
 
         source_layout.addLayout(source_btn_layout)
         source_group.setLayout(source_layout)
-        layout.addWidget(source_group)
+        content_layout.addWidget(source_group)
 
         # Destination folder group
         dest_group = QGroupBox("📁 Destination Folder (Creators Data)")
@@ -781,7 +863,7 @@ class MappingEditDialog(QDialog):
 
         dest_layout.addLayout(dest_btn_layout)
         dest_group.setLayout(dest_layout)
-        layout.addWidget(dest_group)
+        content_layout.addWidget(dest_group)
 
         # Settings group
         settings_group = QGroupBox("⚙️ Move Settings")
@@ -822,18 +904,27 @@ class MappingEditDialog(QDialog):
         settings_layout.addWidget(self.always_radio)
 
         settings_group.setLayout(settings_layout)
-        layout.addWidget(settings_group)
+        content_layout.addWidget(settings_group)
 
         # Enabled checkbox
         self.enabled_checkbox = QCheckBox("✅ Enable this mapping immediately")
         self.enabled_checkbox.setChecked(True)
         self.enabled_checkbox.setStyleSheet("font-size: 14px; font-weight: bold; padding: 10px;")
         self.enabled_checkbox.setToolTip("If unchecked, this mapping will be saved but not used")
-        layout.addWidget(self.enabled_checkbox)
+        content_layout.addWidget(self.enabled_checkbox)
 
-        # Buttons
-        button_layout = QHBoxLayout()
+        # Set the content widget in scroll area
+        scroll_area.setWidget(content_widget)
+
+        # Add scroll area to main layout
+        main_layout.addWidget(scroll_area, 1)  # Stretch factor 1
+
+        # Bottom buttons (outside scroll area - always visible)
+        button_container = QWidget()
+        button_container.setStyleSheet("background-color: #1a1a2e; padding: 10px;")
+        button_layout = QHBoxLayout(button_container)
         button_layout.setSpacing(15)
+        button_layout.setContentsMargins(20, 10, 20, 10)
         button_layout.addStretch()
 
         self.ok_btn = QPushButton("✅ Save Mapping")
@@ -848,9 +939,10 @@ class MappingEditDialog(QDialog):
         self.cancel_btn.setToolTip("Discard changes")
         button_layout.addWidget(self.cancel_btn)
 
-        layout.addLayout(button_layout)
+        # Add button container to main layout
+        main_layout.addWidget(button_container, 0)  # Stretch factor 0 (fixed height)
 
-        self.setLayout(layout)
+        self.setLayout(main_layout)
 
     def load_mapping_data(self):
         """Load data from existing mapping"""

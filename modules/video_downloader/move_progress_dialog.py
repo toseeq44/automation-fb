@@ -139,7 +139,13 @@ class MoveProgressDialog(QDialog):
         self.is_complete = False
 
         self.setWindowTitle("🚀 Moving Videos - Progress")
-        self.setMinimumSize(900, 650)
+
+        # Responsive sizing
+        self.resize(950, 700)  # Default size
+        self.setMinimumSize(700, 500)  # Minimum size for usability
+
+        # Make dialog resizable
+        self.setSizeGripEnabled(True)
         self.setModal(True)
 
         # Enhanced Professional Style
@@ -237,6 +243,22 @@ class MoveProgressDialog(QDialog):
                 padding: 0 8px;
                 color: #00d4ff;
                 background-color: transparent;
+            }
+            QScrollBar:vertical {
+                background-color: #1e1e2e;
+                width: 12px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #00d4ff;
+                border-radius: 6px;
+                min-height: 30px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #00f0ff;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
             }
         """)
 

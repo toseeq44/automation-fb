@@ -296,8 +296,7 @@ def _retry_on_failure(func, max_retries=3, delay=2):
 def _method_ytdlp_dump_json(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0) -> typing.List[dict]:
     """METHOD 1: yt-dlp --dump-json (WITH DATES) - PRIMARY METHOD"""
     try:
-        cmd = ['yt-dlp', '--dump-json', '--flat-playlist', '--ignore-errors',
-               '--no-warnings', '--no-write-info-json', '--no-write-thumbnails']
+        cmd = ['yt-dlp', '--dump-json', '--flat-playlist', '--ignore-errors', '--no-warnings']
 
         if cookie_file:
             cmd.extend(['--cookies', cookie_file])
@@ -306,10 +305,10 @@ def _method_ytdlp_dump_json(url: str, platform_key: str, cookie_file: str = None
             cmd.extend(['--playlist-end', str(max_videos)])
 
         # Platform-specific optimizations
-        if platform_key == 'youtube':
-            cmd.extend(['--extractor-args', 'youtube:player_client=android'])
-        elif platform_key == 'instagram':
+        if platform_key == 'instagram':
             cmd.extend(['--extractor-args', 'instagram:feed_count=100'])
+        elif platform_key == 'youtube':
+            cmd.extend(['--extractor-args', 'youtube:player_client=android'])
 
         cmd.append(url)
 
@@ -391,9 +390,9 @@ def _method_ytdlp_get_url(url: str, platform_key: str, cookie_file: str = None, 
                 for u in urls:
                     if platform_key == 'youtube' and ('youtube.com/watch?v=' in u or 'youtu.be/' in u):
                         filtered_urls.append(u)
-                    elif platform_key == 'instagram' and '/p/' in u or '/reel/' in u:
+                    elif platform_key == 'instagram' and ('instagram.com/p/' in u or 'instagram.com/reel/' in u):
                         filtered_urls.append(u)
-                    elif platform_key == 'tiktok' and '/video/' in u:
+                    elif platform_key == 'tiktok' and 'tiktok.com/@' in u and '/video/' in u:
                         filtered_urls.append(u)
                     elif platform_key not in ['youtube', 'instagram', 'tiktok']:
                         filtered_urls.append(u)
@@ -584,7 +583,7 @@ def _method_gallery_dl(url: str, platform_key: str, cookie_file: str = None) -> 
         return []
 
     try:
-        cmd = ['gallery-dl', '--dump-json', '--quiet', '--no-download']
+        cmd = ['gallery-dl', '--dump-json', '--quiet']
 
         if cookie_file:
             cmd.extend(['--cookies', cookie_file])
@@ -616,13 +615,15 @@ def _method_gallery_dl(url: str, platform_key: str, cookie_file: str = None) -> 
 
                         entries.append({
                             'url': post_url,
-                            'title': data.get('description', '')[:100],
+                            'title': data.get('description', f'{platform_key.title()} Post')[:100],
                             'date': date
                         })
                 except (json.JSONDecodeError, KeyError):
                     continue
 
-            entries.sort(key=lambda x: x.get('date', '00000000'), reverse=True)
+            # Sort by date if available
+            if entries:
+                entries.sort(key=lambda x: x.get('date', '00000000'), reverse=True)
             return entries
 
     except FileNotFoundError:

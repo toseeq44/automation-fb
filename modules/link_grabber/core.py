@@ -357,9 +357,10 @@ def _method_ytdlp_dump_json(url: str, platform_key: str, cookie_file: str = None
 
 
 def _method_ytdlp_get_url(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, cookie_browser: str = None) -> typing.List[dict]:
-    """METHOD 2: yt-dlp --get-url (FAST, NO DATES)"""
+    """METHOD 2: yt-dlp --get-url (FAST, NO DATES) - SIMPLIFIED LIKE BATCH SCRIPT"""
     try:
-        cmd = ['yt-dlp', '--get-url', '--flat-playlist', '--ignore-errors', '--no-warnings']
+        # SIMPLE COMMAND like the working batch script: yt-dlp URL --flat-playlist --get-url
+        cmd = ['yt-dlp', '--flat-playlist', '--get-url']
 
         # Cookie handling: browser OR file
         if cookie_browser:
@@ -370,14 +371,10 @@ def _method_ytdlp_get_url(url: str, platform_key: str, cookie_file: str = None, 
         if max_videos > 0:
             cmd.extend(['--playlist-end', str(max_videos)])
 
-        # Platform optimizations
-        if platform_key == 'youtube':
-            if any(x in url.lower() for x in ['/@', '/channel/', '/c/', '/user/']):
-                base_url = url.split('/videos')[0].split('/streams')[0].split('/shorts')[0]
-                url = base_url + '/videos'
-            cmd.extend(['--extractor-args', 'youtube:skip=dash,hls,thumbnails'])
-
         cmd.append(url)
+
+        # DEBUG: Log the exact command being run
+        logging.info(f"Running command: {' '.join(cmd)}")
 
         result = subprocess.run(
             cmd,
@@ -388,6 +385,12 @@ def _method_ytdlp_get_url(url: str, platform_key: str, cookie_file: str = None, 
             errors='replace'
         )
 
+        # DEBUG: Log stdout and stderr
+        if result.stdout:
+            logging.info(f"STDOUT: {result.stdout[:500]}")
+        if result.stderr:
+            logging.info(f"STDERR: {result.stderr[:500]}")
+
         if result.stdout:
             urls = [
                 line.strip()
@@ -395,24 +398,15 @@ def _method_ytdlp_get_url(url: str, platform_key: str, cookie_file: str = None, 
                 if line.strip() and line.strip().startswith('http')
             ]
 
+            # SIMPLIFIED: Don't filter, return all URLs found
             if urls:
-                # Filter platform-specific URLs
-                filtered_urls = []
-                for u in urls:
-                    if platform_key == 'youtube' and ('youtube.com/watch?v=' in u or 'youtu.be/' in u):
-                        filtered_urls.append(u)
-                    elif platform_key == 'instagram' and ('instagram.com/p/' in u or 'instagram.com/reel/' in u):
-                        filtered_urls.append(u)
-                    elif platform_key == 'tiktok' and 'tiktok.com/@' in u and '/video/' in u:
-                        filtered_urls.append(u)
-                    elif platform_key not in ['youtube', 'instagram', 'tiktok']:
-                        filtered_urls.append(u)
-
-                if filtered_urls:
-                    return [{'url': u, 'title': '', 'date': '00000000'} for u in filtered_urls]
+                logging.info(f"Found {len(urls)} URLs before filtering")
+                return [{'url': u, 'title': '', 'date': '00000000'} for u in urls]
+            else:
+                logging.warning(f"No http URLs found in output. Raw output: {result.stdout[:200]}")
 
     except Exception as e:
-        logging.debug(f"Method 2 (yt-dlp --get-url) failed: {e}")
+        logging.error(f"Method 2 (yt-dlp --get-url) exception: {e}")
 
     return []
 
@@ -838,13 +832,14 @@ def extract_links_intelligent(
         seen_normalized: typing.Set[str] = set()
 
         # Define all available methods (pass cookie_browser to yt-dlp methods)
+        # PRIORITY ORDER: Simplest working methods first!
         all_methods = [
-            ("Method 1: yt-dlp --dump-json (with dates)",
-             lambda: _method_ytdlp_dump_json(url, platform_key, cookie_file, max_videos, cookie_browser),
+            ("Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)",
+             lambda: _method_ytdlp_get_url(url, platform_key, cookie_file, max_videos, cookie_browser),
              True),
 
-            ("Method 2: yt-dlp --get-url (fast)",
-             lambda: _method_ytdlp_get_url(url, platform_key, cookie_file, max_videos, cookie_browser),
+            ("Method 1: yt-dlp --dump-json (with dates)",
+             lambda: _method_ytdlp_dump_json(url, platform_key, cookie_file, max_videos, cookie_browser),
              True),
 
             ("Method 3: yt-dlp with retries",
@@ -855,13 +850,13 @@ def extract_links_intelligent(
              lambda: _method_ytdlp_user_agent(url, platform_key, cookie_file, max_videos, cookie_browser),
              True),
 
-            ("Method 5: Instaloader",
-             lambda: _method_instaloader(url, platform_key, cookie_file),
-             platform_key == 'instagram'),
-
             ("Method 6: gallery-dl",
              lambda: _method_gallery_dl(url, platform_key, cookie_file),
              platform_key in ['instagram', 'tiktok']),
+
+            ("Method 5: Instaloader",
+             lambda: _method_instaloader(url, platform_key, cookie_file),
+             platform_key == 'instagram'),
 
             ("Method 7: Playwright",
              lambda: _method_playwright(url, platform_key),

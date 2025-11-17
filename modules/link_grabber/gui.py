@@ -83,7 +83,7 @@ class LinkGrabberPage(QWidget):
         # ===== COOKIE SECTION =====
         cookie_group = QGroupBox("🍪 Cookies (Optional - For Private Content)")
         cookie_group.setCheckable(True)
-        cookie_group.setChecked(False)  # Collapsed by default
+        cookie_group.setChecked(True)  # EXPANDED BY DEFAULT so user can see it!
         cookie_group.setStyleSheet("""
             QGroupBox {
                 font-size: 14px;
@@ -115,7 +115,6 @@ class LinkGrabberPage(QWidget):
                 border-radius: 5px;
             }
         """)
-        self.cookie_source_combo.currentTextChanged.connect(self.on_cookie_source_changed)
         source_row.addWidget(source_label)
         source_row.addWidget(self.cookie_source_combo)
         source_row.addStretch()
@@ -178,6 +177,13 @@ class LinkGrabberPage(QWidget):
         self.upload_cookie_btn.clicked.connect(self.upload_cookie_file)
         self.save_cookie_btn.clicked.connect(self.save_cookies)
         self.clear_cookie_btn.clicked.connect(self.clear_cookies)
+        self.cookie_source_combo.currentTextChanged.connect(self.on_cookie_source_changed)
+
+        # Set initial state - enable all buttons for "Upload File" mode
+        self.cookie_text.setEnabled(True)
+        self.upload_cookie_btn.setEnabled(True)
+        self.save_cookie_btn.setEnabled(True)
+        self.clear_cookie_btn.setEnabled(True)
 
         options_row = QHBoxLayout()
         options_row.setSpacing(10)

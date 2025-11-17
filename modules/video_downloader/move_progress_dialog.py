@@ -1,6 +1,7 @@
 """
 Move Progress Dialog
 Shows progress and logs when moving videos based on folder mappings
+Enhanced Professional Version with Beautiful UI
 """
 
 from pathlib import Path
@@ -137,78 +138,105 @@ class MoveProgressDialog(QDialog):
         self.worker_thread = None
         self.is_complete = False
 
-        self.setWindowTitle("Moving Videos - Progress")
-        self.setMinimumSize(800, 600)
+        self.setWindowTitle("🚀 Moving Videos - Progress")
+        self.setMinimumSize(900, 650)
         self.setModal(True)
 
-        # Style
+        # Enhanced Professional Style
         self.setStyleSheet("""
             QDialog {
-                background-color: #1a1a2e;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #1a1a2e, stop:1 #16213e);
                 color: #ffffff;
             }
             QLabel {
-                color: #ffffff;
-                font-size: 12px;
+                color: #e0e0e0;
+                font-size: 13px;
+            }
+            QLabel#headerLabel {
+                color: #00d4ff;
+                font-size: 20px;
+                font-weight: bold;
+                padding: 15px;
+            }
+            QLabel#statusLabel {
+                color: #00ff88;
+                font-size: 14px;
+                font-weight: bold;
+                padding: 8px;
             }
             QProgressBar {
-                border: 2px solid #00d4ff;
-                border-radius: 5px;
-                background-color: #16213e;
+                border: none;
+                border-radius: 10px;
+                background-color: #1e1e2e;
                 text-align: center;
                 color: #ffffff;
                 font-weight: bold;
+                font-size: 13px;
+                min-height: 25px;
             }
             QProgressBar::chunk {
-                background-color: #00d4ff;
-                border-radius: 3px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #00d4ff, stop:0.5 #00ff88, stop:1 #ffd700);
+                border-radius: 10px;
             }
             QTextEdit {
-                background-color: #0a0a0a;
-                color: #ffffff;
-                border: 2px solid #00d4ff;
-                border-radius: 5px;
-                font-family: 'Consolas', 'Courier New', monospace;
-                font-size: 11px;
-                padding: 5px;
+                background-color: #0f0f1e;
+                color: #e0e0e0;
+                border: 2px solid #3a3a4a;
+                border-radius: 8px;
+                font-family: 'Consolas', 'Courier New', 'Monaco', monospace;
+                font-size: 12px;
+                padding: 10px;
+                line-height: 1.4;
             }
             QPushButton {
-                background-color: #00d4ff;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #00d4ff, stop:1 #00a8cc);
                 color: #000000;
                 border: none;
-                border-radius: 5px;
-                padding: 10px 20px;
+                border-radius: 6px;
+                padding: 12px 24px;
                 font-weight: bold;
-                font-size: 12px;
+                font-size: 13px;
+                min-height: 36px;
+                min-width: 120px;
             }
             QPushButton:hover {
-                background-color: #00a8cc;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #00f0ff, stop:1 #00c8ee);
             }
             QPushButton:pressed {
-                background-color: #0088aa;
+                background: #0088aa;
             }
             QPushButton:disabled {
-                background-color: #555555;
-                color: #888888;
+                background: #3a3a4a;
+                color: #707070;
             }
             QPushButton#cancelBtn {
-                background-color: #e74c3c;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #e74c3c, stop:1 #c0392b);
+                color: white;
             }
             QPushButton#cancelBtn:hover {
-                background-color: #c0392b;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #ff5c4c, stop:1 #d0493b);
             }
             QGroupBox {
-                border: 2px solid #00d4ff;
-                border-radius: 5px;
-                margin-top: 10px;
-                padding-top: 15px;
-                color: #00d4ff;
+                border: 2px solid #3a3a4a;
+                border-radius: 8px;
+                margin-top: 12px;
+                padding-top: 18px;
+                background-color: rgba(30, 30, 46, 0.5);
                 font-weight: bold;
+                font-size: 13px;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
+                left: 15px;
+                padding: 0 8px;
+                color: #00d4ff;
+                background-color: transparent;
             }
         """)
 
@@ -218,52 +246,65 @@ class MoveProgressDialog(QDialog):
     def init_ui(self):
         """Initialize the UI"""
         layout = QVBoxLayout()
-        layout.setSpacing(15)
+        layout.setSpacing(18)
+        layout.setContentsMargins(20, 20, 20, 20)
 
         # Header
-        header_label = QLabel("Moving Videos")
-        header_label.setFont(QFont("Arial", 16, QFont.Bold))
-        header_label.setStyleSheet("color: #00d4ff; padding: 10px;")
+        header_label = QLabel("🚀 Moving Videos")
+        header_label.setObjectName("headerLabel")
         layout.addWidget(header_label)
 
-        # Progress bar
+        # Status label with icon
+        self.status_label = QLabel("⏳ Initializing operation...")
+        self.status_label.setObjectName("statusLabel")
+        layout.addWidget(self.status_label)
+
+        # Progress bar with better styling
+        progress_group = QGroupBox("📊 Progress")
         progress_layout = QVBoxLayout()
-        self.status_label = QLabel("Initializing...")
-        progress_layout.addWidget(self.status_label)
+        progress_layout.setSpacing(8)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setMinimum(0)
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFormat("%p% Complete")
         progress_layout.addWidget(self.progress_bar)
 
-        layout.addLayout(progress_layout)
+        progress_group.setLayout(progress_layout)
+        layout.addWidget(progress_group)
 
-        # Log area
-        log_group = QGroupBox("Operation Log")
+        # Log area with enhanced styling
+        log_group = QGroupBox("📝 Operation Log")
         log_layout = QVBoxLayout()
+        log_layout.setSpacing(5)
 
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
+        self.log_text.setMinimumHeight(250)
         log_layout.addWidget(self.log_text)
 
         log_group.setLayout(log_layout)
         layout.addWidget(log_group)
 
-        # Statistics
+        # Statistics with enhanced design
         stats_group = self.create_stats_group()
         layout.addWidget(stats_group)
 
-        # Buttons
+        # Buttons with better layout
         button_layout = QHBoxLayout()
+        button_layout.setSpacing(15)
         button_layout.addStretch()
 
-        self.cancel_btn = QPushButton("⏸️ Cancel")
+        self.cancel_btn = QPushButton("⏸️ Cancel Operation")
         self.cancel_btn.setObjectName("cancelBtn")
+        self.cancel_btn.setToolTip("Cancel the ongoing move operation")
         self.cancel_btn.clicked.connect(self.cancel_operation)
         button_layout.addWidget(self.cancel_btn)
 
-        self.close_btn = QPushButton("✅ Close")
+        self.close_btn = QPushButton("✅ Close Window")
+        self.close_btn.setToolTip("Close this dialog")
         self.close_btn.clicked.connect(self.accept)
         self.close_btn.setEnabled(False)
         button_layout.addWidget(self.close_btn)
@@ -274,22 +315,33 @@ class MoveProgressDialog(QDialog):
 
     def create_stats_group(self) -> QGroupBox:
         """Create statistics group box"""
-        stats_group = QGroupBox("Statistics")
+        stats_group = QGroupBox("📈 Live Statistics")
         stats_layout = QHBoxLayout()
+        stats_layout.setSpacing(25)
 
-        self.processed_label = QLabel("Processed: 0")
-        self.moved_label = QLabel("Moved: 0")
-        self.skipped_label = QLabel("Skipped: 0")
-        self.failed_label = QLabel("Failed: 0")
+        # Create styled stat labels with colors
+        self.processed_label = self.create_stat_label("Processed", "0", "#00d4ff")
+        self.moved_label = self.create_stat_label("Moved", "0", "#00ff88")
+        self.skipped_label = self.create_stat_label("Skipped", "0", "#ffaa00")
+        self.failed_label = self.create_stat_label("Failed", "0", "#ff6b6b")
 
-        for label in [self.processed_label, self.moved_label, self.skipped_label, self.failed_label]:
-            label.setStyleSheet("color: #ffffff; font-size: 11px;")
-            stats_layout.addWidget(label)
-
+        stats_layout.addWidget(self.processed_label)
+        stats_layout.addWidget(self.moved_label)
+        stats_layout.addWidget(self.skipped_label)
+        stats_layout.addWidget(self.failed_label)
         stats_layout.addStretch()
-        stats_group.setLayout(stats_layout)
 
+        stats_group.setLayout(stats_layout)
         return stats_group
+
+    def create_stat_label(self, title: str, value: str, color: str) -> QLabel:
+        """Create a styled statistic label"""
+        label = QLabel(f"<b>{title}:</b> <span style='color: {color}; font-size: 16px;'>{value}</span>")
+        label.setStyleSheet(
+            f"padding: 8px; background-color: rgba(0, 0, 0, 0.2); "
+            f"border-radius: 6px; border-left: 3px solid {color};"
+        )
+        return label
 
     def start_move_operation(self):
         """Start the move operation in a separate thread"""
@@ -305,9 +357,10 @@ class MoveProgressDialog(QDialog):
         if total > 0:
             percentage = int((current / total) * 100)
             self.progress_bar.setValue(percentage)
-            self.status_label.setText(f"Processing mapping {current}/{total}...")
+            self.status_label.setText(f"⚙️ Processing mapping {current}/{total}...")
         else:
             self.progress_bar.setValue(0)
+            self.status_label.setText("⏳ Initializing...")
 
     def add_log_message(self, message: str, level: str = "info"):
         """Add a message to the log"""
@@ -337,19 +390,28 @@ class MoveProgressDialog(QDialog):
     def on_operation_finished(self, results: List[MappingMoveResult]):
         """Handle operation completion"""
         self.is_complete = True
-        self.status_label.setText("Operation completed!")
+        self.status_label.setText("✅ Operation completed successfully!")
         self.progress_bar.setValue(100)
+        self.progress_bar.setFormat("✅ Completed - 100%")
 
-        # Update final statistics
+        # Update final statistics with styled labels
         total_processed = len(results)
         total_moved = sum(r.videos_moved for r in results)
         total_skipped = sum(r.videos_skipped for r in results)
         total_failed = sum(r.videos_failed for r in results)
 
-        self.processed_label.setText(f"Processed: {total_processed}")
-        self.moved_label.setText(f"Moved: {total_moved}")
-        self.skipped_label.setText(f"Skipped: {total_skipped}")
-        self.failed_label.setText(f"Failed: {total_failed}")
+        self.processed_label.setText(
+            f"<b>Processed:</b> <span style='color: #00d4ff; font-size: 16px;'>{total_processed}</span>"
+        )
+        self.moved_label.setText(
+            f"<b>Moved:</b> <span style='color: #00ff88; font-size: 16px;'>{total_moved}</span>"
+        )
+        self.skipped_label.setText(
+            f"<b>Skipped:</b> <span style='color: #ffaa00; font-size: 16px;'>{total_skipped}</span>"
+        )
+        self.failed_label.setText(
+            f"<b>Failed:</b> <span style='color: #ff6b6b; font-size: 16px;'>{total_failed}</span>"
+        )
 
         # Enable close button
         self.close_btn.setEnabled(True)
@@ -358,10 +420,11 @@ class MoveProgressDialog(QDialog):
     def cancel_operation(self):
         """Cancel the ongoing operation"""
         if self.worker_thread and self.worker_thread.isRunning():
-            self.add_log_message("\nCancelling operation...", "warning")
+            self.add_log_message("\n⏸️ Cancelling operation...", "warning")
             self.worker_thread.cancel()
             self.worker_thread.wait()  # Wait for thread to finish
-            self.status_label.setText("Operation cancelled")
+            self.status_label.setText("⏸️ Operation cancelled by user")
+            self.progress_bar.setFormat("⏸️ Cancelled - %p%")
             self.close_btn.setEnabled(True)
             self.cancel_btn.setEnabled(False)
 

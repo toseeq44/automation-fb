@@ -30,6 +30,13 @@ class FolderMappingDialog(QDialog):
 
         self.setWindowTitle("📁 Folder Mapping Configuration")
 
+        # Add window controls (minimize, maximize, close buttons)
+        self.setWindowFlags(
+            Qt.Window |
+            Qt.WindowMinMaxButtonsHint |
+            Qt.WindowCloseButtonHint
+        )
+
         # Responsive sizing - set default size and minimum size
         self.resize(1100, 700)  # Default size
         self.setMinimumSize(800, 500)  # Minimum size for usability
@@ -743,6 +750,13 @@ class MappingEditDialog(QDialog):
 
         title = "✏️ Edit Mapping" if self.is_edit_mode else "➕ Add New Mapping"
         self.setWindowTitle(title)
+
+        # Add window controls (minimize, maximize, close buttons)
+        self.setWindowFlags(
+            Qt.Window |
+            Qt.WindowMinMaxButtonsHint |
+            Qt.WindowCloseButtonHint
+        )
 
         # Responsive sizing
         self.resize(750, 600)  # Default size

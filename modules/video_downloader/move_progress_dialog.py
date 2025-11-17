@@ -140,6 +140,13 @@ class MoveProgressDialog(QDialog):
 
         self.setWindowTitle("🚀 Moving Videos - Progress")
 
+        # Add window controls (minimize, maximize, close buttons)
+        self.setWindowFlags(
+            Qt.Window |
+            Qt.WindowMinMaxButtonsHint |
+            Qt.WindowCloseButtonHint
+        )
+
         # Responsive sizing
         self.resize(950, 700)  # Default size
         self.setMinimumSize(700, 500)  # Minimum size for usability

@@ -3,13 +3,12 @@ modules/link_grabber/core.py
 INTELLIGENT LINK GRABBER - Smart & Self-Learning
 
 Features:
-- 🧠 INTELLIGENT: Learns which method works best for each creator
-- 📅 DATE EXTRACTION: Gets upload dates and sorts newest first
-- 🔄 RETRY MECHANISM: Auto-retries on failures
-- 🍪 COOKIE SUPPORT: Uses cookies from root/cookies folder
-- 📊 PERFORMANCE TRACKING: Records and optimizes method selection
-- 🎯 MULTI-METHOD: 10+ extraction methods with fallback
-- 🗂️ PER-CREATOR FOLDERS: Organized output
+- ALL extraction methods: yt-dlp, instaloader, gallery-dl, playwright, selenium, requests
+- PER-CREATOR FOLDERS for both single and bulk mode
+- Desktop/Toseeq Links Grabber/@{CreatorName}/{CreatorName}_links.txt
+- Automatic duplicate removal
+- Crash protection
+- Multi-platform support
 """
 
 from PyQt5.QtCore import QThread, pyqtSignal
@@ -296,8 +295,8 @@ def _parse_upload_date(date_str: str) -> str:
 def _create_creator_folder(creator_name: str) -> Path:
     """Create creator folder and return path"""
     desktop = Path.home() / "Desktop"
-    base_folder = desktop / "Links Graber"
-
+    base_folder = desktop / "Toseeq Links Grabber"
+    
     safe_creator = _safe_filename(f"@{creator_name}")
     creator_folder = base_folder / safe_creator
     creator_folder.mkdir(parents=True, exist_ok=True)
@@ -1382,6 +1381,68 @@ class BulkLinkGrabberThread(QThread):
             error_msg = f"❌ Bulk error: {str(e)[:200]}"
             self.progress.emit(error_msg)
             self.finished.emit(False, error_msg, self.found_links)
+
+    def _save_creator_immediately(self, creator_name: str) -> str:
+        """Save a creator's links immediately and return file path"""
+        if creator_name not in self.creator_data:
+            return ""
+
+        creator_folder = _create_creator_folder(creator_name)
+        filepath = _save_links_to_file(
+            creator_name, 
+            self.creator_data[creator_name]['links'], 
+            creator_folder
+        )
+        
+        return filepath
+
+    def _create_summary_file(self) -> str:
+        """Create bulk extraction summary file"""
+        desktop = Path.home() / "Desktop"
+        base_folder = desktop / "Toseeq Links Grabber"
+        
+        summary_file = base_folder / "BULK_EXTRACTION_SUMMARY.txt"
+        
+        with open(summary_file, "w", encoding="utf-8") as f:
+            f.write("# BULK LINK EXTRACTION SUMMARY\n")
+            f.write(f"# Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"# Total URLs: {len(self.urls)}\n")
+            f.write(f"# Unique URLs: {len(set(self.urls))}\n")
+            f.write(f"# Total Creators: {len(self.creator_data)}\n")
+            f.write(f"# Total Links: {len(self.found_links)}\n")
+            f.write("#" * 60 + "\n\n")
+            
+            f.write("CREATOR BREAKDOWN:\n")
+            f.write("=" * 50 + "\n\n")
+            
+            for creator_name, data in self.creator_data.items():
+                f.write(f"🎯 {creator_name}\n")
+                f.write(f"   Platform: {data.get('platform', 'unknown')}\n")
+                f.write(f"   Links: {len(data['links'])}\n")
+                f.write(f"   Source URLs: {len(data['source_urls'])}\n")
+                f.write(f"   Folder: @{_safe_filename(creator_name)}/\n")
+                f.write(f"   File: {_safe_filename(creator_name)}_links.txt\n\n")
+            
+            f.write("\nPROCESSED URLs:\n")
+            f.write("=" * 50 + "\n")
+            for url in self.urls:
+                f.write(f"- {url}\n")
+        
+        return str(summary_file)
+
+    def save_to_file(self):
+        """Manual save trigger - creates summary"""
+        if not self.creator_data:
+            self.progress.emit("❌ No links to save")
+            return
+
+        summary_path = self._create_summary_file()
+        self.progress.emit(f"📄 Summary created: {summary_path}")
+        
+        # Emit save signal
+        desktop = Path.home() / "Desktop"
+        base_folder = desktop / "Toseeq Links Grabber"
+        self.save_triggered.emit(str(base_folder), self.found_links)
 
     def cancel(self):
         self.is_cancelled = True

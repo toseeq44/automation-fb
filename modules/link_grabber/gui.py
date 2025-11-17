@@ -9,7 +9,8 @@ GUI for the link grabber using PyQt5.
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QProgressBar, QTextEdit, QSpinBox, QMessageBox, QListWidget, QMenu, QAction, QCheckBox
+    QProgressBar, QTextEdit, QSpinBox, QMessageBox, QListWidget, QMenu, QAction, QCheckBox,
+    QGroupBox, QComboBox, QFileDialog
 )
 from PyQt5.QtCore import Qt
 from pathlib import Path
@@ -23,7 +24,20 @@ class LinkGrabberPage(QWidget):
         self.go_back_callback = go_back_callback
         self.links = shared_links if shared_links is not None else []  # Use shared links
         self.creator = "unknown"
+
+        # Root cookies folder
+        self.cookies_dir = Path(__file__).parent.parent.parent / "cookies"
+        self.cookies_dir.mkdir(parents=True, exist_ok=True)
+
         self.init_ui()
+
+    def closeEvent(self, event):
+        """Properly cleanup thread on close to prevent crash"""
+        if self.thread and self.thread.isRunning():
+            self.thread.cancel()
+            self.thread.wait(2000)  # Wait max 2 seconds
+            self.thread.quit()
+        event.accept()
 
     def init_ui(self):
         layout = QVBoxLayout()
@@ -65,6 +79,104 @@ class LinkGrabberPage(QWidget):
         """)
         self.url_input.setMinimumHeight(40)
         layout.addWidget(self.url_input)
+
+        # ===== COOKIE SECTION =====
+        cookie_group = QGroupBox("🍪 Cookies (Optional - For Private Content)")
+        cookie_group.setCheckable(True)
+        cookie_group.setChecked(False)  # Collapsed by default
+        cookie_group.setStyleSheet("""
+            QGroupBox {
+                font-size: 14px;
+                font-weight: bold;
+                border: 2px solid #4B5057;
+                border-radius: 5px;
+                margin-top: 10px;
+                padding-top: 15px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+        """)
+        cookie_layout = QVBoxLayout()
+
+        # Platform selector
+        platform_row = QHBoxLayout()
+        platform_label = QLabel("Platform:")
+        self.platform_combo = QComboBox()
+        self.platform_combo.addItems(["Auto-Detect", "youtube", "instagram", "tiktok", "facebook", "twitter"])
+        self.platform_combo.setStyleSheet("""
+            QComboBox {
+                background-color: #2C2F33;
+                color: #F5F6F5;
+                border: 2px solid #4B5057;
+                padding: 5px;
+                border-radius: 5px;
+            }
+        """)
+        platform_row.addWidget(platform_label)
+        platform_row.addWidget(self.platform_combo)
+        platform_row.addStretch()
+        cookie_layout.addLayout(platform_row)
+
+        # Cookie text area
+        self.cookie_text = QTextEdit()
+        self.cookie_text.setPlaceholderText(
+            "Paste cookies here (Netscape format)...\n"
+            "Example: .youtube.com\tTRUE\t/\tTRUE\t1234567890\tSSID\tvalue123"
+        )
+        self.cookie_text.setMaximumHeight(80)
+        self.cookie_text.setStyleSheet("""
+            QTextEdit {
+                background-color: #2C2F33;
+                border: 1px solid #4B5057;
+                border-radius: 5px;
+                padding: 5px;
+                font-family: monospace;
+                font-size: 11px;
+            }
+        """)
+        cookie_layout.addWidget(self.cookie_text)
+
+        # Cookie buttons
+        cookie_btn_row = QHBoxLayout()
+        self.upload_cookie_btn = QPushButton("📤 Upload")
+        self.save_cookie_btn = QPushButton("💾 Save")
+        self.clear_cookie_btn = QPushButton("🧹 Clear")
+
+        for btn in [self.upload_cookie_btn, self.save_cookie_btn, self.clear_cookie_btn]:
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #1ABC9C;
+                    color: white;
+                    border: none;
+                    padding: 5px 10px;
+                    border-radius: 5px;
+                    font-size: 12px;
+                }
+                QPushButton:hover { background-color: #16A085; }
+            """)
+
+        cookie_btn_row.addWidget(self.upload_cookie_btn)
+        cookie_btn_row.addWidget(self.save_cookie_btn)
+        cookie_btn_row.addWidget(self.clear_cookie_btn)
+        cookie_btn_row.addStretch()
+        cookie_layout.addLayout(cookie_btn_row)
+
+        # Cookie status
+        self.cookie_status = QLabel("No cookies loaded")
+        self.cookie_status.setStyleSheet("color: #888; font-size: 11px;")
+        cookie_layout.addWidget(self.cookie_status)
+
+        cookie_group.setLayout(cookie_layout)
+        layout.addWidget(cookie_group)
+
+        # Connect cookie signals
+        self.upload_cookie_btn.clicked.connect(self.upload_cookie_file)
+        self.save_cookie_btn.clicked.connect(self.save_cookies)
+        self.clear_cookie_btn.clicked.connect(self.clear_cookies)
+        self.platform_combo.currentTextChanged.connect(self.check_existing_cookies)
 
         options_row = QHBoxLayout()
         options_row.setSpacing(10)
@@ -384,3 +496,115 @@ class LinkGrabberPage(QWidget):
             pyperclip.copy('\n'.join(urls))
             self.log_area.append(f"✅ Copied {len(urls)} links to clipboard!")
             self.download_btn.setEnabled(True)
+
+    # ========== COOKIE MANAGEMENT METHODS ==========
+    def upload_cookie_file(self):
+        """Upload cookie file from disk"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Select Cookie File", "", "Text Files (*.txt);;All Files (*.*)"
+        )
+        if file_path:
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    cookies = f.read()
+                self.cookie_text.setPlainText(cookies)
+                self.log_area.append(f"✅ Cookie file loaded: {Path(file_path).name}")
+                self.auto_detect_platform_from_cookies(cookies)
+            except Exception as e:
+                QMessageBox.warning(self, "Error", f"Failed to load cookie file: {str(e)}")
+
+    def auto_detect_platform_from_cookies(self, cookies):
+        """Auto-detect platform from cookie domains"""
+        cookies_lower = cookies.lower()
+        if 'youtube.com' in cookies_lower or 'google.com' in cookies_lower:
+            self.platform_combo.setCurrentText("youtube")
+            self.cookie_status.setText("✅ Detected YouTube cookies")
+            self.cookie_status.setStyleSheet("color: #1ABC9C; font-size: 11px;")
+        elif 'instagram.com' in cookies_lower:
+            self.platform_combo.setCurrentText("instagram")
+            self.cookie_status.setText("✅ Detected Instagram cookies")
+            self.cookie_status.setStyleSheet("color: #1ABC9C; font-size: 11px;")
+        elif 'tiktok.com' in cookies_lower:
+            self.platform_combo.setCurrentText("tiktok")
+            self.cookie_status.setText("✅ Detected TikTok cookies")
+            self.cookie_status.setStyleSheet("color: #1ABC9C; font-size: 11px;")
+        elif 'facebook.com' in cookies_lower:
+            self.platform_combo.setCurrentText("facebook")
+            self.cookie_status.setText("✅ Detected Facebook cookies")
+            self.cookie_status.setStyleSheet("color: #1ABC9C; font-size: 11px;")
+        elif 'twitter.com' in cookies_lower or 'x.com' in cookies_lower:
+            self.platform_combo.setCurrentText("twitter")
+            self.cookie_status.setText("✅ Detected Twitter cookies")
+            self.cookie_status.setStyleSheet("color: #1ABC9C; font-size: 11px;")
+
+    def save_cookies(self):
+        """Save cookies to root cookies folder"""
+        cookies = self.cookie_text.toPlainText().strip()
+        if not cookies:
+            QMessageBox.warning(self, "Error", "No cookies to save!")
+            return
+
+        if not self.validate_cookies(cookies):
+            QMessageBox.warning(
+                self, "Invalid Format",
+                "Cookies must be in Netscape format!\n\n"
+                "Expected: .domain.com  TRUE  /  TRUE  expiry  name  value"
+            )
+            return
+
+        platform = self.platform_combo.currentText().lower()
+        if platform == "auto-detect":
+            self.auto_detect_platform_from_cookies(cookies)
+            platform = self.platform_combo.currentText().lower()
+            if platform == "auto-detect":
+                QMessageBox.warning(self, "Error", "Please select a platform manually!")
+                return
+
+        cookie_file = self.cookies_dir / f"{platform}.txt"
+        try:
+            with open(cookie_file, 'w', encoding='utf-8') as f:
+                f.write(cookies)
+            self.cookie_status.setText(f"✅ Saved to cookies/{platform}.txt")
+            self.cookie_status.setStyleSheet("color: #1ABC9C; font-size: 11px; font-weight: bold;")
+            self.log_area.append(f"✅ Cookies saved to: cookies/{platform}.txt")
+            QMessageBox.information(
+                self, "Success",
+                f"Cookies saved successfully!\n\nFile: cookies/{platform}.txt\n"
+                f"These will be used automatically for {platform.title()}."
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to save cookies: {str(e)}")
+
+    def validate_cookies(self, cookies):
+        """Validate Netscape cookie format"""
+        if not cookies:
+            return False
+        lines = cookies.strip().split('\n')
+        has_header = any('Netscape' in line for line in lines[:3])
+        valid_lines = sum(1 for line in lines if not line.startswith('#') and line.strip() and len(line.split('\t')) >= 7)
+        return has_header or valid_lines > 0
+
+    def clear_cookies(self):
+        """Clear cookie text area"""
+        self.cookie_text.clear()
+        self.cookie_status.setText("No cookies loaded")
+        self.cookie_status.setStyleSheet("color: #888; font-size: 11px;")
+        self.log_area.append("🧹 Cookie text area cleared")
+
+    def check_existing_cookies(self, platform_text):
+        """Check if cookies already exist for selected platform"""
+        if platform_text == "Auto-Detect":
+            return
+        platform = platform_text.lower()
+        cookie_file = self.cookies_dir / f"{platform}.txt"
+        if cookie_file.exists():
+            try:
+                file_size = cookie_file.stat().st_size
+                self.cookie_status.setText(f"✅ Found {platform} cookies ({file_size} bytes)")
+                self.cookie_status.setStyleSheet("color: #1ABC9C; font-size: 11px;")
+            except Exception:
+                self.cookie_status.setText("⚠️ Error reading cookie file")
+                self.cookie_status.setStyleSheet("color: #E74C3C; font-size: 11px;")
+        else:
+            self.cookie_status.setText(f"No {platform} cookies found")
+            self.cookie_status.setStyleSheet("color: #888; font-size: 11px;")

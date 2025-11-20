@@ -99,6 +99,20 @@ UPLOAD_CONFIG = {
     # Progress stuck timeout (seconds)
     # If progress doesn't change for this long, consider it stuck
     "progress_stuck_timeout": 120,  # 2 minutes
+
+    # ═══════════════════════════════════════════════════════════
+    # VIDEO HANDLING AFTER SUCCESSFUL UPLOAD
+    # ═══════════════════════════════════════════════════════════
+
+    # What to do with video after successful upload?
+    # Options: "move" or "delete"
+    # - "move": Move video to "uploaded videos" subfolder (keeps backup)
+    # - "delete": Permanently delete video (saves disk space)
+    "video_after_upload": "move",  # Default: move to uploaded folder
+
+    # Confirm before deleting (safety check)
+    # If True and video_after_upload="delete", will log warning before deletion
+    "confirm_delete": True,
 }
 
 
@@ -203,6 +217,101 @@ NOTIFICATION_CONFIG = {
 
 
 # ═══════════════════════════════════════════════════════════
+# PUBLISH BUTTON & SUCCESS DETECTION CONFIGURATION
+# ═══════════════════════════════════════════════════════════
+
+PUBLISH_CONFIG = {
+    # Enable publish button click (production mode)
+    "click_publish_button": True,
+
+    # Click method: "selenium" or "pyautogui" or "javascript"
+    # - "selenium": Standard Selenium click (most reliable)
+    # - "javascript": Execute JavaScript click (bypasses visibility issues)
+    # - "pyautogui": Physical mouse click (for stubborn elements)
+    "click_method": "javascript",  # Default: JavaScript for internal click
+
+    # Retry publish click if it fails
+    "publish_click_retries": 3,
+
+    # Wait after clicking publish button (seconds)
+    # Give Facebook time to process the click
+    "post_click_wait": 2,
+
+    # ═══════════════════════════════════════════════════════════
+    # SUCCESS MESSAGE DETECTION
+    # ═══════════════════════════════════════════════════════════
+
+    # Enable success message detection
+    "detect_success_message": True,
+
+    # Maximum time to wait for success message (seconds)
+    "success_wait_timeout": 30,
+
+    # Poll interval when checking for success (seconds)
+    "success_poll_interval": 1,
+
+    # XPath patterns for Facebook success messages/dialogs
+    "success_patterns": [
+        # Main success messages
+        "//div[@role='dialog' and contains(., 'published')]",
+        "//div[@role='dialog' and contains(., 'successfully')]",
+        "//div[contains(text(), 'Your video has been published')]",
+        "//div[contains(text(), 'Post published')]",
+        "//div[contains(text(), 'successfully published')]",
+
+        # Processing notifications (also considered success)
+        "//div[contains(text(), 'bulk upload is processing')]",
+        "//div[contains(text(), 'Your upload is processing')]",
+        "//span[contains(text(), 'processing')]",
+
+        # Success icons/indicators
+        "//div[@role='dialog']//svg[contains(@aria-label, 'success')]",
+        "//div[@role='dialog']//i[contains(@class, 'success')]",
+
+        # Generic dialog after publish
+        "//div[@role='alertdialog']",
+        "//div[@role='dialog' and @aria-label]",
+    ],
+
+    # After detecting success, wait this long before dismissing
+    "success_message_display_time": 2,
+
+    # Automatically dismiss success message
+    "auto_dismiss_success": True,
+
+    # ═══════════════════════════════════════════════════════════
+    # ENHANCED POPUP DETECTION (Windows notifications)
+    # ═══════════════════════════════════════════════════════════
+
+    # Detect Windows-level notifications that block button clicks
+    "detect_window_popups": True,
+
+    # Patterns for notifications that appear over publish button
+    "blocking_popup_patterns": [
+        # Windows notification overlay
+        "//div[contains(@class, 'notification')]",
+        "//div[contains(@class, 'toast')]",
+        "//div[contains(@class, 'snackbar')]",
+
+        # Facebook notification bar
+        "//div[@role='complementary' and contains(@class, 'notification')]",
+
+        # Popup that blocks interaction
+        "//div[@role='presentation']",
+
+        # Generic overlays
+        "//div[contains(@style, 'z-index') and contains(@style, 'fixed')]",
+    ],
+
+    # Try to click through notifications if they block button
+    "click_through_notifications": True,
+
+    # Max attempts to clear blocking popups
+    "popup_clear_retries": 3,
+}
+
+
+# ═══════════════════════════════════════════════════════════
 # RESUME & RECOVERY CONFIGURATION
 # ═══════════════════════════════════════════════════════════
 
@@ -247,7 +356,7 @@ def get_config(section: str = None):
     Get configuration section or all configs.
 
     Args:
-        section: Config section name (network, state, upload, folder, user, notification, resume, logging)
+        section: Config section name (network, state, upload, folder, user, notification, publish, resume, logging)
                  If None, returns all configs
 
     Returns:
@@ -260,6 +369,7 @@ def get_config(section: str = None):
         "folder": FOLDER_CONFIG,
         "user": USER_CONFIG,
         "notification": NOTIFICATION_CONFIG,
+        "publish": PUBLISH_CONFIG,
         "resume": RESUME_CONFIG,
         "logging": LOGGING_CONFIG,
     }
@@ -285,6 +395,7 @@ def update_config(section: str, key: str, value):
         "folder": FOLDER_CONFIG,
         "user": USER_CONFIG,
         "notification": NOTIFICATION_CONFIG,
+        "publish": PUBLISH_CONFIG,
         "resume": RESUME_CONFIG,
         "logging": LOGGING_CONFIG,
     }

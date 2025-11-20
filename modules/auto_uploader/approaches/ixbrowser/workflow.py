@@ -600,7 +600,7 @@ class IXBrowserApproach(BaseApproach):
             try:
                 # 1. Get Desktop path
                 desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
-                creators_base = os.path.join(desktop_path, "creators data")
+                creators_base = os.path.join(desktop_path, "Links Grabber")
                 profile_folder = os.path.join(creators_base, profile_name)
 
                 logger.info("[IXApproach] Checking folders...")
@@ -610,7 +610,7 @@ class IXBrowserApproach(BaseApproach):
 
                 # 2. Check if folders exist
                 if not os.path.exists(creators_base):
-                    error_msg = f"'creators data' folder not found on Desktop: {creators_base}"
+                    error_msg = f"'Links Grabber' folder not found on Desktop: {creators_base}"
                     logger.error("[IXApproach] %s", error_msg)
                     raise FileNotFoundError(error_msg)
 
@@ -621,7 +621,7 @@ class IXBrowserApproach(BaseApproach):
                     logger.warning("[IXApproach] ═══════════════════════════════════════════")
                     logger.warning("[IXApproach] Profile: %s", profile_name)
                     logger.warning("[IXApproach] Expected path: %s", profile_folder)
-                    logger.warning("[IXApproach] Please create: Desktop/creators data/%s/", profile_name)
+                    logger.warning("[IXApproach] Please create: Desktop/Links Grabber/%s/", profile_name)
                     logger.warning("[IXApproach] Skipping to next profile...")
                     logger.warning("[IXApproach] ═══════════════════════════════════════════")
 

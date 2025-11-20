@@ -1264,5 +1264,307 @@
         "last_success": "2025-11-18T02:23:10.448710"
       }
     }
+  },
+  "instagram:massageclipp": {
+    "creator": "massageclipp",
+    "platform": "instagram",
+    "best_method": "Method 5: Instaloader",
+    "total_extractions": 6,
+    "first_seen": "2025-11-20T13:57:53.366786",
+    "last_extraction": "2025-11-20T13:58:51.378311",
+    "performance_history": {
+      "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 1: yt-dlp --dump-json (with dates)": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 3: yt-dlp with retries": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 4: yt-dlp with user agent": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 6: gallery-dl": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 5: Instaloader": {
+        "success_count": 1,
+        "fail_count": 0,
+        "total_links": 100,
+        "total_time": 46.57315135002136,
+        "avg_links": 100.0,
+        "avg_time": 46.57315135002136,
+        "success_rate": 100.0,
+        "score": 196.34268486499786,
+        "last_error": null,
+        "last_success": "2025-11-20T13:58:51.378322"
+      }
+    }
+  },
+  "tiktok:lluistomasfarrier": {
+    "creator": "lluistomasfarrier",
+    "platform": "tiktok",
+    "best_method": "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)",
+    "total_extractions": 1,
+    "first_seen": "2025-11-20T14:38:18.202982",
+    "last_extraction": "2025-11-20T14:38:18.202997",
+    "performance_history": {
+      "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)": {
+        "success_count": 1,
+        "fail_count": 0,
+        "total_links": 200,
+        "total_time": 10.321348905563354,
+        "avg_links": 200.0,
+        "avg_time": 10.321348905563354,
+        "success_rate": 100.0,
+        "score": 200.96786510944366,
+        "last_error": null,
+        "last_success": "2025-11-20T14:38:18.203002"
+      }
+    }
+  },
+  "tiktok:hoootdogs": {
+    "creator": "hoootdogs",
+    "platform": "tiktok",
+    "best_method": "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)",
+    "total_extractions": 1,
+    "first_seen": "2025-11-20T14:38:41.070183",
+    "last_extraction": "2025-11-20T14:38:41.070199",
+    "performance_history": {
+      "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)": {
+        "success_count": 1,
+        "fail_count": 0,
+        "total_links": 451,
+        "total_time": 22.86188507080078,
+        "avg_links": 451.0,
+        "avg_time": 22.86188507080078,
+        "success_rate": 100.0,
+        "score": 202.2238114929199,
+        "last_error": null,
+        "last_success": "2025-11-20T14:38:41.070203"
+      }
+    }
+  },
+  "tiktok:tomo.game": {
+    "creator": "tomo.game",
+    "platform": "tiktok",
+    "best_method": "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)",
+    "total_extractions": 1,
+    "first_seen": "2025-11-20T14:39:07.868620",
+    "last_extraction": "2025-11-20T14:39:07.868635",
+    "performance_history": {
+      "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)": {
+        "success_count": 1,
+        "fail_count": 0,
+        "total_links": 568,
+        "total_time": 26.793022871017456,
+        "avg_links": 568.0,
+        "avg_time": 26.793022871017456,
+        "success_rate": 100.0,
+        "score": 203.00069771289827,
+        "last_error": null,
+        "last_success": "2025-11-20T14:39:07.868640"
+      }
+    }
+  },
+  "youtube:rvcamping_life": {
+    "creator": "rvcamping_life",
+    "platform": "youtube",
+    "best_method": "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)",
+    "total_extractions": 1,
+    "first_seen": "2025-11-20T14:39:13.706313",
+    "last_extraction": "2025-11-20T14:39:13.706327",
+    "performance_history": {
+      "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)": {
+        "success_count": 1,
+        "fail_count": 0,
+        "total_links": 239,
+        "total_time": 5.832060813903809,
+        "avg_links": 239.0,
+        "avg_time": 5.832060813903809,
+        "success_rate": 100.0,
+        "score": 201.8067939186096,
+        "last_error": null,
+        "last_success": "2025-11-20T14:39:13.706332"
+      }
+    }
+  },
+  "tiktok:ellaonwheels_0": {
+    "creator": "ellaonwheels_0",
+    "platform": "tiktok",
+    "best_method": "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)",
+    "total_extractions": 1,
+    "first_seen": "2025-11-20T14:39:19.948832",
+    "last_extraction": "2025-11-20T14:39:19.948844",
+    "performance_history": {
+      "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)": {
+        "success_count": 1,
+        "fail_count": 0,
+        "total_links": 108,
+        "total_time": 6.232439279556274,
+        "avg_links": 108.0,
+        "avg_time": 6.232439279556274,
+        "success_rate": 100.0,
+        "score": 200.45675607204439,
+        "last_error": null,
+        "last_success": "2025-11-20T14:39:19.948849"
+      }
+    }
+  },
+  "tiktok:fdontcare": {
+    "creator": "fdontcare",
+    "platform": "tiktok",
+    "best_method": "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)",
+    "total_extractions": 1,
+    "first_seen": "2025-11-20T14:39:47.842195",
+    "last_extraction": "2025-11-20T14:39:47.842206",
+    "performance_history": {
+      "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)": {
+        "success_count": 1,
+        "fail_count": 0,
+        "total_links": 639,
+        "total_time": 27.887047052383423,
+        "avg_links": 639.0,
+        "avg_time": 27.887047052383423,
+        "success_rate": 100.0,
+        "score": 203.60129529476166,
+        "last_error": null,
+        "last_success": "2025-11-20T14:39:47.842210"
+      }
+    }
+  },
+  "tiktok:glintgaze": {
+    "creator": "glintgaze",
+    "platform": "tiktok",
+    "best_method": "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)",
+    "total_extractions": 1,
+    "first_seen": "2025-11-20T14:39:55.858318",
+    "last_extraction": "2025-11-20T14:39:55.858331",
+    "performance_history": {
+      "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)": {
+        "success_count": 1,
+        "fail_count": 0,
+        "total_links": 163,
+        "total_time": 8.007931232452393,
+        "avg_links": 163.0,
+        "avg_time": 8.007931232452393,
+        "success_rate": 100.0,
+        "score": 200.82920687675477,
+        "last_error": null,
+        "last_success": "2025-11-20T14:39:55.858336"
+      }
+    }
+  },
+  "tiktok:linasurvival": {
+    "creator": "linasurvival",
+    "platform": "tiktok",
+    "best_method": "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)",
+    "total_extractions": 1,
+    "first_seen": "2025-11-20T14:40:26.408696",
+    "last_extraction": "2025-11-20T14:40:26.408707",
+    "performance_history": {
+      "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)": {
+        "success_count": 1,
+        "fail_count": 0,
+        "total_links": 653,
+        "total_time": 30.5435688495636,
+        "avg_links": 653.0,
+        "avg_time": 30.5435688495636,
+        "success_rate": 100.0,
+        "score": 203.47564311504365,
+        "last_error": null,
+        "last_success": "2025-11-20T14:40:26.408711"
+      }
+    }
+  },
+  "tiktok:mrwhatnext_2": {
+    "creator": "mrwhatnext_2",
+    "platform": "tiktok",
+    "best_method": "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)",
+    "total_extractions": 1,
+    "first_seen": "2025-11-20T15:03:57.081034",
+    "last_extraction": "2025-11-20T15:03:57.081049",
+    "performance_history": {
+      "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)": {
+        "success_count": 1,
+        "fail_count": 0,
+        "total_links": 67,
+        "total_time": 5.415328741073608,
+        "avg_links": 67.0,
+        "avg_time": 5.415328741073608,
+        "success_rate": 100.0,
+        "score": 200.12846712589263,
+        "last_error": null,
+        "last_success": "2025-11-20T15:03:57.081053"
+      }
+    }
+  },
+  "tiktok:mybushcraft_nhat": {
+    "creator": "mybushcraft_nhat",
+    "platform": "tiktok",
+    "best_method": "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)",
+    "total_extractions": 1,
+    "first_seen": "2025-11-20T15:05:21.252328",
+    "last_extraction": "2025-11-20T15:05:21.252337",
+    "performance_history": {
+      "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)": {
+        "success_count": 1,
+        "fail_count": 0,
+        "total_links": 686,
+        "total_time": 28.470512628555298,
+        "avg_links": 686.0,
+        "avg_time": 28.470512628555298,
+        "success_rate": 100.0,
+        "score": 204.01294873714448,
+        "last_error": null,
+        "last_success": "2025-11-20T15:05:21.252341"
+      }
+    }
   }
 }

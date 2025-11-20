@@ -1,9 +1,20 @@
 {
   "daily_stats": {
-    "date": "2025-11-18",
+    "date": "2025-11-20",
     "bookmarks_uploaded": 0,
     "videos_uploaded": 0,
-    "started_at": "2025-11-18 00:48:59"
+    "started_at": "2025-11-20 11:58:16"
   },
-  "last_updated": "2025-11-18 00:48:59"
+  "last_updated": "2025-11-20 11:58:16",
+  "queue": {
+    "current_folder_index": 0,
+    "current_folder_path": "C:\\Users\\Fast Computers\\Desktop\\creators data\\Rob Dobbs\\Ella Bushcraft",
+    "total_folders": 2,
+    "current_cycle": 2
+  },
+  "profile_state": {
+    "current_profile_index": 0,
+    "total_profiles": 7,
+    "last_updated": "2025-11-19 20:53:09"
+  }
 }

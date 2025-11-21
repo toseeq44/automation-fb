@@ -2417,7 +2417,6 @@ class VideoUploadHelper:
                     logger.info("[Upload] ═══════════════════════════════════════════")
 
                     try:
-                        import os
                         if os.path.exists(video_file):
                             os.remove(video_file)
                             logger.info("[Upload] ✓ Video deleted: %s", video_name)

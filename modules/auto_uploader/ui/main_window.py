@@ -17,12 +17,149 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QProgressBar,
+    QRadioButton,
+    QButtonGroup,
 )
 
 from ..auth.credential_manager import CredentialManager
 from ..config.settings_manager import SettingsManager
 from ..core.orchestrator import UploadOrchestrator
 from .approach_dialog import ApproachDialog
+
+
+class VideoHandlingDialog(QDialog):
+    """Dialog to ask user what to do with videos after upload."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.selected_action = "move"  # Default
+        self.init_ui()
+
+    def init_ui(self):
+        """Initialize the UI."""
+        self.setWindowTitle("Video Upload Settings")
+        self.setMinimumWidth(400)
+
+        # Main layout
+        layout = QVBoxLayout()
+        layout.setSpacing(15)
+
+        # Title
+        title = QLabel("📹 After video upload, what should happen to the video file?")
+        title.setStyleSheet("font-size: 14px; font-weight: bold; color: #2C3E50;")
+        title.setWordWrap(True)
+        layout.addWidget(title)
+
+        # Info label
+        info = QLabel("Choose how the bot should handle video files after successful upload:")
+        info.setStyleSheet("font-size: 12px; color: #7F8C8D;")
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        # Radio buttons
+        self.radio_group = QButtonGroup(self)
+
+        # Option 1: Move to uploaded folder (default)
+        self.radio_move = QRadioButton("📁 Move to 'uploaded videos' folder (Recommended)")
+        self.radio_move.setChecked(True)  # Default selection
+        self.radio_move.setStyleSheet("font-size: 13px; padding: 8px;")
+        self.radio_group.addButton(self.radio_move, 1)
+        layout.addWidget(self.radio_move)
+
+        move_desc = QLabel("   ✓ Videos will be moved to 'uploaded videos' subfolder\n"
+                          "   ✓ You can review/backup uploaded videos\n"
+                          "   ✓ Safe option - videos are preserved")
+        move_desc.setStyleSheet("font-size: 11px; color: #27AE60; margin-left: 20px;")
+        move_desc.setWordWrap(True)
+        layout.addWidget(move_desc)
+
+        # Spacer
+        layout.addSpacing(10)
+
+        # Option 2: Delete permanently
+        self.radio_delete = QRadioButton("🗑️ Permanently delete video files")
+        self.radio_delete.setStyleSheet("font-size: 13px; padding: 8px;")
+        self.radio_group.addButton(self.radio_delete, 2)
+        layout.addWidget(self.radio_delete)
+
+        delete_desc = QLabel("   ⚠ Videos will be PERMANENTLY deleted after upload\n"
+                            "   ⚠ Cannot be recovered\n"
+                            "   ✓ Saves disk space")
+        delete_desc.setStyleSheet("font-size: 11px; color: #E74C3C; margin-left: 20px;")
+        delete_desc.setWordWrap(True)
+        layout.addWidget(delete_desc)
+
+        # Spacer
+        layout.addSpacing(20)
+
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+
+        cancel_btn = QPushButton("❌ Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        cancel_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #95A5A6;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                font-size: 13px;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #7F8C8D;
+            }
+        """)
+        button_layout.addWidget(cancel_btn)
+
+        start_btn = QPushButton("▶️ Start Upload")
+        start_btn.clicked.connect(self.accept_selection)
+        start_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #27AE60;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                font-size: 13px;
+                font-weight: bold;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #229954;
+            }
+        """)
+        button_layout.addWidget(start_btn)
+
+        layout.addLayout(button_layout)
+
+        self.setLayout(layout)
+
+    def accept_selection(self):
+        """User clicked Start - save selection."""
+        if self.radio_delete.isChecked():
+            # Confirmation for delete option
+            reply = QMessageBox.question(
+                self,
+                "Confirm Deletion",
+                "⚠️ Are you sure you want to PERMANENTLY DELETE videos after upload?\n\n"
+                "This action CANNOT be undone!\n\n"
+                "Recommended: Use 'Move to uploaded folder' instead.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No  # Default to No
+            )
+
+            if reply == QMessageBox.Yes:
+                self.selected_action = "delete"
+                self.accept()
+            # If No, stay on dialog
+        else:
+            self.selected_action = "move"
+            self.accept()
+
+    def get_selection(self):
+        """Get the user's selection."""
+        return self.selected_action
 
 
 class LogCapture(logging.Handler):
@@ -399,6 +536,29 @@ class AutoUploaderPage(QWidget):
         # Get current automation mode
         self.current_mode = self.settings.get_automation_mode()
         self._append_log(f"✅ Setup completed. Automation mode: {self.current_mode.upper()}")
+        self._append_log("")
+
+        # Show video handling dialog
+        self._append_log("🎬 Opening video handling settings...")
+        dialog = VideoHandlingDialog(self)
+        if dialog.exec_() == QDialog.Accepted:
+            video_action = dialog.get_selection()
+            self._append_log(f"✅ Video handling: {video_action.upper()}")
+
+            # Update config file
+            try:
+                from ..approaches.ixbrowser.config.upload_config import update_config
+                update_config("upload", "video_after_upload", video_action)
+                self._append_log(f"✅ Configuration updated: video_after_upload = {video_action}")
+            except Exception as e:
+                self._append_log(f"⚠️  Could not update config: {e}")
+                self._append_log("   Using default setting: move")
+
+        else:
+            # User cancelled
+            self._append_log("❌ Upload cancelled by user")
+            return
+
         self._append_log("")
 
         # Update UI state

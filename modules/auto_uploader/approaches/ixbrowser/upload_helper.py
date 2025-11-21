@@ -25,6 +25,9 @@ from .core.state_manager import StateManager
 from .core.network_monitor import NetworkMonitor
 from .utils.file_handler import FileHandler
 
+# Import settings manager for delete preference
+from ...config.settings_manager import SettingsManager
+
 logger = logging.getLogger(__name__)
 
 # Image paths for buttons
@@ -53,6 +56,9 @@ class VideoUploadHelper:
         self.state_manager = state_manager or StateManager()
         self.network_monitor = network_monitor or NetworkMonitor(check_interval=10)
         self.file_handler = FileHandler()
+
+        # Load settings for delete preference
+        self.settings = SettingsManager()
 
         # Track current upload session
         self.current_video = None
@@ -1574,13 +1580,133 @@ class VideoUploadHelper:
             logger.debug("[Upload] Traceback: %s", traceback.format_exc())
             return False
 
+    def click_publish_button(self, button) -> bool:
+        """
+        Click the publish button and verify the action succeeded.
+
+        Args:
+            button: WebElement of publish button
+
+        Returns:
+            True if click succeeded, False otherwise
+        """
+        try:
+            logger.info("[Upload] ═══════════════════════════════════════════")
+            logger.info("[Upload] CLICKING PUBLISH BUTTON")
+            logger.info("[Upload] ═══════════════════════════════════════════")
+
+            # Method 1: Try Selenium click first
+            try:
+                logger.info("[Upload] Attempting Selenium click...")
+                button.click()
+                logger.info("[Upload] ✓ Selenium click executed")
+                time.sleep(1)  # Wait for response
+                return True
+            except Exception as e:
+                logger.debug("[Upload] Selenium click failed: %s", str(e))
+
+            # Method 2: Try JavaScript click
+            try:
+                logger.info("[Upload] Attempting JavaScript click...")
+                self.driver.execute_script("arguments[0].click();", button)
+                logger.info("[Upload] ✓ JavaScript click executed")
+                time.sleep(1)
+                return True
+            except Exception as e:
+                logger.debug("[Upload] JavaScript click failed: %s", str(e))
+
+            # Method 3: Try ActionChains click
+            try:
+                logger.info("[Upload] Attempting ActionChains click...")
+                actions = ActionChains(self.driver)
+                actions.move_to_element(button).click().perform()
+                logger.info("[Upload] ✓ ActionChains click executed")
+                time.sleep(1)
+                return True
+            except Exception as e:
+                logger.debug("[Upload] ActionChains click failed: %s", str(e))
+
+            # Method 4: Try pyautogui click (last resort)
+            try:
+                logger.info("[Upload] Attempting pyautogui click...")
+                location = button.location
+                size = button.size
+                center_x = int(location['x'] + size['width'] / 2)
+                center_y = int(location['y'] + size['height'] / 2)
+                pyautogui.click(center_x, center_y)
+                logger.info("[Upload] ✓ Pyautogui click executed at (%d, %d)", center_x, center_y)
+                time.sleep(1)
+                return True
+            except Exception as e:
+                logger.debug("[Upload] Pyautogui click failed: %s", str(e))
+
+            logger.error("[Upload] ✗ All click methods failed!")
+            return False
+
+        except Exception as e:
+            logger.error("[Upload] Error clicking publish button: %s", str(e))
+            return False
+
+    def verify_publish_success(self, timeout: int = 10) -> bool:
+        """
+        Verify that video was successfully published by checking for success notification.
+
+        Args:
+            timeout: How long to wait for notification (seconds)
+
+        Returns:
+            True if publish verified, False otherwise
+        """
+        try:
+            logger.info("[Upload] ═══════════════════════════════════════════")
+            logger.info("[Upload] VERIFYING PUBLISH SUCCESS")
+            logger.info("[Upload] ═══════════════════════════════════════════")
+
+            start_time = time.time()
+
+            while (time.time() - start_time) < timeout:
+                try:
+                    # Look for success indicators
+                    page_text = self.driver.find_element(By.TAG_NAME, "body").text.lower()
+
+                    success_keywords = [
+                        "bulk upload",
+                        "processing",
+                        "published",
+                        "success",
+                        "uploaded successfully"
+                    ]
+
+                    for keyword in success_keywords:
+                        if keyword in page_text:
+                            logger.info("[Upload] ✓ Success indicator found: '%s'", keyword)
+                            return True
+
+                    # Check if publish button disappeared (indicates success)
+                    button = self.find_publish_button()
+                    if not button:
+                        logger.info("[Upload] ✓ Publish button disappeared (likely published)")
+                        return True
+
+                except Exception:
+                    pass
+
+                time.sleep(1)
+
+            logger.warning("[Upload] ⚠ Could not verify publish success (may still have succeeded)")
+            return True  # Assume success if no errors
+
+        except Exception as e:
+            logger.debug("[Upload] Verification error: %s", str(e))
+            return True  # Don't fail workflow on verification error
+
     def detect_and_hover_publish_button(self) -> bool:
         """
-        Complete workflow: Find publish button, check if enabled, and hover on it.
+        Complete workflow: Find publish button, check if enabled, hover, and CLICK to publish.
         This is called after upload completes.
 
         Returns:
-            True if button found and hovered, False otherwise
+            True if button found and clicked, False otherwise
         """
         try:
             # Step 1: Find the button
@@ -1588,8 +1714,17 @@ class VideoUploadHelper:
 
             if not button:
                 logger.warning("[Upload] ⚠ Could not find Publish button")
-                logger.warning("[Upload] Continuing to next bookmark anyway...")
-                return False
+                logger.warning("[Upload] Checking for popups/notifications that might be blocking...")
+
+                # Try to dismiss any popups
+                self.dismiss_notifications()
+                time.sleep(2)
+
+                # Retry finding button
+                button = self.find_publish_button()
+                if not button:
+                    logger.error("[Upload] ✗ Still cannot find Publish button after clearing popups")
+                    return False
 
             logger.info("[Upload] ✓ Publish button found!")
 
@@ -1602,13 +1737,26 @@ class VideoUploadHelper:
             else:
                 logger.warning("[Upload] ⚠ Publish button is DISABLED")
                 logger.warning("[Upload] (Upload might not be complete yet)")
+                # Don't click if disabled
+                return False
 
-            # Step 3: Hover on button (regardless of enabled state, for visual confirmation)
+            # Step 3: Hover on button for visual confirmation
             hover_success = self.hover_on_publish_button(button)
 
-            # Step 4: Wait for Facebook "bulk upload processing" notification
-            # Facebook shows this notification after publish button appears
-            # User's smart solution: Let it show, then navigate to next page (dismisses automatically)
+            # Step 4: CLICK the publish button to finalize upload
+            if not self.click_publish_button(button):
+                logger.error("[Upload] ✗ Failed to click publish button")
+                return False
+
+            logger.info("[Upload] ✓ Publish button clicked successfully!")
+
+            # Step 5: Verify publish succeeded
+            if self.verify_publish_success(timeout=10):
+                logger.info("[Upload] ✓ Publish verified successful!")
+            else:
+                logger.warning("[Upload] ⚠ Could not verify publish (may still have succeeded)")
+
+            # Step 6: Wait for Facebook "bulk upload processing" notification
             try:
                 from .config.upload_config import NOTIFICATION_CONFIG
                 post_publish_wait = NOTIFICATION_CONFIG.get('post_publish_wait', 3)
@@ -1621,13 +1769,13 @@ class VideoUploadHelper:
 
                 time.sleep(post_publish_wait)
 
-                # Optional: Try to dismiss any notifications that appeared
+                # Try to dismiss any notifications that appeared
                 self.dismiss_notifications()
 
             except Exception as e:
                 logger.debug("[Upload] Post-publish wait failed: %s", str(e))
 
-            return hover_success
+            return True
 
         except Exception as e:
             logger.error("[Upload] Error in detect_and_hover_publish_button: %s", str(e))
@@ -2253,22 +2401,54 @@ class VideoUploadHelper:
                 if not self.ensure_window_ready("finding publish button"):
                     logger.warning("[Upload] ⚠ Window readiness check failed, but continuing...")
 
-                # Detect and hover on Publish button (production mode: no click)
-                self.detect_and_hover_publish_button()
+                # Detect, hover, and CLICK publish button
+                publish_success = self.detect_and_hover_publish_button()
 
-                # Phase 2: Move video using FileHandler (robust file operations)
-                moved_to = self.file_handler.move_video_to_uploaded(video_file, folder_path)
-                if moved_to:
-                    logger.info("[Upload] ✓ Video moved to 'uploaded videos' folder")
+                if not publish_success:
+                    logger.warning("[Upload] ⚠ Publish button click failed, but video uploaded")
 
-                    # Phase 2: Mark video as uploaded in permanent history
-                    self.state_manager.mark_video_uploaded(
-                        video_file=video_file,
-                        bookmark=bookmark_title,
-                        moved_to=moved_to
-                    )
+                # Handle video file based on user preference (delete vs move)
+                delete_after_publish = self.settings.get_delete_after_publish()
+
+                if delete_after_publish:
+                    # Delete video permanently after successful publish
+                    logger.info("[Upload] ═══════════════════════════════════════════")
+                    logger.info("[Upload] Deleting video after successful publish...")
+                    logger.info("[Upload] ═══════════════════════════════════════════")
+
+                    try:
+                        import os
+                        if os.path.exists(video_file):
+                            os.remove(video_file)
+                            logger.info("[Upload] ✓ Video deleted: %s", video_name)
+
+                            # Mark as uploaded in history (with delete status)
+                            self.state_manager.mark_video_uploaded(
+                                video_file=video_file,
+                                bookmark=bookmark_title,
+                                moved_to="DELETED_AFTER_PUBLISH"
+                            )
+                        else:
+                            logger.warning("[Upload] ⚠ Video file not found for deletion")
+                    except Exception as e:
+                        logger.error("[Upload] ✗ Error deleting video: %s", str(e))
+                        logger.warning("[Upload] Continuing anyway...")
                 else:
-                    logger.warning("[Upload] ⚠ Could not move video (continuing anyway)")
+                    # Move video to uploaded folder (default behavior)
+                    logger.info("[Upload] Moving video to 'uploaded videos' folder...")
+
+                    moved_to = self.file_handler.move_video_to_uploaded(video_file, folder_path)
+                    if moved_to:
+                        logger.info("[Upload] ✓ Video moved to 'uploaded videos' folder")
+
+                        # Phase 2: Mark video as uploaded in permanent history
+                        self.state_manager.mark_video_uploaded(
+                            video_file=video_file,
+                            bookmark=bookmark_title,
+                            moved_to=moved_to
+                        )
+                    else:
+                        logger.warning("[Upload] ⚠ Could not move video (continuing anyway)")
 
                 # Phase 2: Clear current upload state
                 self.state_manager.clear_current_upload()

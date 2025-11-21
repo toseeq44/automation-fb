@@ -89,6 +89,14 @@ class SettingsManager:
     def update_credentials(self, mode: str, payload: Dict[str, Any]) -> None:
         self.set(f"automation.credentials.{mode}", payload)
 
+    def get_delete_after_publish(self) -> bool:
+        """Get user preference for deleting videos after publish (default: False - move to folder)."""
+        return bool(self.get("automation.delete_after_publish", False))
+
+    def set_delete_after_publish(self, delete: bool) -> None:
+        """Set user preference for deleting videos after publish."""
+        self.set("automation.delete_after_publish", delete)
+
     # ------------------------------------------------------------------ #
     # Private helpers                                                    #
     # ------------------------------------------------------------------ #

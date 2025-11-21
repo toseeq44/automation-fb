@@ -382,6 +382,43 @@ class AutoUploaderPage(QWidget):
                 "An automation approach is required before the uploader can start.",
             )
 
+    def _show_delete_dialog(self) -> Optional[bool]:
+        """
+        Show dialog asking user whether to delete or move videos after publish.
+
+        Returns:
+            True: Delete videos after publish
+            False: Move videos to uploaded folder
+            None: User cancelled
+        """
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Video Management After Upload")
+        msg_box.setText("What should happen to videos after successful publish?")
+        msg_box.setInformativeText(
+            "Choose how to handle videos after they are uploaded and published:\n\n"
+            "• Delete: Permanently remove videos after successful publish\n"
+            "• Move to Folder: Keep videos in 'uploaded videos' folder (default)"
+        )
+
+        # Add custom buttons
+        delete_btn = msg_box.addButton("🗑️  Delete After Publish", QMessageBox.ActionRole)
+        move_btn = msg_box.addButton("📁 Move to Uploaded Folder", QMessageBox.AcceptRole)
+        cancel_btn = msg_box.addButton("Cancel", QMessageBox.RejectRole)
+
+        # Set default button
+        msg_box.setDefaultButton(move_btn)
+
+        # Show dialog
+        msg_box.exec_()
+        clicked = msg_box.clickedButton()
+
+        if clicked == delete_btn:
+            return True  # Delete after publish
+        elif clicked == move_btn:
+            return False  # Move to uploaded folder
+        else:
+            return None  # Cancelled
+
     def start_upload(self) -> None:
         """Start the upload workflow in a separate thread."""
         if self.worker and self.worker.isRunning():
@@ -400,6 +437,22 @@ class AutoUploaderPage(QWidget):
         self.current_mode = self.settings.get_automation_mode()
         self._append_log(f"✅ Setup completed. Automation mode: {self.current_mode.upper()}")
         self._append_log("")
+
+        # Ask user about delete vs move preference (IX mode only)
+        if self.current_mode == "ix":
+            delete_after_publish = self._show_delete_dialog()
+            if delete_after_publish is None:  # User cancelled
+                self._append_log("❌ Upload cancelled by user.")
+                return
+
+            # Store preference in settings for this session
+            self.settings.set_delete_after_publish(delete_after_publish)
+
+            if delete_after_publish:
+                self._append_log("🗑️  Videos will be DELETED after successful publish")
+            else:
+                self._append_log("📁 Videos will be MOVED to 'uploaded videos' folder")
+            self._append_log("")
 
         # Update UI state
         self.status_value.setText("Running...")

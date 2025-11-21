@@ -1702,11 +1702,11 @@ class VideoUploadHelper:
 
     def detect_and_hover_publish_button(self) -> bool:
         """
-        Complete workflow: Find publish button, check if enabled, hover, and CLICK to publish.
+        Complete workflow: Find publish button, check if enabled, hover, and click to publish.
         This is called after upload completes.
 
         Returns:
-            True if button found and clicked, False otherwise
+            True if button found and hovered, False otherwise
         """
         try:
             # Step 1: Find the button
@@ -1714,17 +1714,8 @@ class VideoUploadHelper:
 
             if not button:
                 logger.warning("[Upload] ⚠ Could not find Publish button")
-                logger.warning("[Upload] Checking for popups/notifications that might be blocking...")
-
-                # Try to dismiss any popups
-                self.dismiss_notifications()
-                time.sleep(2)
-
-                # Retry finding button
-                button = self.find_publish_button()
-                if not button:
-                    logger.error("[Upload] ✗ Still cannot find Publish button after clearing popups")
-                    return False
+                logger.warning("[Upload] Continuing to next bookmark anyway...")
+                return False
 
             logger.info("[Upload] ✓ Publish button found!")
 
@@ -1737,26 +1728,24 @@ class VideoUploadHelper:
             else:
                 logger.warning("[Upload] ⚠ Publish button is DISABLED")
                 logger.warning("[Upload] (Upload might not be complete yet)")
-                # Don't click if disabled
-                return False
 
-            # Step 3: Hover on button for visual confirmation
+            # Step 3: Hover on button (regardless of enabled state, for visual confirmation)
             hover_success = self.hover_on_publish_button(button)
 
-            # Step 4: CLICK the publish button to finalize upload
-            if not self.click_publish_button(button):
-                logger.error("[Upload] ✗ Failed to click publish button")
-                return False
+            # Step 4: CLICK the publish button if enabled
+            if is_enabled:
+                logger.info("[Upload] ═══════════════════════════════════════════")
+                logger.info("[Upload] CLICKING PUBLISH BUTTON")
+                logger.info("[Upload] ═══════════════════════════════════════════")
 
-            logger.info("[Upload] ✓ Publish button clicked successfully!")
+                if self.click_publish_button(button):
+                    logger.info("[Upload] ✓ Publish button clicked successfully!")
+                else:
+                    logger.warning("[Upload] ⚠ Click failed, but continuing...")
 
-            # Step 5: Verify publish succeeded
-            if self.verify_publish_success(timeout=10):
-                logger.info("[Upload] ✓ Publish verified successful!")
-            else:
-                logger.warning("[Upload] ⚠ Could not verify publish (may still have succeeded)")
-
-            # Step 6: Wait for Facebook "bulk upload processing" notification
+            # Step 5: Wait for Facebook "bulk upload processing" notification
+            # Facebook shows this notification after publish button appears
+            # User's smart solution: Let it show, then navigate to next page (dismisses automatically)
             try:
                 from .config.upload_config import NOTIFICATION_CONFIG
                 post_publish_wait = NOTIFICATION_CONFIG.get('post_publish_wait', 3)
@@ -1769,13 +1758,13 @@ class VideoUploadHelper:
 
                 time.sleep(post_publish_wait)
 
-                # Try to dismiss any notifications that appeared
+                # Optional: Try to dismiss any notifications that appeared
                 self.dismiss_notifications()
 
             except Exception as e:
                 logger.debug("[Upload] Post-publish wait failed: %s", str(e))
 
-            return True
+            return hover_success
 
         except Exception as e:
             logger.error("[Upload] Error in detect_and_hover_publish_button: %s", str(e))

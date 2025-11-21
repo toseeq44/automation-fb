@@ -228,14 +228,14 @@ PUBLISH_CONFIG = {
     # - "selenium": Standard Selenium click (most reliable)
     # - "javascript": Execute JavaScript click (bypasses visibility issues)
     # - "pyautogui": Physical mouse click (for stubborn elements)
-    "click_method": "javascript",  # Default: JavaScript for internal click
+    "click_method": "pyautogui",  # Default: Physical left mouse click
 
     # Retry publish click if it fails
     "publish_click_retries": 3,
 
     # Wait after clicking publish button (seconds)
     # Give Facebook time to process the click
-    "post_click_wait": 2,
+    "post_click_wait": 1,  # 1 second wait for Facebook response
 
     # ═══════════════════════════════════════════════════════════
     # SUCCESS MESSAGE DETECTION

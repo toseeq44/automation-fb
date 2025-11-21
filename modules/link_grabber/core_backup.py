@@ -88,7 +88,7 @@ def _extract_creator_from_link(link: str) -> str:
         return 'unknown'
 
 def _save_links_by_creator(creator_links_map, base_dir: str):
-    """Save links in per-creator folders: Desktop/Toseeq Links Grabber/@creator/creator_links.txt"""
+    """Save links in per-creator folders: Desktop/Links grabber/@creator/creator_links.txt"""
     os.makedirs(base_dir, exist_ok=True)
     saved_files = []
     for creator_index, (creator, creator_links) in enumerate(creator_links_map.items(), 1):
@@ -706,9 +706,9 @@ class LinkGrabberThread(QThread):
             return
             
         desktop = Path.home() / "Desktop"
-        main_folder = desktop / "Toseeq Links Grabber"
+        main_folder = desktop / "Links grabber"
         main_folder.mkdir(parents=True, exist_ok=True)
-        
+
         safe_creator = _safe_filename(f"@{creator_name}")
         creator_folder = main_folder / safe_creator
         creator_folder.mkdir(exist_ok=True)
@@ -834,7 +834,7 @@ class BulkLinkGrabberThread(QThread):
             return
         
         desktop = Path.home() / "Desktop"
-        main_folder = desktop / "Toseeq Links Grabber"
+        main_folder = desktop / "Links grabber"
         base_dir = str(main_folder)
         
         # Save using the new helper function with creator_links_map

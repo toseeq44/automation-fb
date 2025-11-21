@@ -164,11 +164,43 @@ class UploadOrchestrator:
     # ------------------------------------------------------------------ #
     # Internal helpers                                                   #
     # ------------------------------------------------------------------ #
+    def _auto_detect_links_grabber_folder(self) -> Optional[Path]:
+        """Auto-detect 'Links grabber' folder on user's desktop."""
+        desktop_paths = [
+            Path.home() / "Desktop",
+            Path.home() / "OneDrive" / "Desktop",
+            Path(f"C:/Users/{Path.home().name}/Desktop"),
+        ]
+
+        for desktop in desktop_paths:
+            if desktop.exists():
+                links_grabber = desktop / "Links grabber"
+                if links_grabber.exists() and links_grabber.is_dir():
+                    logging.info(f"✓ Auto-detected Links grabber folder: {links_grabber}")
+                    return links_grabber
+
+        logging.warning("⚠ Could not auto-detect 'Links grabber' folder on Desktop")
+        return None
+
     def _resolve_paths(self) -> AutomationPaths:
         """Resolve and validate filesystem paths used by the workflow."""
         path_config = self.settings.get_automation_paths() or {}
 
-        creators_root = Path(path_config.get("creators_root", "")).expanduser().resolve()
+        # Auto-detect creators_root if not provided or invalid
+        creators_root_value = path_config.get("creators_root", "")
+        if creators_root_value:
+            creators_root = Path(creators_root_value).expanduser().resolve()
+        else:
+            creators_root = None
+
+        # If path not set or doesn't exist, try auto-detection
+        if not creators_root or not creators_root.exists():
+            auto_detected = self._auto_detect_links_grabber_folder()
+            if auto_detected:
+                creators_root = auto_detected
+            elif not creators_root:
+                creators_root = Path("")  # Will fail validation below
+
         shortcuts_root = Path(path_config.get("shortcuts_root", "")).expanduser().resolve()
 
         default_history = Path(__file__).resolve().parents[1] / "data" / "upload_tracking.json"

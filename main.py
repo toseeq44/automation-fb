@@ -1,6 +1,7 @@
 """
 main.py
 Main application to launch ContentFlow Pro.
+Version 2.0 - Secure License System with Hardware Binding
 """
 import sys
 from PyQt5.QtWidgets import QApplication, QMessageBox
@@ -15,7 +16,9 @@ else:
 
 from modules.logging import get_logger
 from modules.config import get_config
-from modules.license import LicenseManager
+
+# Import new secure license system
+from modules.license.secure_license import SecureLicense, get_plan_info, get_hardware_id_display
 from modules.ui import LicenseActivationDialog
 
 # Import development mode settings
@@ -36,7 +39,7 @@ def main():
     logger = get_logger("ContentFlowPro")
     logger.info("=" * 60, "App")
     logger.info("ContentFlow Pro - Video Automation Suite", "App")
-    logger.info("Version 1.0.0", "App")
+    logger.info("Version 2.0.0 - Secure License", "App")
     logger.info("=" * 60, "App")
 
     # Initialize config
@@ -46,9 +49,11 @@ def main():
     # Ensure directories exist
     config.ensure_directories_exist()
 
-    # Initialize license manager
-    server_url = config.get('license.server_url', 'http://localhost:5000')
-    license_manager = LicenseManager(server_url=server_url)
+    # Initialize secure license manager (NO SERVER NEEDED!)
+    license_manager = SecureLicense()
+
+    # Log hardware ID for debugging
+    logger.info(f"Hardware ID: {get_hardware_id_display()}", "License")
 
     # 🔧 DEVELOPMENT MODE CHECK
     if DEV_MODE:
@@ -56,47 +61,49 @@ def main():
         logger.warning("⚠️  Set DEV_MODE = False in dev_config.py for production", "App")
         is_valid = True
         message = "Development Mode - License checks skipped"
-        license_info = DEV_CONFIG.get('mock_license_info', {})
+        license_info = DEV_CONFIG.get('mock_license_info', {
+            'plan': 'pro',
+            'plan_name': 'Pro (Dev)',
+            'days_remaining': 999,
+            'daily_downloads': None,
+            'daily_pages': None,
+        })
     else:
-        logger.info(f"License server: {server_url}", "License")
-        # Check license on startup
-        is_valid, message, license_info = license_manager.validate_license()
+        # Check license using new secure system (OFFLINE - no server!)
+        is_valid, message, license_info = license_manager.load_license()
+        logger.info(f"License check: {message}", "License")
 
     if not is_valid:
         logger.warning(f"License validation failed: {message}", "License")
 
-        # Check if no license exists at all
-        if not license_info:
-            # Show activation dialog
-            logger.info("No license found. Showing activation dialog.", "License")
+        # Show activation dialog
+        logger.info("No valid license found. Showing activation dialog.", "License")
 
-            activation_dialog = LicenseActivationDialog(license_manager)
-            result = activation_dialog.exec_()
+        activation_dialog = LicenseActivationDialog(license_manager)
+        result = activation_dialog.exec_()
 
-            if result != activation_dialog.Accepted:
-                # User cancelled activation
-                logger.info("User cancelled activation. Exiting.", "License")
-                QMessageBox.warning(
-                    None,
-                    "License Required",
-                    "ContentFlow Pro requires a valid license to run.\n\n"
-                    "Please activate a license or purchase one to continue."
-                )
-                sys.exit(0)
-        else:
-            # License exists but invalid (expired or offline too long)
-            logger.warning("License invalid or expired", "License")
+        if result != activation_dialog.Accepted:
+            # User cancelled activation
+            logger.info("User cancelled activation. Exiting.", "License")
             QMessageBox.warning(
                 None,
-                "License Issue",
-                f"{message}\n\n"
-                "Please check your license or renew your subscription.\n"
-                "Some features may be limited."
+                "License Required",
+                "ContentFlow Pro requires a valid license to run.\n\n"
+                "Please purchase a license to continue.\n\n"
+                f"Your Hardware ID: {get_hardware_id_display()}\n"
+                "Send this to admin to get your license."
             )
-            # Allow app to run in demo mode
-    else:
+            sys.exit(0)
+
+        # Re-check license after activation
+        is_valid, message, license_info = license_manager.load_license()
+
+    if is_valid:
         logger.info(f"License validated successfully: {message}", "License")
         days_remaining = license_info.get('days_remaining', 0) if license_info else 0
+        plan_name = license_info.get('plan_name', 'Unknown') if license_info else 'Unknown'
+
+        logger.info(f"Plan: {plan_name}, Days remaining: {days_remaining}", "License")
 
         # Warn if expiring soon
         if days_remaining <= 7 and days_remaining > 0:
@@ -104,8 +111,9 @@ def main():
             QMessageBox.warning(
                 None,
                 "License Expiring Soon",
-                f"Your license will expire in {days_remaining} day(s).\n\n"
-                "Please renew your subscription to continue using ContentFlow Pro."
+                f"Your {plan_name} license will expire in {days_remaining} day(s).\n\n"
+                "Please renew your subscription to continue using ContentFlow Pro.\n\n"
+                "Contact: WhatsApp 0307-7361139"
             )
 
     # Launch main window

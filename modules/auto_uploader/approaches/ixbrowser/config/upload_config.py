@@ -127,13 +127,39 @@ FOLDER_CONFIG = {
 
 # ═══════════════════════════════════════════════════════════
 # USER TYPE & DAILY LIMIT CONFIGURATION
+# Connected to Secure License System
 # ═══════════════════════════════════════════════════════════
 
+def _get_license_info():
+    """Get license info from secure license system."""
+    try:
+        from modules.license.secure_license import get_plan_info
+        return get_plan_info()
+    except:
+        return {'is_valid': False, 'plan': 'basic', 'daily_pages': 200}
+
+
+def get_user_type():
+    """Get current user type from license."""
+    info = _get_license_info()
+    if info.get('is_valid'):
+        return info.get('plan', 'basic')
+    return 'basic'
+
+
+def get_daily_limit():
+    """Get daily limit from license (None = unlimited for Pro)."""
+    info = _get_license_info()
+    if info.get('is_valid'):
+        return info.get('daily_pages')  # None for Pro = unlimited
+    return 200  # Basic default
+
+
+# Static config with defaults (use functions for dynamic values)
 USER_CONFIG = {
     # User type: "basic" or "pro"
-    # Basic: Limited to daily_limit bookmarks per 24 hours
-    # Pro: Unlimited uploads
-    "user_type": "basic",  # Default: basic user
+    # Now dynamically loaded from license system!
+    "user_type": "basic",  # Use get_user_type() for live value
 
     # Daily limit for basic users (number of bookmarks/pages per 24 hours)
     "daily_limit_basic": 200,
@@ -148,6 +174,23 @@ USER_CONFIG = {
     # Set to 0 to reset at midnight
     "reset_hour": 0,
 }
+
+
+def get_current_user_config():
+    """Get user config with live license data."""
+    user_type = get_user_type()
+    daily_limit = get_daily_limit()
+
+    return {
+        "user_type": user_type,
+        "daily_limit_basic": 200,
+        "daily_limit_pro": None,
+        "daily_limit": daily_limit,
+        "track_daily_limit": True,
+        "reset_hour": 0,
+        "is_pro": user_type == 'pro',
+        "is_unlimited": daily_limit is None,
+    }
 
 
 # ═══════════════════════════════════════════════════════════

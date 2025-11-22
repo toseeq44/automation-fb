@@ -1,42 +1,55 @@
 """
 License Activation Dialog
-UI for activating ContentFlow Pro licenses
+UI for activating ContentFlow Pro licenses with Hardware Binding
 """
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QTextEdit, QMessageBox, QProgressBar
+    QPushButton, QTextEdit, QMessageBox, QProgressBar, QFrame,
+    QApplication
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QFont
-from modules.license import LicenseManager
+
+# Import new secure license system
+from modules.license.secure_license import (
+    SecureLicense, get_hardware_id_display, PLAN_CONFIG
+)
 from modules.logging import get_logger
 
 
 class ActivationThread(QThread):
     """Background thread for license activation"""
-    finished = pyqtSignal(bool, str)  # success, message
+    finished = pyqtSignal(bool, str, object)  # success, message, info
 
-    def __init__(self, license_manager: LicenseManager, license_key: str):
+    def __init__(self, license_manager: SecureLicense, license_key: str):
         super().__init__()
         self.license_manager = license_manager
         self.license_key = license_key
 
     def run(self):
         try:
-            success, message = self.license_manager.activate_license(self.license_key)
-            self.finished.emit(success, message)
+            # Validate and save license
+            success, message = self.license_manager.save_license(self.license_key)
+
+            if success:
+                # Get license info
+                _, _, info = self.license_manager.load_license()
+                self.finished.emit(True, message, info)
+            else:
+                self.finished.emit(False, message, None)
         except Exception as e:
-            self.finished.emit(False, f"Activation error: {str(e)}")
+            self.finished.emit(False, f"Activation error: {str(e)}", None)
 
 
 class LicenseActivationDialog(QDialog):
     """
-    Dialog for license activation
+    Dialog for license activation with Hardware ID display
     """
 
-    def __init__(self, license_manager: LicenseManager, parent=None):
+    def __init__(self, license_manager=None, parent=None):
         super().__init__(parent)
-        self.license_manager = license_manager
+        # Use new secure license system
+        self.license_manager = SecureLicense()
         self.logger = get_logger()
         self.activation_thread = None
         self.init_ui()
@@ -45,44 +58,91 @@ class LicenseActivationDialog(QDialog):
         """Initialize UI"""
         self.setWindowTitle("Activate ContentFlow Pro License")
         self.setModal(True)
-        self.setFixedSize(550, 450)
+        self.setFixedSize(600, 580)
 
         layout = QVBoxLayout()
-        layout.setSpacing(15)
-        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setSpacing(12)
+        layout.setContentsMargins(25, 25, 25, 25)
 
         # Title
         title = QLabel("🔐 License Activation")
         title.setFont(QFont("Arial", 20, QFont.Bold))
         title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet("color: #1ABC9C; padding: 10px;")
+        title.setStyleSheet("color: #00d4ff; padding: 10px;")
         layout.addWidget(title)
 
-        # Subtitle
-        subtitle = QLabel("Enter your license key to unlock ContentFlow Pro")
-        subtitle.setFont(QFont("Arial", 11))
-        subtitle.setAlignment(Qt.AlignCenter)
-        subtitle.setStyleSheet("color: #BDC3C7; padding-bottom: 10px;")
-        layout.addWidget(subtitle)
+        # Hardware ID Section
+        hw_frame = QFrame()
+        hw_frame.setStyleSheet("""
+            QFrame {
+                background-color: #16213e;
+                border: 2px solid #4a4a6a;
+                border-radius: 8px;
+                padding: 10px;
+            }
+        """)
+        hw_layout = QVBoxLayout(hw_frame)
+
+        hw_title = QLabel("📱 Your Hardware ID (Send this to admin)")
+        hw_title.setStyleSheet("font-weight: bold; color: #ff6b6b; font-size: 12px;")
+        hw_layout.addWidget(hw_title)
+
+        hw_id_layout = QHBoxLayout()
+        self.hw_id_label = QLabel(get_hardware_id_display())
+        self.hw_id_label.setFont(QFont("Courier", 14, QFont.Bold))
+        self.hw_id_label.setStyleSheet("""
+            color: #00ff00;
+            background-color: #0f0f23;
+            padding: 10px;
+            border-radius: 5px;
+        """)
+        self.hw_id_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        hw_id_layout.addWidget(self.hw_id_label)
+
+        copy_hw_btn = QPushButton("📋 Copy")
+        copy_hw_btn.setMaximumWidth(80)
+        copy_hw_btn.clicked.connect(self.copy_hardware_id)
+        copy_hw_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4ecca3;
+                color: #000;
+                padding: 8px;
+                border-radius: 5px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #6ee6b8;
+            }
+        """)
+        hw_id_layout.addWidget(copy_hw_btn)
+
+        hw_layout.addLayout(hw_id_layout)
+
+        hw_note = QLabel("⚠️ Send this Hardware ID to get your license key")
+        hw_note.setStyleSheet("color: #ffa500; font-size: 11px;")
+        hw_layout.addWidget(hw_note)
+
+        layout.addWidget(hw_frame)
 
         # License key input
-        key_label = QLabel("License Key:")
-        key_label.setStyleSheet("font-weight: bold; font-size: 12px;")
+        key_label = QLabel("🔑 Enter License Key:")
+        key_label.setStyleSheet("font-weight: bold; font-size: 13px; margin-top: 10px;")
         layout.addWidget(key_label)
 
-        self.license_input = QLineEdit()
-        self.license_input.setPlaceholderText("CFPRO-XXXX-XXXX-XXXX-XXXX")
-        self.license_input.setFont(QFont("Courier", 11))
+        self.license_input = QTextEdit()
+        self.license_input.setPlaceholderText("CF-gAAAAABn... (Paste your license key here)")
+        self.license_input.setFont(QFont("Courier", 10))
+        self.license_input.setMaximumHeight(80)
         self.license_input.setStyleSheet("""
-            QLineEdit {
+            QTextEdit {
                 padding: 10px;
-                border: 2px solid #34495E;
+                border: 2px solid #4a4a6a;
                 border-radius: 5px;
-                background-color: #2C3E50;
-                color: #ECF0F1;
+                background-color: #0f0f23;
+                color: #00ff00;
             }
-            QLineEdit:focus {
-                border: 2px solid #1ABC9C;
+            QTextEdit:focus {
+                border: 2px solid #00d4ff;
             }
         """)
         layout.addWidget(self.license_input)
@@ -91,16 +151,16 @@ class LicenseActivationDialog(QDialog):
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 0)  # Indeterminate
         self.progress_bar.setVisible(False)
+        self.progress_bar.setMaximumHeight(8)
         self.progress_bar.setStyleSheet("""
             QProgressBar {
-                border: 2px solid #34495E;
-                border-radius: 5px;
+                border: none;
+                border-radius: 4px;
                 background-color: #2C3E50;
-                text-align: center;
-                height: 25px;
             }
             QProgressBar::chunk {
-                background-color: #1ABC9C;
+                background-color: #00d4ff;
+                border-radius: 4px;
             }
         """)
         layout.addWidget(self.progress_bar)
@@ -108,43 +168,66 @@ class LicenseActivationDialog(QDialog):
         # Status text
         self.status_text = QTextEdit()
         self.status_text.setReadOnly(True)
-        self.status_text.setMaximumHeight(120)
+        self.status_text.setMaximumHeight(100)
         self.status_text.setStyleSheet("""
             QTextEdit {
-                border: 2px solid #34495E;
+                border: 2px solid #4a4a6a;
                 border-radius: 5px;
-                background-color: #2C3E50;
-                color: #ECF0F1;
+                background-color: #16213e;
+                color: #ccc;
                 padding: 10px;
                 font-size: 11px;
             }
         """)
-        self.status_text.setPlainText("💡 Tips:\n"
-                                      "• License keys are case-insensitive\n"
-                                      "• One license can be used on one device at a time\n"
-                                      "• Contact support if you need to transfer to a new device")
+        self.status_text.setPlainText(
+            "📋 HOW TO ACTIVATE:\n"
+            "1. Copy your Hardware ID (above)\n"
+            "2. Send it to admin with payment\n"
+            "3. Receive your license key\n"
+            "4. Paste license key and click Activate"
+        )
         layout.addWidget(self.status_text)
+
+        # Pricing info
+        pricing_frame = QFrame()
+        pricing_frame.setStyleSheet("""
+            QFrame {
+                background-color: #1a1a2e;
+                border: 1px solid #4a4a6a;
+                border-radius: 5px;
+                padding: 5px;
+            }
+        """)
+        pricing_layout = QHBoxLayout(pricing_frame)
+        pricing_layout.setSpacing(20)
+
+        basic_label = QLabel("📦 BASIC: Rs 10,000/month\n(200 downloads/day)")
+        basic_label.setStyleSheet("color: #3498db; font-size: 11px;")
+        pricing_layout.addWidget(basic_label)
+
+        pro_label = QLabel("⭐ PRO: Rs 15,000/month\n(Unlimited)")
+        pro_label.setStyleSheet("color: #f39c12; font-size: 11px;")
+        pricing_layout.addWidget(pro_label)
+
+        layout.addWidget(pricing_frame)
 
         # Buttons
         button_layout = QHBoxLayout()
         button_layout.setSpacing(10)
 
-        self.activate_button = QPushButton("Activate License")
+        self.activate_button = QPushButton("✅ Activate License")
         self.activate_button.setFont(QFont("Arial", 11, QFont.Bold))
         self.activate_button.setStyleSheet("""
             QPushButton {
-                background-color: #1ABC9C;
-                color: white;
+                background-color: #00d4ff;
+                color: #000;
                 padding: 12px 25px;
                 border: none;
                 border-radius: 5px;
                 font-weight: bold;
             }
             QPushButton:hover {
-                background-color: #16A085;
-            }
-            QPushButton:pressed {
-                background-color: #138D75;
+                background-color: #33e0ff;
             }
             QPushButton:disabled {
                 background-color: #566573;
@@ -154,33 +237,33 @@ class LicenseActivationDialog(QDialog):
         self.activate_button.clicked.connect(self.activate)
         button_layout.addWidget(self.activate_button)
 
-        self.buy_button = QPushButton("Buy License")
-        self.buy_button.setStyleSheet("""
+        self.contact_button = QPushButton("📞 Contact Admin")
+        self.contact_button.setStyleSheet("""
             QPushButton {
-                background-color: #3498DB;
-                color: white;
+                background-color: #4ecca3;
+                color: #000;
                 padding: 12px 25px;
                 border: none;
                 border-radius: 5px;
             }
             QPushButton:hover {
-                background-color: #2E86C1;
+                background-color: #6ee6b8;
             }
         """)
-        self.buy_button.clicked.connect(self.buy_license)
-        button_layout.addWidget(self.buy_button)
+        self.contact_button.clicked.connect(self.show_contact)
+        button_layout.addWidget(self.contact_button)
 
-        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button = QPushButton("❌ Cancel")
         self.cancel_button.setStyleSheet("""
             QPushButton {
-                background-color: #95A5A6;
+                background-color: #e94560;
                 color: white;
                 padding: 12px 25px;
                 border: none;
                 border-radius: 5px;
             }
             QPushButton:hover {
-                background-color: #7F8C8D;
+                background-color: #ff6b6b;
             }
         """)
         self.cancel_button.clicked.connect(self.reject)
@@ -195,7 +278,7 @@ class LicenseActivationDialog(QDialog):
         """Apply dark theme"""
         self.setStyleSheet("""
             QDialog {
-                background-color: #23272A;
+                background-color: #1a1a2e;
                 color: #ECF0F1;
             }
             QLabel {
@@ -203,106 +286,123 @@ class LicenseActivationDialog(QDialog):
             }
         """)
 
+    def copy_hardware_id(self):
+        """Copy hardware ID to clipboard"""
+        hw_id = self.hw_id_label.text()
+        clipboard = QApplication.clipboard()
+        clipboard.setText(hw_id)
+        self.status_text.setPlainText(f"✅ Hardware ID copied to clipboard!\n\n{hw_id}\n\nSend this to admin to get your license.")
+
     def activate(self):
         """Handle activation button click"""
-        license_key = self.license_input.text().strip()
+        license_key = self.license_input.toPlainText().strip()
 
         if not license_key:
             QMessageBox.warning(self, "Input Required", "Please enter a license key")
             return
 
         # Validate format (basic check)
-        if not license_key.startswith("CFPRO-"):
+        if not license_key.startswith("CF-"):
             QMessageBox.warning(
                 self,
                 "Invalid Format",
-                "License key should start with 'CFPRO-'\n\n"
-                "Example: CFPRO-A1B2-C3D4-E5F6-G7H8"
+                "Invalid license key format.\n\n"
+                "License key should start with 'CF-'\n"
+                "Please check and try again."
             )
             return
 
         # Disable inputs during activation
         self.license_input.setEnabled(False)
         self.activate_button.setEnabled(False)
-        self.buy_button.setEnabled(False)
+        self.contact_button.setEnabled(False)
         self.progress_bar.setVisible(True)
-        self.status_text.setPlainText("🔄 Activating license...\nPlease wait...")
+        self.status_text.setPlainText("🔄 Validating license...\nPlease wait...")
 
         # Log attempt
-        self.logger.info(f"Attempting to activate license: {license_key[:12]}...", "License")
+        self.logger.info(f"Attempting to activate license: {license_key[:20]}...", "License")
 
         # Start activation in background thread
         self.activation_thread = ActivationThread(self.license_manager, license_key)
         self.activation_thread.finished.connect(self.on_activation_finished)
         self.activation_thread.start()
 
-    def on_activation_finished(self, success: bool, message: str):
+    def on_activation_finished(self, success: bool, message: str, info: dict):
         """Handle activation completion"""
         # Re-enable inputs
         self.license_input.setEnabled(True)
         self.activate_button.setEnabled(True)
-        self.buy_button.setEnabled(True)
+        self.contact_button.setEnabled(True)
         self.progress_bar.setVisible(False)
 
         if success:
-            self.status_text.setPlainText(f"✅ {message}")
+            plan_name = info.get('plan_name', 'Unknown') if info else 'Unknown'
+            days = info.get('days_remaining', 0) if info else 0
+
+            self.status_text.setPlainText(
+                f"✅ LICENSE ACTIVATED!\n\n"
+                f"Plan: {plan_name}\n"
+                f"Days Remaining: {days}\n"
+                f"Status: Active"
+            )
             self.logger.info(f"License activated successfully: {message}", "License")
 
             # Show success dialog
             QMessageBox.information(
                 self,
                 "Activation Successful",
-                f"{message}\n\nContentFlow Pro is now activated!"
+                f"🎉 License Activated Successfully!\n\n"
+                f"Plan: {plan_name}\n"
+                f"Valid for: {days} days\n\n"
+                f"Enjoy ContentFlow Pro!"
             )
 
             # Close dialog and accept
             self.accept()
 
         else:
-            self.status_text.setPlainText(f"❌ {message}")
+            self.status_text.setPlainText(f"❌ ACTIVATION FAILED\n\n{message}")
             self.logger.error(f"License activation failed: {message}", "License")
 
             # Show error dialog
             QMessageBox.critical(
                 self,
                 "Activation Failed",
-                f"{message}\n\n"
-                "Please check your license key and try again.\n"
-                "If the problem persists, contact support."
+                f"❌ {message}\n\n"
+                "Please check:\n"
+                "• License key is correct\n"
+                "• Hardware ID matches\n"
+                "• License hasn't expired\n\n"
+                "Contact admin if problem persists."
             )
 
-    def buy_license(self):
-        """Handle buy license button click"""
+    def show_contact(self):
+        """Show contact information"""
         message = (
-            "ContentFlow Pro Subscription Plans:\n\n"
-            "📅 Monthly Plan: $20/month\n"
-            "   • All features unlocked\n"
-            "   • Unlimited usage\n"
-            "   • 30 days access\n\n"
-            "📆 Yearly Plan: $200/year (Save $40!)\n"
-            "   • All features unlocked\n"
-            "   • Unlimited usage\n"
-            "   • 365 days access\n\n"
-            "🎁 7-Day Free Trial Available!\n\n"
-            "Contact: 0307-7361139\n"
-            "Email: support@contentflowpro.com"
+            "📞 CONTACT INFORMATION\n\n"
+            "─────────────────────────────\n\n"
+            "WhatsApp: 0307-7361139\n\n"
+            "─────────────────────────────\n\n"
+            "📋 To purchase a license:\n"
+            "1. Copy your Hardware ID\n"
+            "2. Send it via WhatsApp\n"
+            "3. Make payment\n"
+            "4. Receive your license key\n\n"
+            "─────────────────────────────\n\n"
+            f"Your Hardware ID:\n{get_hardware_id_display()}"
         )
 
-        QMessageBox.information(self, "Buy License", message)
+        QMessageBox.information(self, "Contact Admin", message)
 
 
 # Test dialog
 if __name__ == '__main__':
     import sys
-    from PyQt5.QtWidgets import QApplication
 
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
 
-    # Mock license manager for testing
-    license_manager = LicenseManager(server_url="http://localhost:5000")
-
-    dialog = LicenseActivationDialog(license_manager)
+    dialog = LicenseActivationDialog()
     result = dialog.exec_()
 
     if result == QDialog.Accepted:

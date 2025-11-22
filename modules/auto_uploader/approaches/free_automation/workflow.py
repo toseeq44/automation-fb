@@ -1,6 +1,6 @@
 """Concrete implementation of the Free Automation approach.
 
-NOTE: Uses persistent paths that work with PyInstaller EXE
+NOTE: Uses persistent paths for EXE, original paths for development
 """
 
 from __future__ import annotations
@@ -21,12 +21,20 @@ from ...core.workflow_manager import (
 logger = logging.getLogger(__name__)
 
 
-def _get_persistent_data_dir() -> Path:
+def _is_running_as_exe() -> bool:
+    """Check if running as PyInstaller EXE."""
+    return getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
+
+
+def _get_data_dir() -> Path:
     """
-    Get persistent data directory.
-    Works both in development and PyInstaller EXE.
+    Get data directory - EXE uses persistent path, dev uses module path.
     """
-    data_dir = Path.home() / ".onesoul" / "auto_uploader" / "data"
+    if _is_running_as_exe():
+        data_dir = Path.home() / ".onesoul" / "auto_uploader" / "data"
+    else:
+        data_dir = Path(__file__).resolve().parents[3] / "data"
+
     data_dir.mkdir(parents=True, exist_ok=True)
     return data_dir
 
@@ -100,8 +108,8 @@ class FreeAutomationApproach(BaseApproach):
         path_value = self.config.paths.get("history_file")
         if path_value:
             return Path(path_value).resolve()
-        # Use persistent directory (survives EXE restarts)
-        return _get_persistent_data_dir() / "upload_tracking.json"
+        # Use appropriate directory based on running mode
+        return _get_data_dir() / "upload_tracking.json"
 
     def _resolve_account_work_item(self, work_item: WorkItem) -> Optional[AccountWorkItem]:
         metadata = work_item.metadata or {}

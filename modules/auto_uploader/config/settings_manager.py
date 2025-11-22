@@ -1,6 +1,6 @@
 """Settings Manager - Manage settings for the modular auto uploader.
 
-NOTE: Uses persistent paths that work with PyInstaller EXE
+NOTE: Uses persistent paths for EXE, original paths for development
 """
 
 import json
@@ -13,15 +13,22 @@ from typing import Any, Dict, Optional
 from .defaults import DEFAULT_CONFIG
 
 
-def _get_persistent_settings_dir() -> Path:
-    """
-    Get persistent settings directory for auto uploader.
-    Works both in development and PyInstaller EXE.
+def _is_running_as_exe() -> bool:
+    """Check if running as PyInstaller EXE."""
+    return getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
 
-    Returns:
-        Path to persistent settings directory
+
+def _get_settings_dir() -> Path:
     """
-    settings_dir = Path.home() / ".onesoul" / "auto_uploader" / "settings"
+    Get settings directory - EXE uses persistent path, dev uses module path.
+    """
+    if _is_running_as_exe():
+        # EXE mode: use persistent path in user's home
+        settings_dir = Path.home() / ".onesoul" / "auto_uploader" / "settings"
+    else:
+        # Development mode: use original module path
+        settings_dir = Path(__file__).resolve().parents[1] / "data_files"
+
     settings_dir.mkdir(parents=True, exist_ok=True)
     return settings_dir
 
@@ -30,9 +37,9 @@ class SettingsManager:
     """High level helper around the shared settings.json file."""
 
     def __init__(self, settings_path: Optional[Path] = None):
-        # Use persistent directory for settings (survives EXE restarts)
-        self._base_dir = _get_persistent_settings_dir().parent
-        self._settings_path = Path(settings_path or (_get_persistent_settings_dir() / "settings.json"))
+        # Use appropriate directory based on running mode
+        self._base_dir = Path(__file__).resolve().parents[1]
+        self._settings_path = Path(settings_path or (_get_settings_dir() / "settings.json"))
         self._settings_path.parent.mkdir(parents=True, exist_ok=True)
 
         logging.debug("SettingsManager initialized (path=%s)", self._settings_path)

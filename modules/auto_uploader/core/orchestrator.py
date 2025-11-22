@@ -1,6 +1,6 @@
 """Upload Orchestrator - Main entry point for the modular workflow.
 
-NOTE: Uses persistent paths that work with PyInstaller EXE
+NOTE: Uses persistent paths for EXE, original paths for development
 """
 
 from __future__ import annotations
@@ -17,15 +17,22 @@ from ..config.settings_manager import SettingsManager
 from .workflow_manager import AccountWorkItem, CreatorLogin
 
 
-def _get_persistent_data_dir() -> Path:
-    """
-    Get persistent data directory for orchestrator files.
-    Works both in development and PyInstaller EXE.
+def _is_running_as_exe() -> bool:
+    """Check if running as PyInstaller EXE."""
+    return getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
 
-    Returns:
-        Path to persistent data directory
+
+def _get_data_dir() -> Path:
     """
-    data_dir = Path.home() / ".onesoul" / "auto_uploader" / "data"
+    Get data directory - EXE uses persistent path, dev uses module path.
+    """
+    if _is_running_as_exe():
+        # EXE mode: use persistent path in user's home
+        data_dir = Path.home() / ".onesoul" / "auto_uploader" / "data"
+    else:
+        # Development mode: use original module path
+        data_dir = Path(__file__).resolve().parents[1] / "data"
+
     data_dir.mkdir(parents=True, exist_ok=True)
     return data_dir
 
@@ -232,8 +239,8 @@ class UploadOrchestrator:
             shortcuts_root = Path.home() / ".onesoul" / "shortcuts_placeholder"
             shortcuts_root.mkdir(parents=True, exist_ok=True)
 
-        # Use persistent directory for history file (survives EXE restarts)
-        default_history = _get_persistent_data_dir() / "upload_tracking.json"
+        # Use appropriate directory based on running mode
+        default_history = _get_data_dir() / "upload_tracking.json"
         history_value = path_config.get("history_file")
         history_file = Path(history_value).expanduser().resolve() if history_value else default_history
 
@@ -241,8 +248,11 @@ class UploadOrchestrator:
         if ix_data_value:
             ix_data_root = Path(ix_data_value).expanduser().resolve()
         else:
-            # Use persistent directory for ix_data (survives EXE restarts)
-            ix_data_root = _get_persistent_data_dir().parent / "ix_data"
+            # Use appropriate directory based on running mode
+            if _is_running_as_exe():
+                ix_data_root = Path.home() / ".onesoul" / "auto_uploader" / "ix_data"
+            else:
+                ix_data_root = Path(__file__).resolve().parents[1] / "ix_data"
 
         missing: List[str] = []
         if not creators_root.exists():

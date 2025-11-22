@@ -3,7 +3,7 @@ Credential Manager
 ==================
 Secure credential storage and retrieval using keyring or encrypted storage.
 
-NOTE: Uses persistent paths that work with PyInstaller EXE
+NOTE: Uses persistent paths for EXE, original paths for development
 """
 
 import base64
@@ -27,12 +27,22 @@ except ImportError:  # pragma: no cover - optional dependency
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
-def _get_persistent_credentials_dir() -> Path:
+def _is_running_as_exe() -> bool:
+    """Check if running as PyInstaller EXE."""
+    return getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
+
+
+def _get_credentials_dir() -> Path:
     """
-    Get persistent credentials directory.
-    Works both in development and PyInstaller EXE.
+    Get credentials directory - EXE uses persistent path, dev uses module path.
     """
-    cred_dir = Path.home() / ".onesoul" / "auto_uploader" / "credentials"
+    if _is_running_as_exe():
+        # EXE mode: use persistent path in user's home
+        cred_dir = Path.home() / ".onesoul" / "auto_uploader" / "credentials"
+    else:
+        # Development mode: use original module path
+        cred_dir = Path(__file__).resolve().parents[1] / "data_files" / "credentials"
+
     cred_dir.mkdir(parents=True, exist_ok=True)
     return cred_dir
 
@@ -42,8 +52,8 @@ class CredentialManager:
 
     def __init__(self, service_name: str = "facebook_auto_uploader", storage_path: Optional[Path] = None):
         self.service_name = service_name
-        # Use persistent directory (survives EXE restarts)
-        self.storage_path = storage_path or _get_persistent_credentials_dir()
+        # Use appropriate directory based on running mode
+        self.storage_path = storage_path or _get_credentials_dir()
         self.storage_path.mkdir(parents=True, exist_ok=True)
 
         if not KEYRING_AVAILABLE:

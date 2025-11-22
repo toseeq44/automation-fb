@@ -7,7 +7,7 @@ All configuration settings for Phase 2 - Robustness:
 - Upload retry settings
 - Folder queue settings
 
-NOTE: Uses persistent paths that work with PyInstaller EXE
+NOTE: Uses persistent paths for EXE, original paths for development
 """
 
 import os
@@ -15,22 +15,28 @@ import sys
 from pathlib import Path
 
 
-def _get_persistent_data_dir() -> Path:
-    """
-    Get persistent data directory for state files.
-    Works both in development and PyInstaller EXE.
+def _is_running_as_exe() -> bool:
+    """Check if running as PyInstaller EXE."""
+    return getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
 
-    Returns:
-        Path to persistent data directory
+
+def _get_data_dir() -> Path:
     """
-    # Use user's home directory for persistent storage
-    data_dir = Path.home() / ".onesoul" / "auto_uploader"
+    Get data directory - EXE uses persistent path, dev uses module path.
+    """
+    if _is_running_as_exe():
+        # EXE mode: use persistent path in user's home
+        data_dir = Path.home() / ".onesoul" / "auto_uploader"
+    else:
+        # Development mode: use original module path
+        data_dir = Path(__file__).parent.parent / "data"
+
     data_dir.mkdir(parents=True, exist_ok=True)
     return data_dir
 
 
-# Get base paths - use persistent directory
-_DATA_DIR = _get_persistent_data_dir()
+# Get base paths - use appropriate directory based on running mode
+_DATA_DIR = _get_data_dir()
 
 
 # ═══════════════════════════════════════════════════════════

@@ -9,7 +9,7 @@ Handles bot state persistence and recovery:
 - Atomic file writes (prevents corruption)
 - Auto-backup functionality
 
-NOTE: Uses persistent paths that work with PyInstaller EXE
+NOTE: Uses persistent paths for EXE, original paths for development
 
 Usage:
     state_mgr = StateManager()
@@ -33,16 +33,22 @@ logger = logging.getLogger(__name__)
 IS_WINDOWS = platform.system() == "Windows"
 
 
-def _get_persistent_state_dir() -> Path:
-    """
-    Get persistent state directory for bot state files.
-    Works both in development and PyInstaller EXE.
+def _is_running_as_exe() -> bool:
+    """Check if running as PyInstaller EXE."""
+    return getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
 
-    Returns:
-        Path to persistent state directory
+
+def _get_state_dir() -> Path:
     """
-    # Use user's home directory for persistent storage
-    state_dir = Path.home() / ".onesoul" / "auto_uploader" / "state"
+    Get state directory - EXE uses persistent path, dev uses module path.
+    """
+    if _is_running_as_exe():
+        # EXE mode: use persistent path in user's home
+        state_dir = Path.home() / ".onesoul" / "auto_uploader" / "state"
+    else:
+        # Development mode: use original module path
+        state_dir = Path(__file__).parent.parent / "data"
+
     state_dir.mkdir(parents=True, exist_ok=True)
     return state_dir
 
@@ -55,11 +61,11 @@ class StateManager:
         Initialize State Manager.
 
         Args:
-            data_dir: Directory for state files (default: persistent ~/.onesoul/auto_uploader/state/)
+            data_dir: Directory for state files (default: ixbrowser/data/ for dev, ~/.onesoul/... for EXE)
         """
         if data_dir is None:
-            # Use persistent directory (survives EXE restarts)
-            data_dir = _get_persistent_state_dir()
+            # Use appropriate directory based on running mode
+            data_dir = _get_state_dir()
 
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)

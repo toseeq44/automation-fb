@@ -10,7 +10,7 @@ This module provides:
 - Session cleanup
 - Multi-profile session handling
 
-NOTE: Uses persistent paths that work with PyInstaller EXE
+NOTE: Uses persistent paths for EXE, original paths for development
 """
 
 import json
@@ -22,12 +22,22 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
 
 
-def _get_persistent_sessions_dir() -> Path:
+def _is_running_as_exe() -> bool:
+    """Check if running as PyInstaller EXE."""
+    return getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
+
+
+def _get_sessions_dir() -> Path:
     """
-    Get persistent sessions directory.
-    Works both in development and PyInstaller EXE.
+    Get sessions directory - EXE uses persistent path, dev uses module path.
     """
-    sessions_dir = Path.home() / ".onesoul" / "auto_uploader" / "sessions"
+    if _is_running_as_exe():
+        # EXE mode: use persistent path in user's home
+        sessions_dir = Path.home() / ".onesoul" / "auto_uploader" / "sessions"
+    else:
+        # Development mode: use original module path
+        sessions_dir = Path(__file__).resolve().parents[1] / "data_files" / "sessions"
+
     sessions_dir.mkdir(parents=True, exist_ok=True)
     return sessions_dir
 
@@ -44,8 +54,8 @@ class SessionManager:
             storage_path: Path to store session data
         """
         self.config = config or {}
-        # Use persistent directory (survives EXE restarts)
-        self.storage_path = storage_path or _get_persistent_sessions_dir()
+        # Use appropriate directory based on running mode
+        self.storage_path = storage_path or _get_sessions_dir()
         self.storage_path.mkdir(parents=True, exist_ok=True)
         self.active_sessions = {}
 

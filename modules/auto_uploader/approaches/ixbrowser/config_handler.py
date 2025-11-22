@@ -1,7 +1,7 @@
 """
 ixBrowser Configuration Handler
 Manages user inputs: base_url, email, password
-Saves configuration in persistent user folder (works with PyInstaller EXE)
+Saves configuration - EXE uses persistent path, dev uses module path
 """
 
 from __future__ import annotations
@@ -15,18 +15,24 @@ from typing import Dict, Optional
 logger = logging.getLogger(__name__)
 
 
-def get_persistent_data_dir() -> Path:
-    """
-    Get persistent data directory that works both in development and EXE.
+def _is_running_as_exe() -> bool:
+    """Check if running as PyInstaller EXE."""
+    return getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
 
-    Returns:
-        Path to persistent data directory (~/.onesoul/config/)
+
+def get_config_dir() -> Path:
     """
-    # Always use user's home directory for persistent storage
-    # This ensures data survives between EXE runs
-    data_dir = Path.home() / ".onesoul" / "config"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    return data_dir
+    Get config directory - EXE uses persistent path, dev uses module path.
+    """
+    if _is_running_as_exe():
+        # EXE mode: use persistent path in user's home
+        config_dir = Path.home() / ".onesoul" / "config"
+    else:
+        # Development mode: use same folder as this file
+        config_dir = Path(__file__).parent
+
+    config_dir.mkdir(parents=True, exist_ok=True)
+    return config_dir
 
 
 class IXBrowserConfig:
@@ -37,11 +43,11 @@ class IXBrowserConfig:
         Initialize config handler.
 
         Args:
-            config_file: Path to config file. If None, uses persistent location.
+            config_file: Path to config file. If None, uses appropriate location.
         """
         if config_file is None:
-            # Use persistent directory (survives EXE restarts)
-            config_file = get_persistent_data_dir() / "ix_config.json"
+            # Use appropriate directory based on running mode
+            config_file = get_config_dir() / "ix_config.json"
 
         self.config_file = config_file
         self._config: Dict[str, str] = {}

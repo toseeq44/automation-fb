@@ -4,6 +4,13 @@ Main application to launch OneSoul Pro.
 Version 2.0 - Secure License System with Hardware Binding
 """
 import sys
+import multiprocessing
+
+# IMPORTANT: This must be called before any other imports for PyInstaller EXE
+# Prevents multiple blank windows from opening on Windows
+if __name__ == "__main__":
+    multiprocessing.freeze_support()
+
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
 # Choose UI version (set USE_MODERN_UI = True for new OneSoul Flow design)

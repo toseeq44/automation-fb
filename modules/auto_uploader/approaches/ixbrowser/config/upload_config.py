@@ -6,14 +6,31 @@ All configuration settings for Phase 2 - Robustness:
 - State management settings
 - Upload retry settings
 - Folder queue settings
+
+NOTE: Uses persistent paths that work with PyInstaller EXE
 """
 
 import os
+import sys
 from pathlib import Path
 
-# Get base paths
-_CURRENT_DIR = Path(__file__).parent.parent
-_DATA_DIR = _CURRENT_DIR / "data"
+
+def _get_persistent_data_dir() -> Path:
+    """
+    Get persistent data directory for state files.
+    Works both in development and PyInstaller EXE.
+
+    Returns:
+        Path to persistent data directory
+    """
+    # Use user's home directory for persistent storage
+    data_dir = Path.home() / ".onesoul" / "auto_uploader"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return data_dir
+
+
+# Get base paths - use persistent directory
+_DATA_DIR = _get_persistent_data_dir()
 
 
 # ═══════════════════════════════════════════════════════════

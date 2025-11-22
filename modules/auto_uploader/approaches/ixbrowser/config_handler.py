@@ -1,17 +1,32 @@
 """
 ixBrowser Configuration Handler
 Manages user inputs: base_url, email, password
-Saves configuration in ixbrowser approach folder
+Saves configuration in persistent user folder (works with PyInstaller EXE)
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import sys
 from pathlib import Path
 from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def get_persistent_data_dir() -> Path:
+    """
+    Get persistent data directory that works both in development and EXE.
+
+    Returns:
+        Path to persistent data directory (~/.onesoul/config/)
+    """
+    # Always use user's home directory for persistent storage
+    # This ensures data survives between EXE runs
+    data_dir = Path.home() / ".onesoul" / "config"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return data_dir
 
 
 class IXBrowserConfig:
@@ -22,11 +37,11 @@ class IXBrowserConfig:
         Initialize config handler.
 
         Args:
-            config_file: Path to config file. If None, uses default location.
+            config_file: Path to config file. If None, uses persistent location.
         """
         if config_file is None:
-            # Save config in same folder as this file
-            config_file = Path(__file__).parent / "ix_config.json"
+            # Use persistent directory (survives EXE restarts)
+            config_file = get_persistent_data_dir() / "ix_config.json"
 
         self.config_file = config_file
         self._config: Dict[str, str] = {}

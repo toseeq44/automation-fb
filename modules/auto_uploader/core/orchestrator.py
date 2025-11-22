@@ -1,8 +1,12 @@
-"""Upload Orchestrator - Main entry point for the modular workflow."""
+"""Upload Orchestrator - Main entry point for the modular workflow.
+
+NOTE: Uses persistent paths that work with PyInstaller EXE
+"""
 
 from __future__ import annotations
 
 import logging
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -11,6 +15,19 @@ from ..approaches import ApproachConfig, ApproachFactory, CreatorData, WorkItem
 from ..auth.credential_manager import CredentialManager
 from ..config.settings_manager import SettingsManager
 from .workflow_manager import AccountWorkItem, CreatorLogin
+
+
+def _get_persistent_data_dir() -> Path:
+    """
+    Get persistent data directory for orchestrator files.
+    Works both in development and PyInstaller EXE.
+
+    Returns:
+        Path to persistent data directory
+    """
+    data_dir = Path.home() / ".onesoul" / "auto_uploader" / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return data_dir
 
 
 @dataclass(slots=True)
@@ -203,7 +220,8 @@ class UploadOrchestrator:
 
         shortcuts_root = Path(path_config.get("shortcuts_root", "")).expanduser().resolve()
 
-        default_history = Path(__file__).resolve().parents[1] / "data" / "upload_tracking.json"
+        # Use persistent directory for history file (survives EXE restarts)
+        default_history = _get_persistent_data_dir() / "upload_tracking.json"
         history_value = path_config.get("history_file")
         history_file = Path(history_value).expanduser().resolve() if history_value else default_history
 
@@ -211,7 +229,8 @@ class UploadOrchestrator:
         if ix_data_value:
             ix_data_root = Path(ix_data_value).expanduser().resolve()
         else:
-            ix_data_root = Path(__file__).resolve().parents[1] / "ix_data"
+            # Use persistent directory for ix_data (survives EXE restarts)
+            ix_data_root = _get_persistent_data_dir().parent / "ix_data"
 
         missing: List[str] = []
         if not creators_root.exists():

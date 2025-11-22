@@ -2,12 +2,15 @@
 Credential Manager
 ==================
 Secure credential storage and retrieval using keyring or encrypted storage.
+
+NOTE: Uses persistent paths that work with PyInstaller EXE
 """
 
 import base64
 import json
 import logging
 import re
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
@@ -24,12 +27,23 @@ except ImportError:  # pragma: no cover - optional dependency
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
+def _get_persistent_credentials_dir() -> Path:
+    """
+    Get persistent credentials directory.
+    Works both in development and PyInstaller EXE.
+    """
+    cred_dir = Path.home() / ".onesoul" / "auto_uploader" / "credentials"
+    cred_dir.mkdir(parents=True, exist_ok=True)
+    return cred_dir
+
+
 class CredentialManager:
     """Manages secure credential storage and retrieval."""
 
     def __init__(self, service_name: str = "facebook_auto_uploader", storage_path: Optional[Path] = None):
         self.service_name = service_name
-        self.storage_path = (storage_path or Path("data_files/credentials")).resolve()
+        # Use persistent directory (survives EXE restarts)
+        self.storage_path = storage_path or _get_persistent_credentials_dir()
         self.storage_path.mkdir(parents=True, exist_ok=True)
 
         if not KEYRING_AVAILABLE:

@@ -9,6 +9,8 @@ Handles bot state persistence and recovery:
 - Atomic file writes (prevents corruption)
 - Auto-backup functionality
 
+NOTE: Uses persistent paths that work with PyInstaller EXE
+
 Usage:
     state_mgr = StateManager()
     state_mgr.save_current_upload(video_file, progress=45)
@@ -18,6 +20,7 @@ Usage:
 import logging
 import os
 import json
+import sys
 import time
 import threading
 import platform
@@ -30,6 +33,20 @@ logger = logging.getLogger(__name__)
 IS_WINDOWS = platform.system() == "Windows"
 
 
+def _get_persistent_state_dir() -> Path:
+    """
+    Get persistent state directory for bot state files.
+    Works both in development and PyInstaller EXE.
+
+    Returns:
+        Path to persistent state directory
+    """
+    # Use user's home directory for persistent storage
+    state_dir = Path.home() / ".onesoul" / "auto_uploader" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    return state_dir
+
+
 class StateManager:
     """Manages all bot state persistence and recovery."""
 
@@ -38,12 +55,11 @@ class StateManager:
         Initialize State Manager.
 
         Args:
-            data_dir: Directory for state files (default: ixbrowser/data/)
+            data_dir: Directory for state files (default: persistent ~/.onesoul/auto_uploader/state/)
         """
         if data_dir is None:
-            # Default to ixbrowser/data/ folder
-            current_dir = Path(__file__).parent.parent
-            data_dir = current_dir / "data"
+            # Use persistent directory (survives EXE restarts)
+            data_dir = _get_persistent_state_dir()
 
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)

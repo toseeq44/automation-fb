@@ -9,14 +9,27 @@ This module provides:
 - Session validation
 - Session cleanup
 - Multi-profile session handling
+
+NOTE: Uses persistent paths that work with PyInstaller EXE
 """
 
 import json
 import logging
 import pickle
+import sys
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
+
+
+def _get_persistent_sessions_dir() -> Path:
+    """
+    Get persistent sessions directory.
+    Works both in development and PyInstaller EXE.
+    """
+    sessions_dir = Path.home() / ".onesoul" / "auto_uploader" / "sessions"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    return sessions_dir
 
 
 class SessionManager:
@@ -31,7 +44,8 @@ class SessionManager:
             storage_path: Path to store session data
         """
         self.config = config or {}
-        self.storage_path = storage_path or Path("data_files/sessions")
+        # Use persistent directory (survives EXE restarts)
+        self.storage_path = storage_path or _get_persistent_sessions_dir()
         self.storage_path.mkdir(parents=True, exist_ok=True)
         self.active_sessions = {}
 

@@ -1,7 +1,11 @@
-"""Settings Manager - Manage settings for the modular auto uploader."""
+"""Settings Manager - Manage settings for the modular auto uploader.
+
+NOTE: Uses persistent paths that work with PyInstaller EXE
+"""
 
 import json
 import logging
+import sys
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -9,13 +13,26 @@ from typing import Any, Dict, Optional
 from .defaults import DEFAULT_CONFIG
 
 
+def _get_persistent_settings_dir() -> Path:
+    """
+    Get persistent settings directory for auto uploader.
+    Works both in development and PyInstaller EXE.
+
+    Returns:
+        Path to persistent settings directory
+    """
+    settings_dir = Path.home() / ".onesoul" / "auto_uploader" / "settings"
+    settings_dir.mkdir(parents=True, exist_ok=True)
+    return settings_dir
+
+
 class SettingsManager:
     """High level helper around the shared settings.json file."""
 
     def __init__(self, settings_path: Optional[Path] = None):
-        base_dir = Path(__file__).resolve().parents[1]
-        self._base_dir = base_dir
-        self._settings_path = Path(settings_path or (base_dir / "data_files" / "settings.json"))
+        # Use persistent directory for settings (survives EXE restarts)
+        self._base_dir = _get_persistent_settings_dir().parent
+        self._settings_path = Path(settings_path or (_get_persistent_settings_dir() / "settings.json"))
         self._settings_path.parent.mkdir(parents=True, exist_ok=True)
 
         logging.debug("SettingsManager initialized (path=%s)", self._settings_path)

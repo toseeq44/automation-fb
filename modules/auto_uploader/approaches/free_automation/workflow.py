@@ -1,8 +1,12 @@
-"""Concrete implementation of the Free Automation approach."""
+"""Concrete implementation of the Free Automation approach.
+
+NOTE: Uses persistent paths that work with PyInstaller EXE
+"""
 
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -15,6 +19,16 @@ from ...core.workflow_manager import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _get_persistent_data_dir() -> Path:
+    """
+    Get persistent data directory.
+    Works both in development and PyInstaller EXE.
+    """
+    data_dir = Path.home() / ".onesoul" / "auto_uploader" / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return data_dir
 
 
 class FreeAutomationApproach(BaseApproach):
@@ -86,8 +100,8 @@ class FreeAutomationApproach(BaseApproach):
         path_value = self.config.paths.get("history_file")
         if path_value:
             return Path(path_value).resolve()
-        # Fallback to module-relative default
-        return Path(__file__).resolve().parents[3] / "data" / "upload_tracking.json"
+        # Use persistent directory (survives EXE restarts)
+        return _get_persistent_data_dir() / "upload_tracking.json"
 
     def _resolve_account_work_item(self, work_item: WorkItem) -> Optional[AccountWorkItem]:
         metadata = work_item.metadata or {}

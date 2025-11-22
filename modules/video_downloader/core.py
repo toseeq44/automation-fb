@@ -23,6 +23,13 @@ from .instagram_helper import (
     test_instagram_cookies,
 )
 
+# Import secure license system for daily limits
+try:
+    from modules.license.secure_license import get_license_manager, get_plan_info
+    LICENSE_AVAILABLE = True
+except ImportError:
+    LICENSE_AVAILABLE = False
+
 # ===================== HELPERS ====================
 
 def _detect_platform(url: str) -> str:
@@ -745,12 +752,82 @@ class VideoDownloaderThread(QThread):
 
     # ---- MAIN DOWNLOAD LOOP ----
 
+    def _check_daily_limit(self, count_needed: int) -> tuple:
+        """
+        Check if daily download limit allows this download.
+
+        Returns:
+            tuple: (can_proceed, remaining, limit, is_pro)
+        """
+        if not LICENSE_AVAILABLE:
+            return True, 999, None, False  # No license system, allow all
+
+        try:
+            manager = get_license_manager()
+            limit_reached, current, limit = manager.check_limit("downloads")
+
+            if limit is None:  # Pro user - unlimited
+                return True, None, None, True
+
+            remaining = limit - current if limit else 999
+
+            if remaining < count_needed:
+                return False, remaining, limit, False
+
+            return True, remaining, limit, False
+        except Exception:
+            return True, 999, None, False  # Error checking, allow downloads
+
+    def _increment_download_count(self, count: int = 1):
+        """Increment daily download counter."""
+        if not LICENSE_AVAILABLE:
+            return
+
+        try:
+            manager = get_license_manager()
+            manager.increment_usage(downloads=count)
+        except Exception:
+            pass
+
     def run(self):
         try:
             if not self.urls:
                 self.finished.emit(False, "❌ No URLs provided")
                 return
             total = len(self.urls)
+
+            # ═══════════════════════════════════════════════════════════
+            # DAILY DOWNLOAD LIMIT CHECK
+            # ═══════════════════════════════════════════════════════════
+            can_proceed, remaining, limit, is_pro = self._check_daily_limit(total)
+
+            if is_pro:
+                self.progress.emit("⭐ PRO LICENSE - Unlimited downloads!")
+            elif limit:
+                self.progress.emit(f"📊 Daily limit: {remaining}/{limit} downloads remaining")
+
+                if not can_proceed:
+                    self.progress.emit("")
+                    self.progress.emit("="*60)
+                    self.progress.emit("❌ DAILY DOWNLOAD LIMIT REACHED!")
+                    self.progress.emit("="*60)
+                    self.progress.emit(f"📊 You have used {limit - remaining}/{limit} downloads today")
+                    self.progress.emit(f"📊 Trying to download: {total} videos")
+                    self.progress.emit(f"📊 Remaining quota: {remaining}")
+                    self.progress.emit("")
+                    self.progress.emit("💡 OPTIONS:")
+                    self.progress.emit("   1. Wait until midnight for limit reset")
+                    self.progress.emit("   2. Upgrade to PRO for unlimited downloads")
+                    self.progress.emit("   3. Download fewer videos ({} max)".format(remaining))
+                    self.progress.emit("")
+                    self.progress.emit("📞 Contact: WhatsApp 0307-7361139")
+                    self.progress.emit("="*60)
+                    self.finished.emit(False, f"❌ Daily limit reached ({limit - remaining}/{limit})")
+                    return
+
+                # Warn if close to limit
+                if remaining <= 20:
+                    self.progress.emit(f"⚠️ WARNING: Only {remaining} downloads left today!")
 
             # Show mode clearly
             mode_name = "🔹 BULK MODE" if self.is_bulk_mode else "🔸 SINGLE MODE"
@@ -866,6 +943,8 @@ class VideoDownloaderThread(QThread):
                     self._remove_from_source_txt(url, folder)
                     # Timestamp tracking handled by history.json
                     self.video_complete.emit(url)
+                    # Increment daily download counter for license tracking
+                    self._increment_download_count(1)
                 else:
                     self.progress.emit(f"❌ [{processed}/{total}] ALL METHODS FAILED")
                 pct = int((processed / total) * 100)

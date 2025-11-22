@@ -40,8 +40,17 @@ if helper_images_path.exists():
     for img in helper_images_path.glob('*.png'):
         helper_images.append((str(img), 'modules/auto_uploader/helper_images'))
 
-# GUI icons and assets
+# GUI icons and assets (from gui-redesign/assets/)
 gui_assets = []
+gui_redesign_assets_path = PROJECT_ROOT / 'gui-redesign' / 'assets'
+if gui_redesign_assets_path.exists():
+    for asset in gui_redesign_assets_path.rglob('*'):
+        if asset.is_file():
+            # Keep the relative path structure: gui-redesign/assets/filename
+            rel_path = asset.relative_to(PROJECT_ROOT).parent
+            gui_assets.append((str(asset), str(rel_path)))
+
+# Also check for assets/ folder if exists
 assets_path = PROJECT_ROOT / 'assets'
 if assets_path.exists():
     for asset in assets_path.rglob('*'):

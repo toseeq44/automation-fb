@@ -13,6 +13,25 @@ from PyQt5.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve, QTime
 from PyQt5.QtGui import QFont, QColor
 from PyQt5.QtSvg import QSvgWidget
 import os
+import sys
+
+
+def resource_path(relative_path):
+    """
+    Get absolute path to resource - works for dev and PyInstaller EXE.
+
+    PyInstaller creates a temp folder and stores path in sys._MEIPASS.
+    In development, use the current directory.
+    """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except AttributeError:
+        # Not running as bundled EXE, use current directory
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
+
 
 # Try to import QWebEngineView for animated logo
 try:
@@ -485,8 +504,9 @@ class ModernTopBar(QWidget):
         layout.setContentsMargins(20, 5, 20, 5)  # Reduced vertical margins for compact look
 
         # Left: ANIMATED Logo (2x size, no text)
-        animated_logo_path = os.path.join("gui-redesign", "assets", "onesoul_animated_logo.html")
-        static_logo_path = os.path.join("gui-redesign", "assets", "onesoul_logo.svg")
+        # Use resource_path for PyInstaller EXE compatibility
+        animated_logo_path = resource_path(os.path.join("gui-redesign", "assets", "onesoul_animated_logo.html"))
+        static_logo_path = resource_path(os.path.join("gui-redesign", "assets", "onesoul_logo.svg"))
 
         # Try animated HTML logo first (if QWebEngineView available)
         if HAS_WEB_ENGINE and os.path.exists(animated_logo_path):

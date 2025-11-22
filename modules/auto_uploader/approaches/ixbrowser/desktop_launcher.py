@@ -54,17 +54,47 @@ class DesktopAppLauncher:
 
     def is_api_available(self) -> bool:
         """
-        Check if ixBrowser API is available by testing port connection.
+        Check if ixBrowser API is available by testing actual HTTP connection.
+
+        First checks if port is open, then verifies with real HTTP request.
 
         Returns:
-            True if API is reachable
+            True if API is reachable and responding
         """
         try:
+            # First quick check: is port open?
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(2)
             result = sock.connect_ex((self.host, self.port))
             sock.close()
-            return result == 0
+
+            if result != 0:
+                logger.debug("[DesktopLauncher] Port %s not open", self.port)
+                return False
+
+            # Port is open - now verify with actual HTTP request
+            # This ensures API is actually responding, not just port open
+            import urllib.request
+            import urllib.error
+
+            url = f"http://{self.host}:{self.port}/api/v2/profile-list?limit=1"
+            req = urllib.request.Request(url, method='GET')
+            req.add_header('Content-Type', 'application/json')
+
+            try:
+                with urllib.request.urlopen(req, timeout=5) as response:
+                    if response.status == 200:
+                        logger.debug("[DesktopLauncher] API responding correctly")
+                        return True
+            except urllib.error.URLError as e:
+                logger.debug("[DesktopLauncher] HTTP check failed: %s", str(e))
+                return False
+            except Exception as e:
+                logger.debug("[DesktopLauncher] HTTP check error: %s", str(e))
+                return False
+
+            return False
+
         except Exception as e:
             logger.debug("[DesktopLauncher] Port check failed: %s", str(e))
             return False

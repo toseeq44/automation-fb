@@ -1,6 +1,6 @@
 """
 main.py
-Main application to launch ContentFlow Pro.
+Main application to launch OneSoul Pro.
 Version 2.0 - Secure License System with Hardware Binding
 """
 import sys
@@ -30,7 +30,7 @@ except ImportError:
 
 
 def main():
-    """Launch the ContentFlow Pro application"""
+    """Launch the OneSoul Pro application"""
     # Initialize application
     app = QApplication(sys.argv)
     app.setStyle('Fusion')  # Modern look across platforms
@@ -38,7 +38,7 @@ def main():
     # Initialize logger
     logger = get_logger("ContentFlowPro")
     logger.info("=" * 60, "App")
-    logger.info("ContentFlow Pro - Video Automation Suite", "App")
+    logger.info("OneSoul Pro - Video Automation Suite", "App")
     logger.info("Version 2.0.0 - Secure License", "App")
     logger.info("=" * 60, "App")
 
@@ -88,7 +88,7 @@ def main():
             QMessageBox.warning(
                 None,
                 "License Required",
-                "ContentFlow Pro requires a valid license to run.\n\n"
+                "OneSoul Pro requires a valid license to run.\n\n"
                 "Please purchase a license to continue.\n\n"
                 f"Your Hardware ID: {get_hardware_id_display()}\n"
                 "Send this to admin to get your license."
@@ -112,7 +112,7 @@ def main():
                 None,
                 "License Expiring Soon",
                 f"Your {plan_name} license will expire in {days_remaining} day(s).\n\n"
-                "Please renew your subscription to continue using ContentFlow Pro.\n\n"
+                "Please renew your subscription to continue using OneSoul Pro.\n\n"
                 "Contact: WhatsApp 0307-7361139"
             )
 

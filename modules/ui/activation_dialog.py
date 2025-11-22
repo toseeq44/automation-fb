@@ -1,6 +1,6 @@
 """
 License Activation Dialog
-UI for activating ContentFlow Pro licenses with Hardware Binding
+UI for activating OneSoul Pro licenses with Hardware Binding
 """
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -56,7 +56,7 @@ class LicenseActivationDialog(QDialog):
 
     def init_ui(self):
         """Initialize UI"""
-        self.setWindowTitle("Activate ContentFlow Pro License")
+        self.setWindowTitle("Activate OneSoul Pro License")
         self.setModal(True)
         self.setFixedSize(600, 580)
 
@@ -354,7 +354,7 @@ class LicenseActivationDialog(QDialog):
                 f"🎉 License Activated Successfully!\n\n"
                 f"Plan: {plan_name}\n"
                 f"Valid for: {days} days\n\n"
-                f"Enjoy ContentFlow Pro!"
+                f"Enjoy OneSoul Pro!"
             )
 
             # Close dialog and accept

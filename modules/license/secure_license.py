@@ -1,6 +1,6 @@
 """
-Secure License System with Encryption and Hardware Binding
-===========================================================
+OneSoul Pro - Secure License System with Encryption and Hardware Binding
+=========================================================================
 
 Features:
 - AES-256 encryption for license data
@@ -60,7 +60,7 @@ PLAN_CONFIG = {
 }
 
 # License file location
-LICENSE_DIR = Path.home() / ".contentflow"
+LICENSE_DIR = Path.home() / ".onesoul"
 LICENSE_FILE = LICENSE_DIR / "license.key"
 USAGE_FILE = LICENSE_DIR / "usage.json"
 
@@ -170,10 +170,10 @@ class SecureLicense:
 
     # Secret key components (split for security)
     # In production, these would be obfuscated further
-    _KEY_PART1 = "ContentFlow"
+    _KEY_PART1 = "OneSoul"
     _KEY_PART2 = "Pro2024"
     _KEY_PART3 = "SecureLicense"
-    _SALT = b"CF_LICENSE_SALT_2024"
+    _SALT = b"OS_LICENSE_SALT_2024"
 
     def __init__(self):
         """Initialize the secure license manager."""

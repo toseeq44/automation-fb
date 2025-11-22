@@ -1,5 +1,5 @@
 """
-ContentFlow Pro - Build Script
+OneSoul Pro - Build Script
 ===============================
 
 This script builds the Windows EXE distribution:
@@ -15,7 +15,7 @@ Requirements:
     pip install pyinstaller
 
 Output:
-    dist/ContentFlowPro.exe
+    dist/OneSoulPro.exe
 """
 
 import os
@@ -155,10 +155,10 @@ def run_pyinstaller():
     """Run PyInstaller with the spec file."""
     print_step("Building executable with PyInstaller...")
 
-    spec_file = PROJECT_ROOT / 'contentflow.spec'
+    spec_file = PROJECT_ROOT / 'onesoul.spec'
 
     if not spec_file.exists():
-        print_error("contentflow.spec not found!")
+        print_error("onesoul.spec not found!")
         return False
 
     try:
@@ -178,7 +178,7 @@ def verify_build():
     """Verify the build was successful."""
     print_step("Verifying build...")
 
-    exe_path = DIST_DIR / 'ContentFlowPro.exe'
+    exe_path = DIST_DIR / 'OneSoulPro.exe'
 
     if exe_path.exists():
         size_mb = exe_path.stat().st_size / (1024 * 1024)
@@ -194,13 +194,13 @@ def create_distribution_package():
     """Create final distribution package."""
     print_step("Creating distribution package...")
 
-    dist_package = DIST_DIR / 'ContentFlowPro_Distribution'
+    dist_package = DIST_DIR / 'OneSoulPro_Distribution'
     dist_package.mkdir(exist_ok=True)
 
     # Copy EXE
-    exe_src = DIST_DIR / 'ContentFlowPro.exe'
+    exe_src = DIST_DIR / 'OneSoulPro.exe'
     if exe_src.exists():
-        shutil.copy(exe_src, dist_package / 'ContentFlowPro.exe')
+        shutil.copy(exe_src, dist_package / 'OneSoulPro.exe')
 
     # Create README
     readme_content = """
@@ -210,14 +210,14 @@ def create_distribution_package():
 ╠═══════════════════════════════════════════════════════════════════╣
 ║                                                                   ║
 ║  📁 CONTENTS:                                                     ║
-║     ContentFlowPro.exe - Main application                         ║
+║     OneSoulPro.exe - Main application                         ║
 ║                                                                   ║
 ║  🚀 HOW TO USE:                                                   ║
-║     1. Double-click ContentFlowPro.exe                            ║
+║     1. Double-click OneSoulPro.exe                            ║
 ║     2. Copy your Hardware ID from the activation dialog           ║
 ║     3. Send Hardware ID to admin via WhatsApp                     ║
 ║     4. Receive and enter your license key                         ║
-║     5. Enjoy ContentFlow Pro!                                     ║
+║     5. Enjoy OneSoul Pro!                                     ║
 ║                                                                   ║
 ║  📋 PRICING:                                                      ║
 ║     BASIC: Rs 10,000/month (200 downloads/pages per day)          ║
@@ -239,7 +239,7 @@ def create_distribution_package():
 
     # Create ZIP for easy sharing
     try:
-        zip_path = DIST_DIR / 'ContentFlowPro_v2.0.0.zip'
+        zip_path = DIST_DIR / 'OneSoulPro_v2.0.0.zip'
         shutil.make_archive(
             str(zip_path.with_suffix('')),
             'zip',
@@ -290,9 +290,9 @@ def main():
     print_header("BUILD COMPLETE!")
     print(f"""
 📦 Output files:
-   - dist/ContentFlowPro.exe
-   - dist/ContentFlowPro_Distribution/
-   - dist/ContentFlowPro_v2.0.0.zip
+   - dist/OneSoulPro.exe
+   - dist/OneSoulPro_Distribution/
+   - dist/OneSoulPro_v2.0.0.zip
 
 🚀 Next steps:
    1. Test the EXE on your machine

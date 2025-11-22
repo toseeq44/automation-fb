@@ -1,6 +1,6 @@
 """
 ╔═══════════════════════════════════════════════════════════════════════════════╗
-║                     CONTENTFLOW PRO - LICENSE GENERATOR                       ║
+║                       ONESOUL PRO - LICENSE GENERATOR                         ║
 ║                           🔐 ADMIN TOOL (CONFIDENTIAL)                        ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║  WARNING: This tool generates valid license keys.                             ║
@@ -39,7 +39,7 @@ from modules.license.secure_license import SecureLicense, PLAN_CONFIG
 
 
 class LicenseGeneratorGUI(QMainWindow):
-    """Admin tool for generating ContentFlow Pro licenses."""
+    """Admin tool for generating OneSoul Pro licenses."""
 
     def __init__(self):
         super().__init__()
@@ -52,7 +52,7 @@ class LicenseGeneratorGUI(QMainWindow):
 
     def _setup_ui(self):
         """Setup the user interface."""
-        self.setWindowTitle("🔐 ContentFlow Pro - License Generator (ADMIN)")
+        self.setWindowTitle("🔐 OneSoul Pro - License Generator (ADMIN)")
         self.setMinimumSize(800, 700)
         self.setStyleSheet("""
             QMainWindow {
@@ -331,7 +331,7 @@ class LicenseGeneratorGUI(QMainWindow):
 
         pricing_text = """
 ╔═══════════════════════════════════════════════════════════════════╗
-║                    CONTENTFLOW PRO - PRICING                      ║
+║                      ONESOUL PRO - PRICING                        ║
 ╠═══════════════════════════════════════════════════════════════════╣
 ║                                                                   ║
 ║  📦 BASIC PLAN                                                    ║

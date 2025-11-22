@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-ContentFlow Pro - PyInstaller Spec File
+OneSoul Pro - PyInstaller Spec File
 ========================================
 
 This spec file bundles:
@@ -25,7 +25,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(SPECPATH).resolve()
 
 # Application info
-APP_NAME = 'ContentFlow Pro'
+APP_NAME = 'OneSoul Pro'
 APP_VERSION = '2.0.0'
 MAIN_SCRIPT = 'main.py'
 
@@ -183,7 +183,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='ContentFlowPro',
+    name='OneSoulPro',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

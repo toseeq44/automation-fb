@@ -83,7 +83,7 @@ class UploadOrchestrator:
         # Step 1: Resolve paths
         logging.info("Step 2/5: Resolving folder paths from settings...")
         try:
-            paths = self._resolve_paths()
+            paths = self._resolve_paths(automation_mode)
             logging.info("✓ Paths resolved successfully:")
             logging.info("  → Creators root: %s", paths.creators_root)
             logging.info("  → Shortcuts root: %s", paths.shortcuts_root)
@@ -199,8 +199,13 @@ class UploadOrchestrator:
         logging.warning("⚠ Could not auto-detect 'Links grabber' folder on Desktop")
         return None
 
-    def _resolve_paths(self) -> AutomationPaths:
-        """Resolve and validate filesystem paths used by the workflow."""
+    def _resolve_paths(self, automation_mode: str = "free_automation") -> AutomationPaths:
+        """Resolve and validate filesystem paths used by the workflow.
+
+        Args:
+            automation_mode: The automation mode (ix, free_automation, etc.)
+                           IX mode doesn't require shortcuts_root
+        """
         path_config = self.settings.get_automation_paths() or {}
 
         # Auto-detect creators_root if not provided or invalid
@@ -218,7 +223,14 @@ class UploadOrchestrator:
             elif not creators_root:
                 creators_root = Path("")  # Will fail validation below
 
-        shortcuts_root = Path(path_config.get("shortcuts_root", "")).expanduser().resolve()
+        # Shortcuts root - only required for free_automation mode
+        shortcuts_root_value = path_config.get("shortcuts_root", "")
+        if shortcuts_root_value:
+            shortcuts_root = Path(shortcuts_root_value).expanduser().resolve()
+        else:
+            # For IX mode, use a dummy path (not needed)
+            shortcuts_root = Path.home() / ".onesoul" / "shortcuts_placeholder"
+            shortcuts_root.mkdir(parents=True, exist_ok=True)
 
         # Use persistent directory for history file (survives EXE restarts)
         default_history = _get_persistent_data_dir() / "upload_tracking.json"
@@ -235,7 +247,9 @@ class UploadOrchestrator:
         missing: List[str] = []
         if not creators_root.exists():
             missing.append(f"Creators folder not found: {creators_root}")
-        if not shortcuts_root.exists():
+
+        # Only check shortcuts_root for free_automation mode
+        if automation_mode != "ix" and not shortcuts_root.exists():
             missing.append(f"Shortcuts folder not found: {shortcuts_root}")
 
         if missing:

@@ -2,42 +2,39 @@
 main.py
 Main application to launch OneSoul Pro.
 Version 2.0 - Secure License System with Hardware Binding
+
+IMPORTANT: All imports are inside if __name__ == "__main__" block
+to prevent multiple windows when running as PyInstaller EXE.
 """
 import sys
 import multiprocessing
 
-# IMPORTANT: This must be called before any other imports for PyInstaller EXE
-# Prevents multiple blank windows from opening on Windows
-if __name__ == "__main__":
-    multiprocessing.freeze_support()
-
-from PyQt5.QtWidgets import QApplication, QMessageBox
-
-# Choose UI version (set USE_MODERN_UI = True for new OneSoul Flow design)
-USE_MODERN_UI = True
-
-if USE_MODERN_UI:
-    from gui_modern import VideoToolSuiteGUI
-else:
-    from gui import VideoToolSuiteGUI
-
-from modules.logging import get_logger
-from modules.config import get_config
-
-# Import new secure license system
-from modules.license.secure_license import SecureLicense, get_plan_info, get_hardware_id_display
-from modules.ui import LicenseActivationDialog
-
-# Import development mode settings
-try:
-    from dev_config import DEV_MODE, DEV_CONFIG
-except ImportError:
-    DEV_MODE = False
-    DEV_CONFIG = {}
-
 
 def main():
     """Launch the OneSoul Pro application"""
+    # Import here to avoid issues with PyInstaller subprocess spawning
+    from PyQt5.QtWidgets import QApplication, QMessageBox
+
+    # Choose UI version
+    USE_MODERN_UI = True
+
+    if USE_MODERN_UI:
+        from gui_modern import VideoToolSuiteGUI
+    else:
+        from gui import VideoToolSuiteGUI
+
+    from modules.logging import get_logger
+    from modules.config import get_config
+    from modules.license.secure_license import SecureLicense, get_plan_info, get_hardware_id_display
+    from modules.ui import LicenseActivationDialog
+
+    # Import development mode settings
+    try:
+        from dev_config import DEV_MODE, DEV_CONFIG
+    except ImportError:
+        DEV_MODE = False
+        DEV_CONFIG = {}
+
     # Initialize application
     app = QApplication(sys.argv)
     app.setStyle('Fusion')  # Modern look across platforms
@@ -138,4 +135,9 @@ def main():
 
 
 if __name__ == '__main__':
+    # CRITICAL: This must be the FIRST thing that runs for PyInstaller
+    # Prevents multiple blank windows from opening on Windows
+    multiprocessing.freeze_support()
+
+    # Now run the main application
     main()

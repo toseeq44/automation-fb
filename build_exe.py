@@ -205,7 +205,7 @@ def create_distribution_package():
     # Create README
     readme_content = """
 ╔═══════════════════════════════════════════════════════════════════╗
-║               CONTENTFLOW PRO - VIDEO AUTOMATION                  ║
+║                 ONESOUL PRO - VIDEO AUTOMATION                    ║
 ║                        Version 2.0.0                              ║
 ╠═══════════════════════════════════════════════════════════════════╣
 ║                                                                   ║

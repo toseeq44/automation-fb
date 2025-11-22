@@ -583,6 +583,93 @@ class SecureLicense:
 
         return current >= limit, current, limit
 
+    # ═══════════════════════════════════════════════════════════
+    # GUI COMPATIBILITY METHODS
+    # ═══════════════════════════════════════════════════════════
+
+    def get_license_status_text(self) -> str:
+        """
+        Get license status text for GUI display.
+
+        Returns:
+            str: Status text like "Pro - 25 days" or "No License"
+        """
+        is_valid, message, info = self.load_license()
+
+        if not is_valid or not info:
+            return "No License"
+
+        plan_name = info.get("plan_name", "Basic")
+        days = info.get("days_remaining", 0)
+
+        if days <= 0:
+            return f"{plan_name} - Expired"
+        elif days <= 7:
+            return f"{plan_name} - {days}d (Expiring!)"
+        else:
+            return f"{plan_name} - {days}d"
+
+    def get_license_info(self) -> dict:
+        """
+        Get license information for GUI display.
+
+        Returns:
+            dict: License information or empty dict if no license
+        """
+        is_valid, message, info = self.load_license()
+
+        if not is_valid or not info:
+            return {
+                "is_valid": False,
+                "plan": "none",
+                "plan_name": "No License",
+                "days_remaining": 0,
+                "status": message,
+                "hardware_id": get_hardware_id_display(),
+            }
+
+        return {
+            "is_valid": True,
+            "plan": info.get("plan", "basic"),
+            "plan_name": info.get("plan_name", "Basic"),
+            "days_remaining": info.get("days_remaining", 0),
+            "expiry": info.get("expiry", ""),
+            "status": message,
+            "hardware_id": get_hardware_id_display(),
+            "daily_downloads": info.get("daily_downloads"),
+            "daily_pages": info.get("daily_pages"),
+        }
+
+    def validate_license(self) -> Tuple[bool, str, Optional[dict]]:
+        """
+        Validate the current license (alias for load_license).
+
+        Returns:
+            Tuple[bool, str, dict]: (is_valid, message, license_info)
+        """
+        return self.load_license()
+
+    def deactivate_license(self) -> Tuple[bool, str]:
+        """
+        Deactivate/remove the current license (alias for remove_license).
+
+        Returns:
+            Tuple[bool, str]: (success, message)
+        """
+        return self.remove_license()
+
+    def activate_license(self, license_key: str) -> Tuple[bool, str]:
+        """
+        Activate a license key (alias for save_license).
+
+        Args:
+            license_key: The license key to activate
+
+        Returns:
+            Tuple[bool, str]: (success, message)
+        """
+        return self.save_license(license_key)
+
 
 # ═══════════════════════════════════════════════════════════
 # CONVENIENCE FUNCTIONS

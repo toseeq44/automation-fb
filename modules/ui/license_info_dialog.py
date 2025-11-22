@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
-from modules.license import LicenseManager
+from modules.license.secure_license import SecureLicense, get_hardware_id_display
 from modules.logging import get_logger
 from datetime import datetime
 
@@ -18,7 +18,7 @@ class LicenseInfoDialog(QDialog):
     Dialog showing license information and management options
     """
 
-    def __init__(self, license_manager: LicenseManager, parent=None):
+    def __init__(self, license_manager, parent=None):
         super().__init__(parent)
         self.license_manager = license_manager
         self.logger = get_logger()
@@ -46,7 +46,7 @@ class LicenseInfoDialog(QDialog):
         is_valid, status_message, _ = self.license_manager.validate_license()
 
         if not license_info:
-            no_license_label = QLabel("⚠️ No License Found\n\nPlease activate a license to use ContentFlow Pro.")
+            no_license_label = QLabel("⚠️ No License Found\n\nPlease activate a license to use OneSoul Pro.")
             no_license_label.setAlignment(Qt.AlignCenter)
             no_license_label.setStyleSheet("padding: 30px; font-size: 13px;")
             layout.addWidget(no_license_label)
@@ -189,7 +189,7 @@ class LicenseInfoDialog(QDialog):
             self,
             "Confirm Deactivation",
             "Are you sure you want to deactivate this license?\n\n"
-            "You will need to activate it again to use ContentFlow Pro.\n"
+            "You will need to activate it again to use OneSoul Pro.\n"
             "You can then use it on a different device if needed.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No
@@ -226,7 +226,7 @@ if __name__ == '__main__':
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
 
-    license_manager = LicenseManager(server_url="http://localhost:5000")
+    license_manager = SecureLicense()
 
     dialog = LicenseInfoDialog(license_manager)
     dialog.exec_()

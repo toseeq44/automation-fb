@@ -550,23 +550,51 @@ class ModernTopBar(QWidget):
         self.setGraphicsEffect(shadow)
 
     def update_license_status(self):
-        """Update license status"""
+        """Update license status with smart color coding"""
         status_text = self.license_manager.get_license_status_text()
-        self.license_label.setText(status_text)
 
-        if "✅" in status_text:
-            color = OneSoulTheme.CYAN
-        else:
+        # Get license info for days remaining
+        license_info = self.license_manager.get_license_info()
+        days_remaining = license_info.get("days_remaining", 0)
+        is_valid = license_info.get("is_valid", False)
+        plan_name = license_info.get("plan_name", "No License")
+
+        # Determine color based on status
+        if not is_valid:
+            # No license or invalid
             color = OneSoulTheme.BTN_DANGER
+            bg_color = "rgba(233, 69, 96, 0.15)"
+            icon = "⚠️"
+            display_text = f"{icon} No License"
+        elif days_remaining <= 3:
+            # Critical - 3 days or less (RED)
+            color = OneSoulTheme.BTN_DANGER
+            bg_color = "rgba(233, 69, 96, 0.15)"
+            icon = "🔴"
+            display_text = f"{icon} {plan_name} - {days_remaining}d"
+        elif days_remaining <= 7:
+            # Warning - 7 days or less (ORANGE)
+            color = "#f39c12"
+            bg_color = "rgba(243, 156, 18, 0.15)"
+            icon = "🟡"
+            display_text = f"{icon} {plan_name} - {days_remaining}d"
+        else:
+            # Good - more than 7 days (GREEN/CYAN)
+            color = "#4ecca3"
+            bg_color = "rgba(78, 204, 163, 0.15)"
+            icon = "✅"
+            display_text = f"{icon} {plan_name} - {days_remaining}d"
 
+        self.license_label.setText(display_text)
         self.license_label.setStyleSheet(f"""
             color: {color};
             font-weight: bold;
-            font-size: 11px;
-            padding: 3px 24px;
-            background: {OneSoulTheme.BG_ELEVATED};
-            border: 1px solid {color};
-            border-radius: 4px;
+            font-size: 12px;
+            padding: 8px 16px;
+            background: {bg_color};
+            border: 2px solid {color};
+            border-radius: 8px;
+            margin: 5px;
         """)
 
 

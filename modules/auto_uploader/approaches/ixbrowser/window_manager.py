@@ -6,9 +6,13 @@ Handles bringing browser windows to foreground on Windows
 import logging
 import time
 import subprocess
+import sys
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# Hide console window for subprocess calls on Windows
+_CREATION_FLAGS = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
 
 
 def bring_window_to_front_windows(window_title: str, partial_match: bool = True) -> bool:
@@ -42,7 +46,8 @@ def bring_window_to_front_windows(window_title: str, partial_match: bool = True)
                 ["powershell", "-Command", ps_script],
                 capture_output=True,
                 text=True,
-                timeout=3
+                timeout=3,
+                creationflags=_CREATION_FLAGS
             )
 
             if result.stdout.strip() == "True":
@@ -86,7 +91,8 @@ def bring_window_to_front_windows(window_title: str, partial_match: bool = True)
                 ["powershell", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
                 capture_output=True,
                 text=True,
-                timeout=3
+                timeout=3,
+                creationflags=_CREATION_FLAGS
             )
 
             if "Success" in result.stdout:
@@ -122,7 +128,8 @@ def bring_window_to_front_windows(window_title: str, partial_match: bool = True)
                 ["cscript", "//nologo", vbs_path],
                 capture_output=True,
                 text=True,
-                timeout=3
+                timeout=3,
+                creationflags=_CREATION_FLAGS
             )
 
             # Cleanup
@@ -192,7 +199,8 @@ def bring_window_to_front_windows(window_title: str, partial_match: bool = True)
                     ["powershell", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
                     capture_output=True,
                     text=True,
-                    timeout=5
+                    timeout=5,
+                    creationflags=_CREATION_FLAGS
                 )
 
                 if "PartialMatchSuccess" in result.stdout:
@@ -249,7 +257,8 @@ def maximize_window_windows(window_title: str) -> bool:
             ["powershell", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
             capture_output=True,
             text=True,
-            timeout=3
+            timeout=3,
+            creationflags=_CREATION_FLAGS
         )
 
         if "Maximized" in result.stdout:

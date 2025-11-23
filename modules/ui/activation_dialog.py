@@ -58,7 +58,8 @@ class LicenseActivationDialog(QDialog):
         """Initialize UI"""
         self.setWindowTitle("Activate OneSoul Pro License")
         self.setModal(True)
-        self.setFixedSize(600, 580)
+        self.setMinimumSize(550, 500)
+        self.resize(600, 580)  # Default size but resizable
 
         layout = QVBoxLayout()
         layout.setSpacing(12)

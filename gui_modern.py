@@ -21,16 +21,22 @@ def resource_path(relative_path):
     Get absolute path to resource - works for dev and PyInstaller EXE.
 
     PyInstaller creates a temp folder and stores path in sys._MEIPASS.
-    In development, use the current directory.
+    In development, use the directory where this script is located.
     """
-    try:
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
         # PyInstaller creates a temp folder and stores path in _MEIPASS
         base_path = sys._MEIPASS
-    except AttributeError:
-        # Not running as bundled EXE, use current directory
-        base_path = os.path.abspath(".")
+    else:
+        # Not running as bundled EXE, use script directory
+        base_path = os.path.dirname(os.path.abspath(__file__))
 
-    return os.path.join(base_path, relative_path)
+    full_path = os.path.join(base_path, relative_path)
+    return full_path
+
+
+def _is_exe_mode():
+    """Check if running as PyInstaller EXE."""
+    return getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
 
 
 # Try to import QWebEngineView for animated logo
@@ -509,37 +515,59 @@ class ModernTopBar(QWidget):
         static_logo_path = resource_path(os.path.join("gui-redesign", "assets", "onesoul_logo.svg"))
 
         # Try animated HTML logo first (if QWebEngineView available)
-        if HAS_WEB_ENGINE and os.path.exists(animated_logo_path):
-            self.logo = QWebEngineView()
-            self.logo.setFixedSize(240, 145)  # Increased height for OneSoul text visibility
+        # Note: In EXE mode, QWebEngineView can cause issues - fallback to static logo
+        use_animated_logo = (
+            HAS_WEB_ENGINE and
+            os.path.exists(animated_logo_path) and
+            not _is_exe_mode()  # Disable animated logo in EXE mode to prevent window issues
+        )
 
-            # Make background transparent
-            self.logo.setStyleSheet("background: transparent;")
+        if use_animated_logo:
+            try:
+                self.logo = QWebEngineView()
+                self.logo.setFixedSize(240, 145)  # Increased height for OneSoul text visibility
 
-            # Set page background to transparent
-            from PyQt5.QtGui import QColor
-            self.logo.page().setBackgroundColor(QColor(0, 0, 0, 0))  # Fully transparent
+                # Disable popups and extra windows
+                self.logo.setContextMenuPolicy(Qt.NoContextMenu)
 
-            # Load animated HTML logo
-            logo_url = QUrl.fromLocalFile(os.path.abspath(animated_logo_path))
-            self.logo.setUrl(logo_url)
-            layout.addWidget(self.logo)
+                # Make background transparent
+                self.logo.setStyleSheet("background: transparent;")
 
-        elif os.path.exists(static_logo_path):
-            # Fallback to static SVG
-            self.logo = QSvgWidget(static_logo_path)
-            self.logo.setFixedSize(120, 80)  # 2x original (was 60x40)
-            layout.addWidget(self.logo)
-        else:
-            # Final fallback: text logo
-            logo_text = QLabel("◈ ONESOUL")
-            logo_text.setStyleSheet(f"""
-                color: {OneSoulTheme.TEXT_GOLD};
-                font-size: 28px;
-                font-weight: bold;
-                letter-spacing: 6px;
-            """)
-            layout.addWidget(logo_text)
+                # Set page background to transparent
+                from PyQt5.QtGui import QColor
+                self.logo.page().setBackgroundColor(QColor(0, 0, 0, 0))  # Fully transparent
+
+                # Disable JavaScript popups (prevents multiple windows)
+                settings = self.logo.page().settings()
+                settings.setAttribute(settings.JavascriptCanOpenWindows, False)
+                settings.setAttribute(settings.LocalContentCanAccessRemoteUrls, False)
+
+                # Load animated HTML logo (resource_path already returns absolute path)
+                logo_url = QUrl.fromLocalFile(animated_logo_path)
+                self.logo.setUrl(logo_url)
+                layout.addWidget(self.logo)
+            except Exception as e:
+                # If QWebEngineView fails, fall through to static logo
+                print(f"[GUI] QWebEngineView failed: {e}, using static logo")
+                use_animated_logo = False
+
+        if not use_animated_logo:
+            # Animated logo not used - try static SVG or text fallback
+            if os.path.exists(static_logo_path):
+                # Fallback to static SVG
+                self.logo = QSvgWidget(static_logo_path)
+                self.logo.setFixedSize(120, 80)  # 2x original (was 60x40)
+                layout.addWidget(self.logo)
+            else:
+                # Final fallback: text logo
+                logo_text = QLabel("◈ ONESOUL")
+                logo_text.setStyleSheet(f"""
+                    color: {OneSoulTheme.TEXT_GOLD};
+                    font-size: 28px;
+                    font-weight: bold;
+                    letter-spacing: 6px;
+                """)
+                layout.addWidget(logo_text)
 
         layout.addStretch()
 

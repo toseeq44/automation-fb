@@ -30,10 +30,44 @@ from ...config.settings_manager import SettingsManager
 
 logger = logging.getLogger(__name__)
 
-# Image paths for buttons
-ADD_VIDEOS_BUTTON_IMAGE = "/home/user/automation-fb/modules/auto_uploader/helper_images/add_videos_button.png"
-PUBLISH_BUTTON_ENABLED_IMAGE = "/home/user/automation-fb/modules/auto_uploader/helper_images/publish_button_after_data.png"
-PUBLISH_BUTTON_DISABLED_IMAGE = "/home/user/automation-fb/modules/auto_uploader/helper_images/publish_button_befor_data.png"
+# Helper function to get correct paths for both development and EXE mode
+import sys
+
+def _get_helper_images_dir() -> Path:
+    """
+    Get helper_images directory - works for both development and PyInstaller EXE.
+
+    In development: uses relative path from this file
+    In EXE mode: uses sys._MEIPASS (PyInstaller temp directory)
+    """
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        # Running as PyInstaller EXE - use bundled path
+        return Path(sys._MEIPASS) / "modules" / "auto_uploader" / "helper_images"
+    else:
+        # Development mode - use relative path
+        return Path(__file__).resolve().parents[2] / "helper_images"
+
+
+# Image paths for buttons (dynamically resolved)
+def _get_image_path(image_name: str) -> str:
+    """Get full path to helper image."""
+    return str(_get_helper_images_dir() / image_name)
+
+
+# Lazy-loaded image paths (computed on first access)
+ADD_VIDEOS_BUTTON_IMAGE = None
+PUBLISH_BUTTON_ENABLED_IMAGE = None
+PUBLISH_BUTTON_DISABLED_IMAGE = None
+
+
+def _ensure_image_paths():
+    """Initialize image paths (call before using images)."""
+    global ADD_VIDEOS_BUTTON_IMAGE, PUBLISH_BUTTON_ENABLED_IMAGE, PUBLISH_BUTTON_DISABLED_IMAGE
+    if ADD_VIDEOS_BUTTON_IMAGE is None:
+        ADD_VIDEOS_BUTTON_IMAGE = _get_image_path("add_videos_button.png")
+        PUBLISH_BUTTON_ENABLED_IMAGE = _get_image_path("publish_button_after_data.png")
+        PUBLISH_BUTTON_DISABLED_IMAGE = _get_image_path("publish_button_befor_data.png")
+        logger.debug(f"[Upload] Helper images dir: {_get_helper_images_dir()}")
 
 
 class VideoUploadHelper:
@@ -64,6 +98,9 @@ class VideoUploadHelper:
         self.current_video = None
         self.current_bookmark = None
         self.current_attempt = 0
+
+        # Initialize image paths (EXE compatibility)
+        _ensure_image_paths()
 
         logger.info("[Upload] ✓ VideoUploadHelper initialized with Phase 2 robustness")
 

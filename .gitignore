@@ -8,3 +8,18 @@ __pycache__/
 *.pyc
 .DS_Store
 .idea/
+
+# Build artifacts and large files
+build/
+dist/
+*.exe
+*.spec.bak
+ffmpeg/
+ffmpeg.exe
+ffprobe.exe
+ffplay.exe
+*.dll
+
+# PyInstaller
+*.manifest
+*.pdb

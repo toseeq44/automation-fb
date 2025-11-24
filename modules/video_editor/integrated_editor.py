@@ -1182,18 +1182,36 @@ class IntegratedVideoEditor(QWidget):
             )
 
     def open_bulk_processing(self):
-        """Open bulk processing dialog"""
-        QMessageBox.information(
-            self,
-            "Bulk Processing",
-            "🧩 Bulk Processing\n\n"
-            "Process multiple videos at once:\n"
-            "• Apply same edits to multiple files\n"
-            "• Batch export videos\n"
-            "• Save time on repetitive tasks\n\n"
-            "This feature is available for bulk operations!"
-        )
-        logger.info("Bulk processing clicked")
+        """Open bulk processing dialog with folder mapping"""
+        try:
+            from modules.video_editor.editor_mapping_dialog import BulkProcessingDialog
+            from modules.video_editor.editor_progress_dialog import EditorProgressDialog
+
+            # Open configuration dialog
+            config_dialog = BulkProcessingDialog(self, self.preset_manager)
+
+            # Connect signal for when processing should start
+            def on_start_processing(config):
+                # Open progress dialog
+                progress_dialog = EditorProgressDialog(config, self)
+                progress_dialog.exec_()
+
+            config_dialog.start_processing.connect(on_start_processing)
+
+            # Show dialog
+            config_dialog.exec_()
+
+            logger.info("Bulk processing dialog closed")
+
+        except Exception as e:
+            logger.error(f"Failed to open bulk processing: {e}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to open bulk processing dialog:\n{str(e)}"
+            )
 
     def open_title_generator(self):
         """Open title generator"""

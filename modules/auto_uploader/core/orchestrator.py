@@ -15,6 +15,7 @@ from ..approaches import ApproachConfig, ApproachFactory, CreatorData, WorkItem
 from ..auth.credential_manager import CredentialManager
 from ..config.settings_manager import SettingsManager
 from .workflow_manager import AccountWorkItem, CreatorLogin
+from .stop_controller import StopController, is_stop_requested, StopRequested
 
 
 def _is_running_as_exe() -> bool:
@@ -151,39 +152,59 @@ class UploadOrchestrator:
             approach.__class__.__name__,
         )
         overall_success = True
+        stopped_by_user = False
 
-        for idx, work_item in enumerate(approach_ready_items, 1):
-            logging.info("-"*60)
-            logging.info(
-                "Processing account %d/%d: %s",
-                idx,
-                len(approach_ready_items),
-                work_item.account_name,
-            )
-            logging.info("-"*60)
-            result = approach.execute_workflow(work_item)
-            overall_success = overall_success and result.success
+        # Use StopController for Ctrl+X stop functionality
+        with StopController():
+            for idx, work_item in enumerate(approach_ready_items, 1):
+                # Check if user requested stop (Ctrl+X)
+                if is_stop_requested():
+                    logging.warning("="*60)
+                    logging.warning("STOPPED BY USER (Ctrl+X)")
+                    logging.warning("="*60)
+                    stopped_by_user = True
+                    break
 
-            if result.success:
-                processed = result.creators_processed or len(work_item.creators)
-                logging.info("[OK] Account '%s' processed successfully (%d creator(s))",
-                             result.account_name, processed)
-            else:
-                logging.error("[FAIL] Account '%s' processing failed", result.account_name)
-                if result.errors:
-                    for error in result.errors:
-                        logging.error("       - %s", error)
+                logging.info("-"*60)
+                logging.info(
+                    "Processing account %d/%d: %s",
+                    idx,
+                    len(approach_ready_items),
+                    work_item.account_name,
+                )
+                logging.info("-"*60)
+
+                try:
+                    result = approach.execute_workflow(work_item)
+                    overall_success = overall_success and result.success
+
+                    if result.success:
+                        processed = result.creators_processed or len(work_item.creators)
+                        logging.info("[OK] Account '%s' processed successfully (%d creator(s))",
+                                     result.account_name, processed)
+                    else:
+                        logging.error("[FAIL] Account '%s' processing failed", result.account_name)
+                        if result.errors:
+                            for error in result.errors:
+                                logging.error("       - %s", error)
+
+                except StopRequested:
+                    logging.warning("STOPPED BY USER during account processing")
+                    stopped_by_user = True
+                    break
 
         # Step 4: Summary
         logging.info("="*60)
         logging.info("Step 5/5: Workflow completed")
-        if overall_success:
+        if stopped_by_user:
+            logging.warning("WORKFLOW STOPPED BY USER (Ctrl+X)")
+        elif overall_success:
             logging.info("✓ ALL ACCOUNTS PROCESSED SUCCESSFULLY")
         else:
             logging.warning("⚠ SOME ACCOUNTS FAILED - Check logs above")
         logging.info("="*60)
 
-        return overall_success
+        return overall_success and not stopped_by_user
 
     # ------------------------------------------------------------------ #
     # Internal helpers                                                   #

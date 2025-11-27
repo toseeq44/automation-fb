@@ -221,8 +221,17 @@ class MetadataBulkProcessingDialog(QDialog):
         self.mapping_table.setHorizontalHeaderLabels([
             "Enabled", "Source Subfolder", "Destination Subfolder", "Videos"
         ])
-        self.mapping_table.setMinimumHeight(200)
-        self.mapping_table.setMaximumHeight(400)
+        self.mapping_table.setMinimumHeight(250)
+        self.mapping_table.setMaximumHeight(500)
+
+        # Disable selection behavior to prevent unwanted highlighting
+        self.mapping_table.setSelectionMode(QTableWidget.NoSelection)
+        self.mapping_table.setFocusPolicy(Qt.NoFocus)
+
+        # Set proper row height
+        self.mapping_table.verticalHeader().setDefaultSectionSize(45)
+        self.mapping_table.verticalHeader().setVisible(False)
+
         self.mapping_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.mapping_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
         self.mapping_table.setColumnWidth(0, 60)
@@ -419,20 +428,28 @@ class MetadataBulkProcessingDialog(QDialog):
                 border: 1px solid #3a3a3a;
                 border-radius: 6px;
                 gridline-color: #3a3a3a;
+                outline: none;
             }
             QTableWidget::item {
-                padding: 8px;
+                padding: 10px;
                 color: #e0e0e0;
+                border: none;
+                outline: none;
             }
             QTableWidget::item:selected {
-                background-color: #9c27b0;
+                background-color: transparent;
+            }
+            QTableWidget::item:focus {
+                background-color: transparent;
+                outline: none;
             }
             QHeaderView::section {
                 background-color: #353535;
                 color: #e0e0e0;
-                padding: 8px;
+                padding: 12px 8px;
                 border: none;
                 font-weight: bold;
+                font-size: 13px;
             }
             QComboBox {
                 background-color: #2a2a2a;
@@ -531,9 +548,13 @@ class MetadataBulkProcessingDialog(QDialog):
         dialog = QFileDialog(self)
         dialog.setFileMode(QFileDialog.Directory)
         dialog.setOption(QFileDialog.ShowDirsOnly, True)
+        dialog.setOption(QFileDialog.DontUseNativeDialog, False)  # Use native dialog
         dialog.setWindowTitle("Select Source Folder")
         dialog.setDirectory(os.path.expanduser("~/Desktop"))
-        dialog.resize(800, 600)  # Set proper dialog size
+
+        # Open as standalone window with maximize/minimize buttons
+        dialog.setWindowFlags(Qt.Window | Qt.WindowMaximizeButtonHint | Qt.WindowMinimizeButtonHint)
+        dialog.resize(900, 650)
 
         if dialog.exec_():
             folders = dialog.selectedFiles()
@@ -545,9 +566,13 @@ class MetadataBulkProcessingDialog(QDialog):
         dialog = QFileDialog(self)
         dialog.setFileMode(QFileDialog.Directory)
         dialog.setOption(QFileDialog.ShowDirsOnly, True)
+        dialog.setOption(QFileDialog.DontUseNativeDialog, False)  # Use native dialog
         dialog.setWindowTitle("Select Destination Folder")
         dialog.setDirectory(os.path.expanduser("~/Desktop"))
-        dialog.resize(800, 600)  # Set proper dialog size
+
+        # Open as standalone window with maximize/minimize buttons
+        dialog.setWindowFlags(Qt.Window | Qt.WindowMaximizeButtonHint | Qt.WindowMinimizeButtonHint)
+        dialog.resize(900, 650)
 
         if dialog.exec_():
             folders = dialog.selectedFiles()
@@ -773,12 +798,20 @@ class MetadataBulkProcessingDialog(QDialog):
             checkbox_layout.setContentsMargins(0, 0, 0, 0)
             self.mapping_table.setCellWidget(row, 0, checkbox_widget)
 
-            # Subfolder name
-            self.mapping_table.setItem(row, 1, QTableWidgetItem(sm.source_subfolder))
+            # Subfolder name (read-only)
+            subfolder_item = QTableWidgetItem(sm.source_subfolder)
+            subfolder_item.setFlags(subfolder_item.flags() & ~Qt.ItemIsEditable)
+            self.mapping_table.setItem(row, 1, subfolder_item)
 
-            # Video count
+            # Set row height
+            self.mapping_table.setRowHeight(row, 45)
+
+            # Video count (read-only)
             video_count = self.source_info['subfolder_counts'].get(sm.source_subfolder, 0)
-            self.mapping_table.setItem(row, 2, QTableWidgetItem(str(video_count)))
+            count_item = QTableWidgetItem(str(video_count))
+            count_item.setFlags(count_item.flags() & ~Qt.ItemIsEditable)
+            count_item.setTextAlignment(Qt.AlignCenter)
+            self.mapping_table.setItem(row, 2, count_item)
 
     def populate_mapping_table(self):
         """Populate mapping table with subfolder mappings (for different folders mode)"""
@@ -822,8 +855,13 @@ class MetadataBulkProcessingDialog(QDialog):
             checkbox_layout.setContentsMargins(0, 0, 0, 0)
             self.mapping_table.setCellWidget(row, 0, checkbox_widget)
 
-            # Source subfolder
-            self.mapping_table.setItem(row, 1, QTableWidgetItem(sm.source_subfolder))
+            # Source subfolder (read-only)
+            source_item = QTableWidgetItem(sm.source_subfolder)
+            source_item.setFlags(source_item.flags() & ~Qt.ItemIsEditable)
+            self.mapping_table.setItem(row, 1, source_item)
+
+            # Set row height
+            self.mapping_table.setRowHeight(row, 45)
 
             # Destination dropdown with proper sizing
             dest_combo = QComboBox()
@@ -859,13 +897,16 @@ class MetadataBulkProcessingDialog(QDialog):
             combo_layout.setContentsMargins(4, 4, 4, 4)
             self.mapping_table.setCellWidget(row, 2, combo_widget)
 
-            # Video count
+            # Video count (read-only)
             source_path = os.path.join(
                 self.current_mapping.source_folder,
                 sm.source_subfolder
             )
             video_count = MetadataFolderScanner.count_videos_in_folder(source_path)
-            self.mapping_table.setItem(row, 3, QTableWidgetItem(str(video_count)))
+            count_item = QTableWidgetItem(str(video_count))
+            count_item.setFlags(count_item.flags() & ~Qt.ItemIsEditable)
+            count_item.setTextAlignment(Qt.AlignCenter)
+            self.mapping_table.setItem(row, 3, count_item)
 
     def on_mapping_enabled_changed(self, row: int, state: int):
         """Handle mapping enabled checkbox change"""

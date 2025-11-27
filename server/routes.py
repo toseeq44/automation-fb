@@ -6,14 +6,57 @@ from datetime import datetime, timedelta
 from models import db, License, ValidationLog, SecurityAlert
 import secrets
 import string
+import os
+import base64
+import hmac
+import hashlib
+import os
 
 api = Blueprint('api', __name__)
 
-def generate_license_key():
-    """Generate a secure random license key"""
-    chars = string.ascii_uppercase + string.digits
-    parts = [''.join(secrets.choice(chars) for _ in range(4)) for _ in range(4)]
-    return f"CFPRO-{'-'.join(parts)}"
+SIGNING_SECRET = os.getenv('LICENSE_SIGNING_SECRET', 'ONESOUL_SUPER_SECRET_KEY_2025').encode()
+
+
+def _make_payload(email: str, hardware_id: str, plan_type: str, expiry_iso: str) -> str:
+    payload = f"{email}|{hardware_id}|{plan_type}|{expiry_iso}"
+    payload_b64 = base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
+    return payload_b64
+
+
+def _sign(payload_b64: str) -> str:
+    sig = hmac.new(SIGNING_SECRET, payload_b64.encode(), hashlib.sha256).hexdigest()
+    # shorten but still strong
+    return sig[:32]
+
+
+def generate_license_token(email: str, hardware_id: str, plan_type: str, expiry_iso: str) -> str:
+    """Create a tamper-proof license token bound to hardware"""
+    payload_b64 = _make_payload(email, hardware_id, plan_type, expiry_iso)
+    signature = _sign(payload_b64)
+    return f"ONESOUL-{payload_b64}.{signature}"
+
+
+def verify_license_token(token: str):
+    """Verify token signature and return payload parts or None"""
+    if not token.startswith("ONESOUL-") or '.' not in token:
+        return None
+    try:
+        payload_b64, signature = token.replace("ONESOUL-", "", 1).split('.', 1)
+        expected_sig = _sign(payload_b64)
+        if not hmac.compare_digest(signature, expected_sig):
+            return None
+        # restore padding for b64 decode
+        padded = payload_b64 + "=" * (-len(payload_b64) % 4)
+        decoded = base64.urlsafe_b64decode(padded.encode()).decode()
+        email, hardware_id, plan_type, expiry_iso = decoded.split('|')
+        return {
+            "email": email,
+            "hardware_id": hardware_id,
+            "plan_type": plan_type,
+            "expiry_iso": expiry_iso
+        }
+    except Exception:
+        return None
 
 def log_validation(license_key, hardware_id, ip, action, status, message):
     """Create a validation log entry"""
@@ -59,14 +102,14 @@ def activate_license():
 
     Request body:
     {
-        "license_key": "CFPRO-XXXX-XXXX-XXXX-XXXX",
+        "license_key": "ONESOUL-XXXX-XXXX-XXXX-XXXX",
         "hardware_id": "sha256_hash_of_hardware",
         "device_name": "John's PC"
     }
     """
     try:
         data = request.get_json()
-        license_key = data.get('license_key', '').strip().upper()
+        license_key = data.get('license_key', '').strip()
         hardware_id = data.get('hardware_id', '').strip()
         device_name = data.get('device_name', 'Unknown Device').strip()
         ip_address = request.remote_addr
@@ -75,6 +118,12 @@ def activate_license():
         if not license_key or not hardware_id:
             log_validation(license_key, hardware_id, ip_address, 'activate', 'failed', 'Missing license key or hardware ID')
             return jsonify({'success': False, 'message': 'License key and hardware ID are required'}), 400
+
+        # Verify token signature/payload
+        token_payload = verify_license_token(license_key)
+        if not token_payload:
+            log_validation(license_key, hardware_id, ip_address, 'activate', 'failed', 'Invalid or tampered license token')
+            return jsonify({'success': False, 'message': 'Invalid license token'}), 400
 
         # Find license
         license_obj = License.query.filter_by(license_key=license_key).first()
@@ -95,6 +144,11 @@ def activate_license():
                 'success': False,
                 'message': f'License expired on {license_obj.expiry_date.strftime("%Y-%m-%d")}. Please renew your subscription.'
             }), 403
+
+        # Check token hardware matches request
+        if token_payload.get('hardware_id') and token_payload.get('hardware_id') != hardware_id:
+            log_validation(license_key, hardware_id, ip_address, 'activate', 'failed', 'Hardware mismatch in token')
+            return jsonify({'success': False, 'message': 'License token is bound to a different hardware ID'}), 403
 
         # Check if already activated on a different device
         if license_obj.hardware_id and license_obj.hardware_id != hardware_id:
@@ -147,13 +201,13 @@ def validate_license():
 
     Request body:
     {
-        "license_key": "CFPRO-XXXX-XXXX-XXXX-XXXX",
+        "license_key": "ONESOUL-XXXX-XXXX-XXXX-XXXX",
         "hardware_id": "sha256_hash_of_hardware"
     }
     """
     try:
         data = request.get_json()
-        license_key = data.get('license_key', '').strip().upper()
+        license_key = data.get('license_key', '').strip()
         hardware_id = data.get('hardware_id', '').strip()
         ip_address = request.remote_addr
 
@@ -166,7 +220,26 @@ def validate_license():
             log_validation(license_key, hardware_id, ip_address, 'validate', 'failed', 'License not found')
             return jsonify({'valid': False, 'message': 'Invalid license key'}), 404
 
-        # Check hardware ID match
+        # Verify token signature/payload
+        token_payload = verify_license_token(license_key)
+        if not token_payload:
+            log_validation(license_key, hardware_id, ip_address, 'validate', 'failed', 'Invalid or tampered license token')
+            return jsonify({'valid': False, 'message': 'Invalid license token'}), 400
+
+        # Check hardware ID match (token + stored)
+        if token_payload.get('hardware_id') and token_payload.get('hardware_id') != hardware_id:
+            log_validation(license_key, hardware_id, ip_address, 'validate', 'failed', 'Hardware mismatch in token')
+            create_security_alert(
+                license_key,
+                'hardware_mismatch',
+                f'Validation attempted with wrong hardware ID',
+                'medium'
+            )
+            return jsonify({
+                'valid': False,
+                'message': 'Hardware ID mismatch. License is registered to a different device.'
+            }), 403
+
         if license_obj.hardware_id != hardware_id:
             log_validation(license_key, hardware_id, ip_address, 'validate', 'failed', 'Hardware ID mismatch')
             create_security_alert(
@@ -217,13 +290,13 @@ def deactivate_license():
 
     Request body:
     {
-        "license_key": "CFPRO-XXXX-XXXX-XXXX-XXXX",
+        "license_key": "ONESOUL-XXXX-XXXX-XXXX-XXXX",
         "hardware_id": "sha256_hash_of_hardware"
     }
     """
     try:
         data = request.get_json()
-        license_key = data.get('license_key', '').strip().upper()
+        license_key = data.get('license_key', '').strip()
         hardware_id = data.get('hardware_id', '').strip()
         ip_address = request.remote_addr
 
@@ -236,7 +309,26 @@ def deactivate_license():
             log_validation(license_key, hardware_id, ip_address, 'deactivate', 'failed', 'License not found')
             return jsonify({'success': False, 'message': 'Invalid license key'}), 404
 
-        # Security: Verify hardware ID matches
+        # Verify token signature/payload
+        token_payload = verify_license_token(license_key)
+        if not token_payload:
+            log_validation(license_key, hardware_id, ip_address, 'deactivate', 'failed', 'Invalid or tampered license token')
+            return jsonify({'success': False, 'message': 'Invalid license token'}), 400
+
+        # Security: Verify hardware ID matches (token + stored)
+        if token_payload.get('hardware_id') and token_payload.get('hardware_id') != hardware_id:
+            log_validation(license_key, hardware_id, ip_address, 'deactivate', 'failed', 'Hardware mismatch in token')
+            create_security_alert(
+                license_key,
+                'unauthorized_deactivation',
+                f'Deactivation attempted with wrong hardware ID',
+                'high'
+            )
+            return jsonify({
+                'success': False,
+                'message': 'Cannot deactivate. Hardware ID mismatch.'
+            }), 403
+
         if license_obj.hardware_id != hardware_id:
             log_validation(license_key, hardware_id, ip_address, 'deactivate', 'failed', 'Hardware ID mismatch')
             create_security_alert(
@@ -276,12 +368,12 @@ def license_status():
 
     Request body:
     {
-        "license_key": "CFPRO-XXXX-XXXX-XXXX-XXXX"
+        "license_key": "ONESOUL-XXXX-XXXX-XXXX-XXXX"
     }
     """
     try:
         data = request.get_json()
-        license_key = data.get('license_key', '').strip().upper()
+        license_key = data.get('license_key', '').strip()
 
         if not license_key:
             return jsonify({'success': False, 'message': 'License key is required'}), 400
@@ -321,39 +413,44 @@ def generate_license():
     Request body:
     {
         "email": "user@example.com",
-        "plan_type": "monthly" or "yearly" or "trial",
+        "user_name": "John",
+        "hardware_id": "abc123...",
+        "plan_type": "basic" or "pro",
+        "duration_days": 30,
         "admin_key": "your_admin_secret_key"
     }
     """
     try:
         data = request.get_json()
         email = data.get('email', '').strip()
+        user_name = data.get('user_name', '').strip()
+        hardware_id = data.get('hardware_id', '').strip()
         plan_type = data.get('plan_type', '').strip().lower()
+        duration_days = int(data.get('duration_days', 30))
         admin_key = data.get('admin_key', '').strip()
 
         # Simple admin key check (in production, use environment variable)
-        ADMIN_KEY = "CFPRO_ADMIN_2024_SECRET"  # TODO: Move to environment variable
+        ADMIN_KEY = os.getenv('ADMIN_KEY', 'ONESOUL_ADMIN_2025')  # TODO: Move to environment variable
 
         if admin_key != ADMIN_KEY:
             return jsonify({'success': False, 'message': 'Unauthorized'}), 401
 
-        if not email or not plan_type:
-            return jsonify({'success': False, 'message': 'Email and plan type are required'}), 400
+        if not email or not plan_type or not hardware_id:
+            return jsonify({'success': False, 'message': 'Email, plan type, and hardware_id are required'}), 400
 
-        if plan_type not in ['monthly', 'yearly', 'trial']:
-            return jsonify({'success': False, 'message': 'Invalid plan type. Must be: monthly, yearly, or trial'}), 400
+        if plan_type not in ['basic', 'pro']:
+            return jsonify({'success': False, 'message': 'Invalid plan type. Must be: basic or pro'}), 400
+
+        if duration_days <= 0:
+            return jsonify({'success': False, 'message': 'duration_days must be positive'}), 400
 
         # Calculate expiry date
         purchase_date = datetime.utcnow()
-        if plan_type == 'monthly':
-            expiry_date = purchase_date + timedelta(days=30)
-        elif plan_type == 'yearly':
-            expiry_date = purchase_date + timedelta(days=365)
-        elif plan_type == 'trial':
-            expiry_date = purchase_date + timedelta(days=7)
+        expiry_date = purchase_date + timedelta(days=duration_days)
 
-        # Generate license key
-        license_key = generate_license_key()
+        # Generate tamper-proof license token
+        expiry_iso = expiry_date.isoformat()
+        license_key = generate_license_token(email=email, hardware_id=hardware_id, plan_type=plan_type, expiry_iso=expiry_iso)
 
         # Create license
         new_license = License(
@@ -362,6 +459,8 @@ def generate_license():
             plan_type=plan_type,
             purchase_date=purchase_date,
             expiry_date=expiry_date,
+            hardware_id=hardware_id if hardware_id else None,
+            device_name=user_name if user_name else None,
             is_active=False,  # Not active until first activation
             is_suspended=False,
             activation_count=0

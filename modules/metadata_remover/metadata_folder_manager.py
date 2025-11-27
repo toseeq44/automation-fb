@@ -345,7 +345,7 @@ class MetadataPlanLimitChecker:
         if config_path is None:
             config_path = os.path.join(
                 os.path.expanduser('~'),
-                '.contentflow',
+                '.onesoul',
                 'metadata_plan_info.json'
             )
         self.config_path = config_path
@@ -459,7 +459,7 @@ class MetadataFolderMappingManager:
         if mappings_file is None:
             mappings_file = os.path.join(
                 os.path.expanduser('~'),
-                '.contentflow',
+                '.onesoul',
                 'metadata_folder_mappings.json'
             )
 

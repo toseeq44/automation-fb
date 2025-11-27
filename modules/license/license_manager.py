@@ -15,7 +15,7 @@ from .hardware_id import generate_hardware_id, get_device_name
 
 class LicenseManager:
     """
-    Manages license operations for the ContentFlow Pro application
+    Manages license operations for the OneSoul application
     """
 
     def __init__(self, server_url: str = "http://localhost:5000"):
@@ -26,7 +26,7 @@ class LicenseManager:
             server_url: URL of the license server
         """
         self.server_url = server_url.rstrip('/')
-        self.license_dir = Path.home() / ".contentflow"
+        self.license_dir = Path.home() / ".onesoul"
         self.license_file = self.license_dir / "license.dat"
         self.license_dir.mkdir(parents=True, exist_ok=True)
 
@@ -116,7 +116,7 @@ class LicenseManager:
             Tuple of (success: bool, message: str)
         """
         try:
-            license_key = license_key.strip().upper()
+            license_key = license_key.strip()
             hardware_id = generate_hardware_id()
             device_name = get_device_name()
 

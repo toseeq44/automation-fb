@@ -24,3 +24,8 @@ opencv-python>=4.8.0       # Image recognition for UI detection
 pyautogui>=0.9.54         # Mouse and keyboard automation
 pygetwindow>=0.0.9        # Window management (cross-platform)
 psutil>=5.9.0             # Process management
+
+
+Flask
+Flask-Limiter
+Flask-SQLAlchemy

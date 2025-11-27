@@ -1,5 +1,5 @@
 """
-Configuration Manager for ContentFlow Pro
+Configuration Manager for OneSoul
 Handles application settings and preferences
 """
 import json
@@ -27,10 +27,10 @@ class ConfigManager:
             "grace_period_days": 3
         },
         "paths": {
-            "downloads": str(Path.home() / "Downloads" / "ContentFlow"),
-            "edited_videos": str(Path.home() / "Videos" / "ContentFlow"),
-            "temp": str(Path.home() / ".contentflow" / "temp"),
-            "cache": str(Path.home() / ".contentflow" / "cache")
+            "downloads": str(Path.home() / "Downloads" / "OneSoul"),
+            "edited_videos": str(Path.home() / "Videos" / "OneSoul"),
+            "temp": str(Path.home() / ".onesoul" / "temp"),
+            "cache": str(Path.home() / ".onesoul" / "cache")
         },
         "rate_limiting": {
             "enabled": True,
@@ -72,7 +72,7 @@ class ConfigManager:
         },
         "folder_mapping": {
             "enabled": True,
-            "mappings_file": str(Path.home() / ".contentflow" / "folder_mappings.json"),
+            "mappings_file": str(Path.home() / ".onesoul" / "folder_mappings.json"),
             "auto_move_after_download": False,
             "default_daily_limit": 5,
             "default_move_condition": "empty_only",  # empty_only or always
@@ -86,12 +86,12 @@ class ConfigManager:
         Initialize Config Manager
 
         Args:
-            config_path: Path to config file (default: ~/.contentflow/config.json)
+            config_path: Path to config file (default: ~/.onesoul/config.json)
         """
         if config_path:
             self.config_path = config_path
         else:
-            config_dir = Path.home() / ".contentflow"
+            config_dir = Path.home() / ".onesoul"
             config_dir.mkdir(parents=True, exist_ok=True)
             self.config_path = config_dir / "config.json"
 

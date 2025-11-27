@@ -1,5 +1,5 @@
 """
-Logging System for ContentFlow Pro
+Logging System for OneSoul
 Provides comprehensive logging for debugging and monitoring
 """
 import logging
@@ -14,16 +14,16 @@ class ContentFlowLogger:
     Centralized logging system for the application
     """
 
-    def __init__(self, name: str = "ContentFlowPro", log_dir: Path = None):
+    def __init__(self, name: str = "OneSoul", log_dir: Path = None):
         """
         Initialize logger
 
         Args:
             name: Logger name
-            log_dir: Directory to store log files (default: ~/.contentflow/logs/)
+            log_dir: Directory to store log files (default: ~/.onesoul/logs/)
         """
         self.name = name
-        self.log_dir = log_dir or (Path.home() / ".contentflow" / "logs")
+        self.log_dir = log_dir or (Path.home() / ".onesoul" / "logs")
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
         self.logger = logging.getLogger(name)
@@ -45,7 +45,7 @@ class ContentFlowLogger:
         )
 
         # File Handler - Daily rotating logs
-        log_file = self.log_dir / f"contentflow_{datetime.now().strftime('%Y%m%d')}.log"
+        log_file = self.log_dir / f"onesoul_{datetime.now().strftime('%Y%m%d')}.log"
         file_handler = logging.FileHandler(log_file, encoding='utf-8')
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(detailed_formatter)
@@ -139,7 +139,7 @@ class ContentFlowLogger:
                 output_path = Path.home() / "Desktop" / f"contentflow_logs_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
 
             with open(output_path, 'w', encoding='utf-8') as outfile:
-                outfile.write(f"ContentFlow Pro - Log Export\n")
+                outfile.write(f"OneSoul - Log Export\n")
                 outfile.write(f"Exported: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                 outfile.write("=" * 80 + "\n\n")
 
@@ -178,7 +178,7 @@ def get_logger(name: str = "ContentFlowPro") -> ContentFlowLogger:
     global _global_logger
     if _global_logger is None:
         _global_logger = ContentFlowLogger(name)
-        _global_logger.info("ContentFlow Pro application started", "App")
+        _global_logger.info("OneSoul application started", "App")
         _global_logger.cleanup_old_logs(days=30)
     return _global_logger
 

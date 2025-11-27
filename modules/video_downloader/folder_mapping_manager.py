@@ -111,7 +111,7 @@ class FolderMapping:
 class FolderMappingManager:
     """Manages all folder mappings"""
 
-    DEFAULT_CONFIG_PATH = Path.home() / ".contentflow" / "folder_mappings.json"
+    DEFAULT_CONFIG_PATH = Path.home() / ".onesoul" / "folder_mappings.json"
 
     def __init__(self, config_path: Optional[Path] = None):
         self.config_path = config_path or self.DEFAULT_CONFIG_PATH

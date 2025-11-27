@@ -46,7 +46,7 @@ class LicenseInfoDialog(QDialog):
         is_valid, status_message, _ = self.license_manager.validate_license()
 
         if not license_info:
-            no_license_label = QLabel("⚠️ No License Found\n\nPlease activate a license to use ContentFlow Pro.")
+            no_license_label = QLabel("⚠️ No License Found\n\nPlease activate a license to use OneSoul.")
             no_license_label.setAlignment(Qt.AlignCenter)
             no_license_label.setStyleSheet("padding: 30px; font-size: 13px;")
             layout.addWidget(no_license_label)
@@ -189,7 +189,7 @@ class LicenseInfoDialog(QDialog):
             self,
             "Confirm Deactivation",
             "Are you sure you want to deactivate this license?\n\n"
-            "You will need to activate it again to use ContentFlow Pro.\n"
+            "You will need to activate it again to use OneSoul.\n"
             "You can then use it on a different device if needed.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No

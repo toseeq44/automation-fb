@@ -93,7 +93,7 @@ class VideoToolSuiteGUI(QMainWindow):
         self.update_license_status()
 
     def init_ui(self):
-        self.setWindowTitle("ContentFlow Pro - Video Automation Suite")
+        self.setWindowTitle("OneSoul - All Solution One Place")
         self.setGeometry(100, 100, 950, 750)
 
         self.stacked_widget = QStackedWidget()

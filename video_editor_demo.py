@@ -14,7 +14,7 @@ from modules.video_editor.utils import get_video_info, check_dependencies, print
 
 print("=" * 60)
 print("  VIDEO EDITOR - COMPREHENSIVE DEMO")
-print("  ContentFlow Pro - Complete Feature Showcase")
+print("  OneSoul - Complete Feature Showcase")
 print("=" * 60)
 print()
 
@@ -446,7 +446,7 @@ if __name__ == "__main__":
     print("  DEMO COMPLETE!")
     print("=" * 60)
     print("\nAll examples shown above demonstrate the full capabilities")
-    print("of the ContentFlow Pro Video Editor.")
+    print("of the OneSoul Video Editor.")
     print("\nTo use:")
     print("1. Install dependencies: pip install -r requirements.txt")
     print("2. Install FFmpeg: https://ffmpeg.org/download.html")

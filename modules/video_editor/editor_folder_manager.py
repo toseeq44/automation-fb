@@ -291,7 +291,7 @@ class PlanLimitChecker:
         if config_path is None:
             config_path = os.path.join(
                 os.path.expanduser('~'),
-                '.contentflow',
+                '.onesoul',
                 'editor_plan_info.json'
             )
         self.config_path = config_path
@@ -405,7 +405,7 @@ class EditorFolderMappingManager:
         if mappings_file is None:
             mappings_file = os.path.join(
                 os.path.expanduser('~'),
-                '.contentflow',
+                '.onesoul',
                 'editor_folder_mappings.json'
             )
 

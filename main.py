@@ -1,11 +1,11 @@
 """
 main.py
-Main application to launch ContentFlow Pro.
+Main application to launch OneSoul.
 """
 import sys
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
-# Choose UI version (set USE_MODERN_UI = True for new OneSoul Flow design)
+# Choose UI version (set USE_MODERN_UI = True for new OneSoul design)
 USE_MODERN_UI = True
 
 if USE_MODERN_UI:
@@ -27,15 +27,15 @@ except ImportError:
 
 
 def main():
-    """Launch the ContentFlow Pro application"""
+    """Launch the OneSoul application"""
     # Initialize application
     app = QApplication(sys.argv)
     app.setStyle('Fusion')  # Modern look across platforms
 
     # Initialize logger
-    logger = get_logger("ContentFlowPro")
+    logger = get_logger("OneSoul")
     logger.info("=" * 60, "App")
-    logger.info("ContentFlow Pro - Video Automation Suite", "App")
+    logger.info("OneSoul - All Solution One Place", "App")
     logger.info("Version 1.0.0", "App")
     logger.info("=" * 60, "App")
 
@@ -79,7 +79,7 @@ def main():
                 QMessageBox.warning(
                     None,
                     "License Required",
-                    "ContentFlow Pro requires a valid license to run.\n\n"
+                    "OneSoul requires a valid license to run.\n\n"
                     "Please activate a license or purchase one to continue."
                 )
                 sys.exit(0)
@@ -105,7 +105,7 @@ def main():
                 None,
                 "License Expiring Soon",
                 f"Your license will expire in {days_remaining} day(s).\n\n"
-                "Please renew your subscription to continue using ContentFlow Pro."
+                "Please renew your subscription to continue using OneSoul."
             )
 
     # Launch main window

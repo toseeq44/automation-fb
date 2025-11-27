@@ -53,7 +53,8 @@ class BulkProcessingDialog(QDialog):
     def init_ui(self):
         """Initialize UI"""
         self.setWindowTitle("Bulk Video Processing")
-        self.setMinimumSize(900, 700)
+        self.setMinimumSize(1000, 750)
+        self.resize(1100, 800)
         self.setModal(True)
 
         main_layout = QVBoxLayout()
@@ -208,6 +209,8 @@ class BulkProcessingDialog(QDialog):
         self.mapping_table.setHorizontalHeaderLabels([
             "Enabled", "Source Subfolder", "Destination Subfolder", "Videos"
         ])
+        self.mapping_table.setMinimumHeight(200)
+        self.mapping_table.setMaximumHeight(400)
         self.mapping_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.mapping_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
         self.mapping_table.setColumnWidth(0, 60)

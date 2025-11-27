@@ -44,7 +44,8 @@ class EditorProgressDialog(QDialog):
     def init_ui(self):
         """Initialize UI"""
         self.setWindowTitle("Batch Processing Progress")
-        self.setMinimumSize(700, 600)
+        self.setMinimumSize(800, 650)
+        self.resize(900, 700)
         self.setModal(True)
 
         # Prevent closing during processing
@@ -198,6 +199,7 @@ class EditorProgressDialog(QDialog):
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
         self.log_output.setFont(QFont('Consolas', 10))
+        self.log_output.setMinimumHeight(200)
         layout.addWidget(self.log_output)
 
         group.setLayout(layout)

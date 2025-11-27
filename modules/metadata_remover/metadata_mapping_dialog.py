@@ -229,7 +229,7 @@ class MetadataBulkProcessingDialog(QDialog):
         self.mapping_table.setFocusPolicy(Qt.NoFocus)
 
         # Set proper row height
-        self.mapping_table.verticalHeader().setDefaultSectionSize(45)
+        self.mapping_table.verticalHeader().setDefaultSectionSize(50)
         self.mapping_table.verticalHeader().setVisible(False)
 
         self.mapping_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
@@ -804,7 +804,7 @@ class MetadataBulkProcessingDialog(QDialog):
             self.mapping_table.setItem(row, 1, subfolder_item)
 
             # Set row height
-            self.mapping_table.setRowHeight(row, 45)
+            self.mapping_table.setRowHeight(row, 50)
 
             # Video count (read-only)
             video_count = self.source_info['subfolder_counts'].get(sm.source_subfolder, 0)
@@ -861,41 +861,85 @@ class MetadataBulkProcessingDialog(QDialog):
             self.mapping_table.setItem(row, 1, source_item)
 
             # Set row height
-            self.mapping_table.setRowHeight(row, 45)
+            self.mapping_table.setRowHeight(row, 50)
 
-            # Destination dropdown with proper sizing
-            dest_combo = QComboBox()
-            dest_combo.setMinimumWidth(250)  # Increased minimum width
-            dest_combo.setMaximumWidth(500)
-            dest_combo.setSizePolicy(dest_combo.sizePolicy().horizontalPolicy(), dest_combo.sizePolicy().verticalPolicy())
-            dest_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+            # Destination folder selection with browse button
+            dest_widget = QWidget()
+            dest_layout = QHBoxLayout(dest_widget)
+            dest_layout.setContentsMargins(4, 4, 4, 4)
+            dest_layout.setSpacing(6)
 
-            # Build unique items list
-            items = dest_subs.copy()
-            if sm.destination_subfolder and sm.destination_subfolder not in items:
-                items.append(sm.destination_subfolder)
-            items.append("-- Create New --")
+            # Line edit to show selected folder
+            dest_input = QLineEdit()
+            dest_input.setText(sm.destination_subfolder)
+            dest_input.setPlaceholderText("Select destination subfolder...")
+            dest_input.setReadOnly(True)
+            dest_input.setStyleSheet("""
+                QLineEdit {
+                    background-color: #2a2a2a;
+                    border: 1px solid #3a3a3a;
+                    border-radius: 6px;
+                    padding: 6px 10px;
+                    color: #e0e0e0;
+                    font-size: 13px;
+                }
+                QLineEdit:focus {
+                    border-color: #9c27b0;
+                }
+            """)
+            dest_layout.addWidget(dest_input, 1)
 
-            # Remove duplicates while preserving order
-            seen = set()
-            unique_items = []
-            for item in items:
-                if item not in seen:
-                    seen.add(item)
-                    unique_items.append(item)
-
-            dest_combo.addItems(unique_items)
-            dest_combo.setCurrentText(sm.destination_subfolder)
-            dest_combo.currentTextChanged.connect(
-                lambda text, r=row: self.on_dest_subfolder_changed(r, text)
+            # Browse button
+            browse_btn = QPushButton("📁")
+            browse_btn.setFixedSize(35, 35)
+            browse_btn.setToolTip("Browse for destination subfolder")
+            browse_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #9c27b0;
+                    color: #ffffff;
+                    border: none;
+                    border-radius: 6px;
+                    font-size: 16px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #ab47bc;
+                }
+                QPushButton:pressed {
+                    background-color: #7b1fa2;
+                }
+            """)
+            browse_btn.clicked.connect(
+                lambda checked, r=row, inp=dest_input: self.browse_destination_subfolder(r, inp)
             )
+            dest_layout.addWidget(browse_btn)
 
-            # Wrap combo in widget for better control
-            combo_widget = QWidget()
-            combo_layout = QHBoxLayout(combo_widget)
-            combo_layout.addWidget(dest_combo)
-            combo_layout.setContentsMargins(4, 4, 4, 4)
-            self.mapping_table.setCellWidget(row, 2, combo_widget)
+            # Create new folder button
+            new_btn = QPushButton("➕")
+            new_btn.setFixedSize(35, 35)
+            new_btn.setToolTip("Create new subfolder")
+            new_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #4caf50;
+                    color: #ffffff;
+                    border: none;
+                    border-radius: 6px;
+                    font-size: 16px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #66bb6a;
+                }
+                QPushButton:pressed {
+                    background-color: #388e3c;
+                }
+            """)
+            new_btn.clicked.connect(
+                lambda checked, r=row, inp=dest_input: self.create_new_subfolder(r, inp)
+            )
+            dest_layout.addWidget(new_btn)
+
+            self.mapping_table.setCellWidget(row, 2, dest_widget)
 
             # Video count (read-only)
             source_path = os.path.join(
@@ -914,29 +958,99 @@ class MetadataBulkProcessingDialog(QDialog):
             self.current_mapping.subfolder_mappings[row].enabled = state == Qt.Checked
             self.update_summary()
 
-    def on_dest_subfolder_changed(self, row: int, text: str):
-        """Handle destination subfolder change"""
-        if text == "-- Create New --":
-            from PyQt5.QtWidgets import QInputDialog
-            name, ok = QInputDialog.getText(
-                self, "Create New Folder",
-                "Enter new folder name:"
-            )
-            if ok and name:
-                if self.current_mapping and row < len(self.current_mapping.subfolder_mappings):
+    def browse_destination_subfolder(self, row: int, input_widget: QLineEdit):
+        """Browse for destination subfolder with user-friendly dialog"""
+        if not self.current_mapping:
+            return
+
+        # Create custom file dialog with proper sizing
+        dialog = QFileDialog(self)
+        dialog.setFileMode(QFileDialog.Directory)
+        dialog.setOption(QFileDialog.ShowDirsOnly, True)
+        dialog.setWindowTitle("Select Destination Subfolder")
+        dialog.setDirectory(self.current_mapping.destination_folder)
+
+        # Open as standalone window with maximize/minimize buttons
+        dialog.setWindowFlags(Qt.Window | Qt.WindowMaximizeButtonHint | Qt.WindowMinimizeButtonHint)
+        dialog.resize(900, 650)
+
+        if dialog.exec_():
+            folders = dialog.selectedFiles()
+            if folders:
+                selected_path = Path(folders[0])
+                dest_base = Path(self.current_mapping.destination_folder)
+
+                # Get relative path
+                try:
+                    relative_path = selected_path.relative_to(dest_base)
+                    subfolder_name = str(relative_path)
+
+                    # Update the input widget
+                    input_widget.setText(subfolder_name)
+
+                    # Update the mapping
+                    if row < len(self.current_mapping.subfolder_mappings):
+                        self.current_mapping.subfolder_mappings[row].destination_subfolder = subfolder_name
+                        self.update_summary()
+
+                except ValueError:
+                    # Selected folder is not within destination base
+                    QMessageBox.warning(
+                        self, "Invalid Selection",
+                        f"Please select a subfolder within:\n{dest_base}"
+                    )
+
+    def create_new_subfolder(self, row: int, input_widget: QLineEdit):
+        """Create new destination subfolder"""
+        if not self.current_mapping:
+            return
+
+        from PyQt5.QtWidgets import QInputDialog
+
+        name, ok = QInputDialog.getText(
+            self, "Create New Subfolder",
+            "Enter new subfolder name:",
+            QLineEdit.Normal,
+            ""
+        )
+
+        if ok and name:
+            # Clean the name
+            name = name.strip()
+            if not name:
+                return
+
+            # Create the folder
+            dest_base = Path(self.current_mapping.destination_folder)
+            new_folder_path = dest_base / name
+
+            try:
+                new_folder_path.mkdir(parents=True, exist_ok=True)
+
+                # Update the input widget
+                input_widget.setText(name)
+
+                # Update the mapping
+                if row < len(self.current_mapping.subfolder_mappings):
                     self.current_mapping.subfolder_mappings[row].destination_subfolder = name
 
-                combo = self.mapping_table.cellWidget(row, 2)
-                if combo:
-                    combo.blockSignals(True)
-                    combo.insertItem(combo.count() - 1, name)
-                    combo.setCurrentText(name)
-                    combo.blockSignals(False)
-        else:
-            if self.current_mapping and row < len(self.current_mapping.subfolder_mappings):
-                self.current_mapping.subfolder_mappings[row].destination_subfolder = text
+                # Refresh folder info
+                self.folder_info['dest_subfolders'] = MetadataFolderScanner.get_subfolders(
+                    self.current_mapping.destination_folder
+                )
 
-        self.update_summary()
+                self.update_summary()
+
+                QMessageBox.information(
+                    self, "Success",
+                    f"Created new subfolder: {name}"
+                )
+
+            except Exception as e:
+                QMessageBox.critical(
+                    self, "Error",
+                    f"Failed to create subfolder:\n{e}"
+                )
 
     def auto_match_folders(self):
         """Auto-match folders by name"""

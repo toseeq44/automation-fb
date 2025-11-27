@@ -440,7 +440,12 @@ class MetadataBulkProcessingDialog(QDialog):
                 border-radius: 6px;
                 padding: 8px 12px;
                 color: #e0e0e0;
-                min-width: 100px;
+                min-width: 150px;
+                min-height: 30px;
+            }
+            QComboBox:hover {
+                border-color: #9c27b0;
+                background-color: #353535;
             }
             QComboBox:disabled {
                 background-color: #1a1a1a;
@@ -449,12 +454,31 @@ class MetadataBulkProcessingDialog(QDialog):
             QComboBox::drop-down {
                 border: none;
                 width: 30px;
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 6px solid #e0e0e0;
+                margin-right: 8px;
             }
             QComboBox QAbstractItemView {
                 background-color: #2a2a2a;
                 border: 1px solid #3a3a3a;
                 color: #e0e0e0;
                 selection-background-color: #9c27b0;
+                selection-color: #ffffff;
+                padding: 5px;
+                min-width: 200px;
+            }
+            QComboBox QAbstractItemView::item {
+                min-height: 30px;
+                padding: 5px;
+            }
+            QComboBox QAbstractItemView::item:hover {
+                background-color: #353535;
             }
             QRadioButton, QCheckBox {
                 color: #e0e0e0;
@@ -504,21 +528,31 @@ class MetadataBulkProcessingDialog(QDialog):
 
     def browse_source(self):
         """Browse for source folder"""
-        folder = QFileDialog.getExistingDirectory(
-            self, "Select Source Folder",
-            os.path.expanduser("~/Desktop")
-        )
-        if folder:
-            self.source_input.setText(folder)
+        dialog = QFileDialog(self)
+        dialog.setFileMode(QFileDialog.Directory)
+        dialog.setOption(QFileDialog.ShowDirsOnly, True)
+        dialog.setWindowTitle("Select Source Folder")
+        dialog.setDirectory(os.path.expanduser("~/Desktop"))
+        dialog.resize(800, 600)  # Set proper dialog size
+
+        if dialog.exec_():
+            folders = dialog.selectedFiles()
+            if folders:
+                self.source_input.setText(folders[0])
 
     def browse_destination(self):
         """Browse for destination folder"""
-        folder = QFileDialog.getExistingDirectory(
-            self, "Select Destination Folder",
-            os.path.expanduser("~/Desktop")
-        )
-        if folder:
-            self.dest_input.setText(folder)
+        dialog = QFileDialog(self)
+        dialog.setFileMode(QFileDialog.Directory)
+        dialog.setOption(QFileDialog.ShowDirsOnly, True)
+        dialog.setWindowTitle("Select Destination Folder")
+        dialog.setDirectory(os.path.expanduser("~/Desktop"))
+        dialog.resize(800, 600)  # Set proper dialog size
+
+        if dialog.exec_():
+            folders = dialog.selectedFiles()
+            if folders:
+                self.dest_input.setText(folders[0])
 
     def on_same_as_source_changed(self, state):
         """Handle same as source checkbox change"""
@@ -757,6 +791,19 @@ class MetadataBulkProcessingDialog(QDialog):
             "Enabled", "Source Subfolder", "Destination Subfolder", "Videos"
         ])
 
+        # Reset column resize modes and widths
+        header = self.mapping_table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Interactive)  # Allow resizing
+        header.setSectionResizeMode(0, QHeaderView.Fixed)
+        self.mapping_table.setColumnWidth(0, 80)  # Enabled column
+        header.setSectionResizeMode(1, QHeaderView.Stretch)  # Source subfolder stretches
+        header.setSectionResizeMode(2, QHeaderView.Stretch)  # Destination subfolder stretches
+        header.setSectionResizeMode(3, QHeaderView.Fixed)
+        self.mapping_table.setColumnWidth(3, 80)  # Videos count column
+
+        # Set minimum section sizes for better display
+        header.setMinimumSectionSize(200)  # Ensure columns are at least 200px wide
+
         mappings = self.current_mapping.subfolder_mappings
         self.mapping_table.setRowCount(len(mappings))
 
@@ -778,25 +825,39 @@ class MetadataBulkProcessingDialog(QDialog):
             # Source subfolder
             self.mapping_table.setItem(row, 1, QTableWidgetItem(sm.source_subfolder))
 
-            # Destination dropdown
+            # Destination dropdown with proper sizing
             dest_combo = QComboBox()
-            dest_combo.addItems(dest_subs + [sm.destination_subfolder])
-            dest_combo.addItem("-- Create New --")
+            dest_combo.setMinimumWidth(250)  # Increased minimum width
+            dest_combo.setMaximumWidth(500)
+            dest_combo.setSizePolicy(dest_combo.sizePolicy().horizontalPolicy(), dest_combo.sizePolicy().verticalPolicy())
+            dest_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
 
-            # Remove duplicates
-            items = []
-            for i in range(dest_combo.count()):
-                text = dest_combo.itemText(i)
-                if text not in items:
-                    items.append(text)
-            dest_combo.clear()
-            dest_combo.addItems(items)
+            # Build unique items list
+            items = dest_subs.copy()
+            if sm.destination_subfolder and sm.destination_subfolder not in items:
+                items.append(sm.destination_subfolder)
+            items.append("-- Create New --")
 
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_items = []
+            for item in items:
+                if item not in seen:
+                    seen.add(item)
+                    unique_items.append(item)
+
+            dest_combo.addItems(unique_items)
             dest_combo.setCurrentText(sm.destination_subfolder)
             dest_combo.currentTextChanged.connect(
                 lambda text, r=row: self.on_dest_subfolder_changed(r, text)
             )
-            self.mapping_table.setCellWidget(row, 2, dest_combo)
+
+            # Wrap combo in widget for better control
+            combo_widget = QWidget()
+            combo_layout = QHBoxLayout(combo_widget)
+            combo_layout.addWidget(dest_combo)
+            combo_layout.setContentsMargins(4, 4, 4, 4)
+            self.mapping_table.setCellWidget(row, 2, combo_widget)
 
             # Video count
             source_path = os.path.join(

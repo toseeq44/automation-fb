@@ -8,3 +8,10 @@ __pycache__/
 *.pyc
 .DS_Store
 .idea/
+
+# Build and distribution
+build/
+dist/
+*.exe
+instance/
+*.db

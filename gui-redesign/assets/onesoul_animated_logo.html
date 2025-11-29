@@ -26,15 +26,15 @@
         svg {
             width: 100%;
             height: 100%;
-            max-width: 200px;
-            max-height: 120px;
+            max-width: 140px;
+            max-height: 100px;
+            overflow: visible;
         }
     </style>
 </head>
 <body>
     <div class="logo-container">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 130" preserveAspectRatio="xMidYMid meet">
-            <!-- Gradients and Filters -->
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 120" preserveAspectRatio="xMidYMid meet">
             <defs>
                 <!-- Cyan Gradient for Top Arc -->
                 <linearGradient id="cyanGradient" x1="0%" y1="0%" x2="100%" y2="0%">
@@ -84,20 +84,20 @@
                 </filter>
 
                 <!-- Infinity Path for Animation (invisible, just for motion) -->
-                <path id="infinityPath" d="M 30,50
-                    C 30,25 45,15 60,25
-                    C 75,35 85,45 100,50
-                    C 115,45 125,35 140,25
-                    C 155,15 170,25 170,50
-                    C 170,75 155,85 140,75
-                    C 125,65 115,55 100,50
-                    C 85,55 75,65 60,75
-                    C 45,85 30,75 30,50 Z"
+                <path id="infinityPath" d="M 12,44
+                    C 12,18 36,8 56,18
+                    C 72,27 82,36 90,44
+                    C 98,36 108,27 124,18
+                    C 144,8 168,18 168,44
+                    C 168,70 144,80 124,70
+                    C 108,61 98,52 90,44
+                    C 82,52 72,61 56,70
+                    C 36,80 12,70 12,44 Z"
                     fill="none" stroke="none"/>
             </defs>
 
             <!-- Top Arc (Cyan) -->
-            <path d="M 30,50 C 30,25 45,15 60,25 C 75,35 85,45 100,50 C 115,45 125,35 140,25 C 155,15 170,25 170,50"
+            <path d="M 12,44 C 12,18 36,8 56,18 C 72,27 82,36 90,44 C 98,36 108,27 124,18 C 144,8 168,18 168,44"
                 fill="none"
                 stroke="url(#cyanGradient)"
                 stroke-width="9"
@@ -107,7 +107,7 @@
             </path>
 
             <!-- Bottom Arc (Magenta) -->
-            <path d="M 30,50 C 30,75 45,85 60,75 C 75,65 85,55 100,50 C 115,55 125,65 140,75 C 155,85 170,75 170,50"
+            <path d="M 12,44 C 12,70 36,80 56,70 C 72,61 82,52 90,44 C 98,52 108,61 124,70 C 144,80 168,70 168,44"
                 fill="none"
                 stroke="url(#magentaGradient)"
                 stroke-width="9"
@@ -119,17 +119,20 @@
             <!-- Animated Golden Dot 1 (moves clockwise) -->
             <circle r="5" fill="#ffd700" filter="url(#goldenGlow)">
                 <animateMotion
-                    dur="4s"
+                    dur="7s"
                     repeatCount="indefinite"
-                    path="M 30,50
-                        C 30,25 45,15 60,25
-                        C 75,35 85,45 100,50
-                        C 115,45 125,35 140,25
-                        C 155,15 170,25 170,50
-                        C 170,75 155,85 140,75
-                        C 125,65 115,55 100,50
-                        C 85,55 75,65 60,75
-                        C 45,85 30,75 30,50 Z">
+                    calcMode="spline"
+                    keyTimes="0;0.45;0.5;0.55;1"
+                    keySplines="0.4 0 0.6 1; 0.2 0.9 0.4 1; 0.4 0 0.6 1; 0.4 0 0.6 1"
+                    path="M 12,44
+                        C 12,18 36,8 56,18
+                        C 72,27 82,36 90,44
+                        C 98,36 108,27 124,18
+                        C 144,8 168,18 168,44
+                        C 168,70 144,80 124,70
+                        C 108,61 98,52 90,44
+                        C 82,52 72,61 56,70
+                        C 36,80 12,70 12,44 Z">
                 </animateMotion>
                 <!-- Pulsing animation -->
                 <animate attributeName="r"
@@ -141,17 +144,20 @@
             <!-- Animated Golden Dot 2 (moves counter-clockwise, starts from opposite side) -->
             <circle r="5" fill="#ffd700" filter="url(#goldenGlow)">
                 <animateMotion
-                    dur="4s"
+                    dur="7s"
                     repeatCount="indefinite"
-                    path="M 170,50
-                        C 170,75 155,85 140,75
-                        C 125,65 115,55 100,50
-                        C 85,55 75,65 60,75
-                        C 45,85 30,75 30,50
-                        C 30,25 45,15 60,25
-                        C 75,35 85,45 100,50
-                        C 115,45 125,35 140,25
-                        C 155,15 170,25 170,50 Z">
+                    calcMode="spline"
+                    keyTimes="0;0.45;0.5;0.55;1"
+                    keySplines="0.4 0 0.6 1; 0.2 0.9 0.4 1; 0.4 0 0.6 1; 0.4 0 0.6 1"
+                    path="M 168,44
+                        C 168,70 144,80 124,70
+                        C 108,61 98,52 90,44
+                        C 82,52 72,61 56,70
+                        C 36,80 12,70 12,44
+                        C 12,18 36,8 56,18
+                        C 72,27 82,36 90,44
+                        C 98,36 108,27 124,18
+                        C 144,8 168,18 168,44 Z">
                 </animateMotion>
                 <!-- Pulsing animation with delay -->
                 <animate attributeName="r"
@@ -161,20 +167,48 @@
                     repeatCount="indefinite"/>
             </circle>
 
+            <!-- Highlight strokes (slight vertical float) -->
+            <path d="M 24,40 C 50,30 70,33 90,44"
+                fill="none"
+                stroke="#ffd700"
+                stroke-width="2.2"
+                stroke-linecap="round"
+                stroke-dasharray="52 32"
+                opacity="0.7">
+                <animate attributeName="d" dur="2s" repeatCount="indefinite"
+                    values="M 40,39 C 50,29 70,32 90,44;
+                            M 40,41 C 50,31 70,34 90,44;
+                            M 40,39 C 50,29 70,32 90,44" />
+            </path>
+            <path d="M 90,44 C 110,33 130,30 156,40"
+                fill="none"
+                stroke="#ffd700"
+                stroke-width="2.2"
+                stroke-linecap="round"
+                stroke-dasharray="52 32"
+                opacity="0.7">
+                <animate attributeName="d" dur="2s" repeatCount="indefinite"
+                    values="M 90,44 C 110,32 130,29 156,39;
+                            M 90,46 C 110,34 130,31 156,41;
+                            M 90,44 C 110,32 130,29 156,39" />
+            </path>
+
             <!-- Center Connection Nodes -->
-            <circle cx="30" cy="50" r="4" fill="#ffd700" filter="url(#goldenGlow)"/>
-            <circle cx="100" cy="50" r="3" fill="#ffd700" filter="url(#goldenGlow)"/>
-            <circle cx="170" cy="50" r="4" fill="#ffd700" filter="url(#goldenGlow)"/>
+            <circle cx="12" cy="44" r="4.3" fill="#ffd700" filter="url(#goldenGlow)"/>
+            <circle cx="90" cy="44" r="3.2" fill="#ffd700" filter="url(#goldenGlow)"/>
+            <circle cx="168" cy="44" r="4.3" fill="#ffd700" filter="url(#goldenGlow)"/>
 
             <!-- "ONESOUL" Text - Crisp HD without shadow -->
-            <text x="100" y="110"
+            <text x="90" y="105"
                 text-anchor="middle"
                 fill="#ffd700"
-                font-family="Arial Black, Arial, sans-serif"
+                font-family="Montserrat, 'Segoe UI', Arial, sans-serif"
                 font-size="22"
                 font-weight="900"
-                letter-spacing="6"
-                style="text-rendering: geometricPrecision;">
+                letter-spacing="3"
+                textLength="142"
+                lengthAdjust="spacingAndGlyphs"
+                style="text-rendering: geometricPrecision; filter: drop-shadow(0 0 18px rgba(255, 215, 0, 0.55)); stroke: #0a0e1a; stroke-width: 0.7; paint-order: stroke fill;">
                 ONESOUL
             </text>
 

@@ -10,9 +10,10 @@ from PyQt5.QtWidgets import (
     QGraphicsDropShadowEffect, QApplication
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve, QTimer, QSize, QUrl
-from PyQt5.QtGui import QFont, QColor
+from PyQt5.QtGui import QFont, QColor, QIcon
 from PyQt5.QtSvg import QSvgWidget
 import os
+import sys
 
 # Try to import QWebEngineView for animated logo
 try:
@@ -20,6 +21,16 @@ try:
     HAS_WEB_ENGINE = True
 except ImportError:
     HAS_WEB_ENGINE = False
+
+# Determine if running from PyInstaller bundle
+RUNNING_IN_BUNDLE = getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
+USE_ANIMATED_LOGO = True  # Set to False to force static SVG in the top bar
+
+
+def asset_path(filename):
+    """Return absolute path to an asset (works for dev + PyInstaller builds)."""
+    base_path = getattr(sys, "_MEIPASS", os.path.abspath(os.path.dirname(__file__)))
+    return os.path.join(base_path, "gui-redesign", "assets", filename)
 
 # Import existing module pages
 from modules.link_grabber.gui import LinkGrabberPage
@@ -485,11 +496,13 @@ class ModernTopBar(QWidget):
         layout.setContentsMargins(20, 5, 20, 5)  # Reduced vertical margins for compact look
 
         # Left: ANIMATED Logo (2x size, no text)
-        animated_logo_path = os.path.join("gui-redesign", "assets", "onesoul_animated_logo.html")
-        static_logo_path = os.path.join("gui-redesign", "assets", "onesoul_logo.svg")
+        animated_logo_path = asset_path("onesoul_animated_logo.html")
+        static_logo_path = asset_path("onesoul_logo.svg")
 
         # Try animated HTML logo first (if QWebEngineView available)
-        if HAS_WEB_ENGINE and os.path.exists(animated_logo_path):
+        allow_web_engine_logo = USE_ANIMATED_LOGO and HAS_WEB_ENGINE and os.path.exists(animated_logo_path)
+
+        if allow_web_engine_logo:
             self.logo = QWebEngineView()
             self.logo.setFixedSize(240, 145)  # Increased height for OneSoul text visibility
 
@@ -642,6 +655,7 @@ class VideoToolSuiteGUI(QMainWindow):
         self.setWindowTitle("OneSoul Flow - Video Automation Suite")
         self.setGeometry(100, 100, 1400, 900)
         self.setMinimumSize(1024, 768)
+        self.setWindowIcon(QIcon(asset_path("onesoul_logo.ico")))
 
         # Central widget
         central = QWidget()

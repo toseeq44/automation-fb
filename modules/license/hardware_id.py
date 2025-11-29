@@ -87,7 +87,8 @@ def get_disk_serial() -> str:
                     ['wmic', 'diskdrive', 'get', 'serialnumber'],
                     capture_output=True,
                     text=True,
-                    timeout=5
+                    timeout=5,
+                    creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == 'Windows' else 0
                 )
                 lines = result.stdout.strip().split('\n')
                 if len(lines) > 1:
@@ -140,7 +141,8 @@ def get_motherboard_info() -> str:
                     ['wmic', 'baseboard', 'get', 'serialnumber'],
                     capture_output=True,
                     text=True,
-                    timeout=5
+                    timeout=5,
+                    creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == 'Windows' else 0
                 )
                 lines = result.stdout.strip().split('\n')
                 if len(lines) > 1:

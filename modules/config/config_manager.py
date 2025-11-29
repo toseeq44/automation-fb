@@ -3,6 +3,8 @@ Configuration Manager for OneSoul
 Handles application settings and preferences
 """
 import json
+import sys
+import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 from datetime import datetime
@@ -22,9 +24,9 @@ class ConfigManager:
             "first_run": True
         },
         "license": {
-            "server_url": "http://localhost:5000",
+            "server_url": "https://constant-myth-pens-courts.trycloudflare.com",
             "last_check": None,
-            "grace_period_days": 3
+            "grace_period_days": 30
         },
         "paths": {
             "downloads": str(Path.home() / "Downloads" / "OneSoul"),
@@ -91,9 +93,21 @@ class ConfigManager:
         if config_path:
             self.config_path = config_path
         else:
-            config_dir = Path.home() / ".onesoul"
-            config_dir.mkdir(parents=True, exist_ok=True)
-            self.config_path = config_dir / "config.json"
+            # Determine application path (handles both frozen EXE and script)
+            if getattr(sys, 'frozen', False):
+                application_path = Path(sys.executable).parent
+            else:
+                application_path = Path.cwd()
+
+            # Check for portable config next to the executable
+            local_config = application_path / "config.json"
+            
+            if local_config.exists():
+                self.config_path = local_config
+            else:
+                config_dir = Path.home() / ".onesoul"
+                config_dir.mkdir(parents=True, exist_ok=True)
+                self.config_path = config_dir / "config.json"
 
         self.config = self._load_or_create_config()
 
@@ -114,7 +128,15 @@ class ConfigManager:
 
         except Exception as e:
             print(f"Error loading config: {e}. Using defaults.")
-            return self.DEFAULT_CONFIG.copy()
+            config = self.DEFAULT_CONFIG.copy()
+
+        # Allow overriding license server via environment variable
+        server_url_env = os.getenv("ONESOUL_LICENSE_URL")
+        if server_url_env:
+            config.setdefault("license", {})
+            config["license"]["server_url"] = server_url_env
+
+        return config
 
     def _merge_configs(self, default: Dict, loaded: Dict) -> Dict:
         """Merge loaded config with defaults (adds missing keys)"""

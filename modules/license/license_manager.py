@@ -34,8 +34,8 @@ class LicenseManager:
         self.encryption_key = self._generate_encryption_key()
         self.fernet = Fernet(self.encryption_key)
 
-        # Grace period for offline validation (3 days)
-        self.grace_period_days = 3
+        # Grace period for offline validation (30 days to allow offline usage after activation)
+        self.grace_period_days = 30
 
     def _generate_encryption_key(self) -> bytes:
         """Generate encryption key based on machine-specific data"""

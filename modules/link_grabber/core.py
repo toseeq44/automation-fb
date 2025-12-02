@@ -573,8 +573,8 @@ def _method_ytdlp_user_agent(url: str, platform_key: str, cookie_file: str = Non
     return []
 
 
-def _method_instaloader(url: str, platform_key: str, cookie_file: str = None) -> typing.List[dict]:
-    """METHOD 5: Instaloader (INSTAGRAM SPECIALIST)"""
+def _method_instaloader(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0) -> typing.List[dict]:
+    """METHOD 5: Instaloader (INSTAGRAM SPECIALIST) - No artificial limits"""
     if platform_key != 'instagram':
         return []
 
@@ -610,29 +610,43 @@ def _method_instaloader(url: str, platform_key: str, cookie_file: str = None) ->
                                 cookies_dict[parts[5]] = parts[6]
                 if cookies_dict:
                     loader.context._session.cookies.update(cookies_dict)
-            except Exception:
-                pass
+                    logging.info(f"✅ Loaded {len(cookies_dict)} cookies for Instagram")
+            except Exception as e:
+                logging.debug(f"Cookie loading failed: {e}")
 
         profile = instaloader.Profile.from_username(loader.context, username)
+        logging.info(f"📊 Instagram profile: @{username} ({profile.mediacount} posts)")
+
         entries = []
 
-        for post in profile.get_posts():
+        # Respect max_videos from GUI (0 = unlimited)
+        for idx, post in enumerate(profile.get_posts(), 1):
             entries.append({
                 'url': f"https://www.instagram.com/p/{post.shortcode}/",
                 'title': (post.caption or 'Instagram Post')[:100],
                 'date': post.date_utc.strftime('%Y%m%d') if post.date_utc else '00000000'
             })
-            if len(entries) >= 100:  # Limit for performance
+
+            # Progress logging every 50 posts
+            if idx % 50 == 0:
+                logging.info(f"📥 Extracted {idx} Instagram posts...")
+
+            # Only break if limit is specified (0 means unlimited)
+            if max_videos > 0 and len(entries) >= max_videos:
+                logging.info(f"✅ Reached Instagram limit of {max_videos} posts")
                 break
 
         # Sort by date (newest first)
         entries.sort(key=lambda x: x.get('date', '00000000'), reverse=True)
+        logging.info(f"✅ Successfully extracted {len(entries)} Instagram posts")
         return entries
 
     except ImportError:
-        logging.debug("Instaloader not installed")
+        logging.error("❌ Instaloader not installed. Install: pip install instaloader")
     except Exception as e:
-        logging.debug(f"Method 5 (instaloader) failed: {e}")
+        logging.error(f"❌ Method 5 (instaloader) failed: {e}")
+        import traceback
+        logging.debug(traceback.format_exc())
 
     return []
 
@@ -1008,7 +1022,7 @@ def extract_links_intelligent(
              platform_key in ['instagram', 'tiktok']),
 
             ("Method 5: Instaloader",
-             lambda: _method_instaloader(url, platform_key, cookie_file),
+             lambda: _method_instaloader(url, platform_key, cookie_file, max_videos),
              platform_key == 'instagram'),
 
             ("Method 7: Playwright",

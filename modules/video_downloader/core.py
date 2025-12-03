@@ -197,7 +197,8 @@ class VideoDownloaderThread(QThread):
 
     def get_cookie_file(self, url, source_folder=None):
         """Return the most relevant cookies file for the given URL."""
-
+        # IMPROVED: Returns first valid cookie (single cookie for backward compatibility)
+        # But also stores all valid cookies in self._all_cookie_files for fallback
         try:
             candidates = []
             platform = _detect_platform(url)
@@ -239,12 +240,22 @@ class VideoDownloaderThread(QThread):
             if desktop_cookie not in candidates:
                 candidates.append(desktop_cookie)
 
+            # IMPROVED: Store ALL valid cookie files for fallback attempts
+            valid_cookies = []
             for candidate in candidates:
                 try:
                     if candidate and candidate.exists() and candidate.stat().st_size > 10:
-                        return str(candidate)
+                        valid_cookies.append(str(candidate))
                 except Exception:
                     continue
+
+            # Store for fallback use
+            self._all_cookie_files = valid_cookies
+
+            # Return first valid cookie (backward compatible)
+            if valid_cookies:
+                return valid_cookies[0]
+
         except Exception:
             pass
         return None
@@ -300,48 +311,84 @@ class VideoDownloaderThread(QThread):
 
             from datetime import datetime
             start_time = datetime.now()
-            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] 🎵 Method 2: TikTok Special")
+            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] 🎵 Method 2: TikTok Special (No Watermark)")
 
-            # Try simple format first (avoids format selection errors)
-            tiktok_formats = ['best', 'worst', 'bestvideo+bestaudio/best']
+            # IMPROVED: Prioritize watermark-free formats
+            tiktok_formats = [
+                ('http-264-hd-1', '🎉 HD No Watermark'),
+                ('http-264-hd-0', '⚠️ HD With Watermark'),
+                ('best[ext=mp4][height<=1080]', 'Best MP4 1080p'),
+                ('bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best', 'Best Video+Audio'),
+                ('best', 'Best Available'),
+            ]
 
-            for i, fmt in enumerate(tiktok_formats, 1):
-                try:
-                    self.progress.emit(f"   🔄 Attempt {i}/{len(tiktok_formats)} (format: {fmt})")
+            # Try all available cookies if first fails
+            cookie_files_to_try = []
+            if cookie_file:
+                cookie_files_to_try.append(cookie_file)
 
-                    cmd = [
-                        'yt-dlp',
-                        '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
-                        '-f', fmt,
-                        '--no-playlist',
-                        '--geo-bypass',
-                        '--user-agent', 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36',
-                        '--restrict-filenames',
-                        '--no-warnings',
-                        '--retries', str(self.max_retries),
-                    ]
+            # Add other available cookies as fallback
+            if hasattr(self, '_all_cookie_files'):
+                for cf in self._all_cookie_files:
+                    if cf and cf not in cookie_files_to_try:
+                        cookie_files_to_try.append(cf)
 
-                    if cookie_file:
-                        cmd.extend(['--cookies', cookie_file])
+            # If no cookies, try without
+            if not cookie_files_to_try:
+                cookie_files_to_try.append(None)
 
-                    cmd.append(url)
+            for cookie_attempt_idx, current_cookie in enumerate(cookie_files_to_try, 1):
+                if cookie_attempt_idx > 1:
+                    self.progress.emit(f"   🔄 Trying alternate cookies ({cookie_attempt_idx}/{len(cookie_files_to_try)})")
+                    if current_cookie:
+                        self.progress.emit(f"   🍪 Using: {Path(current_cookie).name}")
 
-                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, encoding='utf-8', errors='replace')
+                for i, (fmt, desc) in enumerate(tiktok_formats, 1):
+                    try:
+                        self.progress.emit(f"   🔄 Format {i}/{len(tiktok_formats)}: {desc}")
 
-                    if result.returncode == 0:
-                        elapsed = (datetime.now() - start_time).total_seconds()
-                        self.progress.emit(f"   ✅ SUCCESS in {elapsed:.1f}s")
-                        return True
-                    else:
-                        error_snippet = result.stderr[:150] if result.stderr else "Unknown"
-                        self.progress.emit(f"   ❌ Failed: {error_snippet}")
+                        cmd = [
+                            'yt-dlp',
+                            '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
+                            '-f', fmt,
+                            '--no-playlist',
+                            '--geo-bypass',
+                            '--user-agent', 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36',
+                            '--restrict-filenames',
+                            '--no-warnings',
+                            '--retries', str(self.max_retries),
+                        ]
 
-                except Exception as e:
-                    self.progress.emit(f"   ❌ Attempt {i} error: {str(e)[:50]}")
-                    continue
+                        if current_cookie:
+                            cmd.extend(['--cookies', current_cookie])
+
+                        cmd.append(url)
+
+                        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, encoding='utf-8', errors='replace')
+
+                        if result.returncode == 0:
+                            elapsed = (datetime.now() - start_time).total_seconds()
+                            watermark_status = "🎉 NO WATERMARK!" if "hd-1" in fmt else ""
+                            self.progress.emit(f"   ✅ SUCCESS in {elapsed:.1f}s {watermark_status}")
+                            return True
+                        else:
+                            error_snippet = result.stderr[:100] if result.stderr else "Unknown"
+                            # Only show error on last attempt of last cookie
+                            if i == len(tiktok_formats) and cookie_attempt_idx == len(cookie_files_to_try):
+                                self.progress.emit(f"   ❌ Error: {error_snippet}")
+
+                    except Exception as e:
+                        # Only show error on last attempt
+                        if i == len(tiktok_formats) and cookie_attempt_idx == len(cookie_files_to_try):
+                            self.progress.emit(f"   ❌ Attempt error: {str(e)[:50]}")
+                        continue
 
             elapsed = (datetime.now() - start_time).total_seconds()
             self.progress.emit(f"   ⚠️ All attempts failed ({elapsed:.1f}s)")
+            self.progress.emit(f"   💡 Tips:")
+            self.progress.emit(f"      • Make sure cookies/tiktok.txt exists")
+            self.progress.emit(f"      • Video might be private or age-restricted")
+            self.progress.emit(f"      • Try adding TikTok cookies (same as Link Grabber)")
             return False
 
         except Exception as e:
@@ -405,36 +452,58 @@ class VideoDownloaderThread(QThread):
             start_time = datetime.now()
             self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] 📸 Instagram Enhanced Method")
 
-            # VALIDATE COOKIES FIRST (if cookie file provided)
-            cookie_is_valid = False
+            # IMPROVED: Collect ALL available cookie files to try
+            cookie_files_to_try = []
+
+            # Add primary cookie file
             if cookie_file and Path(cookie_file).exists():
-                self.progress.emit(f"   🔍 Validating Instagram cookies...")
+                cookie_files_to_try.append(cookie_file)
+
+            # Add other available cookies as fallback
+            if hasattr(self, '_all_cookie_files'):
+                for cf in self._all_cookie_files:
+                    if cf and cf not in cookie_files_to_try and Path(cf).exists():
+                        # Only add if file name suggests it might work for Instagram
+                        if 'instagram' in Path(cf).name.lower() or 'cookies.txt' in Path(cf).name.lower():
+                            cookie_files_to_try.append(cf)
+
+            total_cookies = len(cookie_files_to_try)
+            self.progress.emit(f"   🍪 Found {total_cookies} cookie file(s) to try")
+
+            # Try each cookie file
+            for cookie_idx, current_cookie_file in enumerate(cookie_files_to_try, 1):
+                if cookie_idx > 1:
+                    self.progress.emit(f"   🔄 Trying alternate cookie file ({cookie_idx}/{total_cookies})")
+
+                self.progress.emit(f"   🍪 Using: {Path(current_cookie_file).name}")
+
+                # Validate cookie
+                cookie_is_valid = False
                 validator = InstagramCookieValidator()
-                validation = validator.validate_cookie_file(cookie_file)
+                validation = validator.validate_cookie_file(current_cookie_file)
 
                 if validation['is_valid']:
-                    self.progress.emit(f"   🔑 Valid Instagram cookies detected!")
+                    self.progress.emit(f"   🔑 Valid Instagram cookies!")
                     cookie_is_valid = True
                 else:
-                    self.progress.emit(f"   ⚠️ Cookie validation FAILED:")
-                    for error in validation['errors'][:2]:  # Show first 2 errors
+                    self.progress.emit(f"   ⚠️ Cookie validation failed:")
+                    for error in validation['errors'][:1]:  # Show first error only
                         self.progress.emit(f"      • {error}")
 
-                    # Show quick fix suggestion
                     if validation['is_expired']:
-                        self.progress.emit(f"   💡 Quick Fix: Re-export cookies (they expired)")
+                        self.progress.emit(f"   💡 Cookies expired - trying next...")
                     elif not validation['has_sessionid']:
-                        self.progress.emit(f"   💡 Quick Fix: Make sure you're LOGGED IN when exporting")
+                        self.progress.emit(f"   💡 No sessionid found - trying next...")
 
-                    self.progress.emit(f"   📖 Type '/instagram-cookies' for detailed instructions")
+                    # Try next cookie if validation failed
+                    continue
 
-            # Try 1: With validated cookie file
-            if cookie_is_valid and cookie_file:
-                self.progress.emit(f"   🍪 Attempt 1: Using validated cookie file")
+                # Try download with validated cookie
+                self.progress.emit(f"   📥 Attempting download...")
                 cmd = [
                     'yt-dlp',
                     '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
-                    '--cookies', cookie_file,
+                    '--cookies', current_cookie_file,
                     '-f', 'best',
                     '--no-playlist',
                     '--restrict-filenames',
@@ -442,67 +511,42 @@ class VideoDownloaderThread(QThread):
                     url
                 ]
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, encoding='utf-8', errors='replace')
+
                 if result.returncode == 0:
                     elapsed = (datetime.now() - start_time).total_seconds()
-                    self.progress.emit(f"   ✅ SUCCESS with cookies ({elapsed:.1f}s)")
+                    self.progress.emit(f"   ✅ SUCCESS with {Path(current_cookie_file).name} ({elapsed:.1f}s)")
                     return True
                 else:
-                    error_snippet = result.stderr[:150] if result.stderr else "Unknown"
-                    self.progress.emit(f"   ❌ Cookie method failed: {error_snippet}")
+                    error_snippet = result.stderr[:100] if result.stderr else "Unknown"
+                    self.progress.emit(f"   ❌ Download failed: {error_snippet}")
 
-            # Try 2: Browser cookies (Chrome)
-            self.progress.emit(f"   🌐 Attempt 2: Trying browser cookies (Chrome)")
-            cmd = [
-                'yt-dlp',
-                '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
-                '--cookies-from-browser', 'chrome',
-                '-f', 'best',
-                '--no-playlist',
-                '--restrict-filenames',
-                '--no-warnings',
-                url
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-            if result.returncode == 0:
-                elapsed = (datetime.now() - start_time).total_seconds()
-                self.progress.emit(f"   ✅ SUCCESS with browser cookies ({elapsed:.1f}s)")
-                return True
-            else:
-                self.progress.emit(f"   ❌ Browser cookie method failed")
-
-            # Try 3: Firefox cookies
-            self.progress.emit(f"   🦊 Attempt 3: Trying Firefox cookies")
-            cmd[3] = 'firefox'  # Replace 'chrome' with 'firefox'
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-            if result.returncode == 0:
-                elapsed = (datetime.now() - start_time).total_seconds()
-                self.progress.emit(f"   ✅ SUCCESS with Firefox cookies ({elapsed:.1f}s)")
-                return True
-
+            # If all cookie files failed, show helpful error message
             elapsed = (datetime.now() - start_time).total_seconds()
-            self.progress.emit(f"   ❌ All Instagram attempts failed ({elapsed:.1f}s)")
+            self.progress.emit(f"   ❌ All cookie attempts failed ({elapsed:.1f}s)")
             self.progress.emit(f"   ")
-            self.progress.emit(f"   ╔══════════════════════════════════════════╗")
-            self.progress.emit(f"   ║  📸 INSTAGRAM AUTHENTICATION REQUIRED    ║")
-            self.progress.emit(f"   ╚══════════════════════════════════════════╝")
+            self.progress.emit(f"   ╔═══════════════════════════════════════════════╗")
+            self.progress.emit(f"   ║  📸 INSTAGRAM AUTHENTICATION REQUIRED         ║")
+            self.progress.emit(f"   ╚═══════════════════════════════════════════════╝")
             self.progress.emit(f"   ")
-            self.progress.emit(f"   🔧 TO FIX THIS ISSUE:")
+            self.progress.emit(f"   🔧 QUICK FIX:")
             self.progress.emit(f"   ")
-            self.progress.emit(f"   1️⃣ Install browser extension:")
-            self.progress.emit(f"      'Get cookies.txt LOCALLY' (Chrome/Firefox)")
+            self.progress.emit(f"   1️⃣ Same cookies work for Link Grabber & Downloader!")
+            self.progress.emit(f"      • If Link Grabber works, Downloader will too")
+            self.progress.emit(f"      • Export cookies to: cookies/instagram.txt")
             self.progress.emit(f"   ")
-            self.progress.emit(f"   2️⃣ Login to Instagram in browser")
-            self.progress.emit(f"      • Open instagram.com")
-            self.progress.emit(f"      • Login with username/password")
-            self.progress.emit(f"      • Wait for feed to load")
+            self.progress.emit(f"   2️⃣ How to export cookies:")
+            self.progress.emit(f"      a) Install browser extension:")
+            self.progress.emit(f"         'Get cookies.txt LOCALLY'")
+            self.progress.emit(f"      b) Login to Instagram in browser")
+            self.progress.emit(f"      c) Click extension → Export")
+            self.progress.emit(f"      d) Save as: cookies/instagram.txt")
             self.progress.emit(f"   ")
-            self.progress.emit(f"   3️⃣ Export cookies:")
-            self.progress.emit(f"      • Click extension icon")
-            self.progress.emit(f"      • Save as: cookies/instagram.txt")
+            self.progress.emit(f"   3️⃣ Make sure:")
+            self.progress.emit(f"      • You're logged into Instagram in browser")
+            self.progress.emit(f"      • Cookies are NOT expired (< 30 days old)")
+            self.progress.emit(f"      • File contains 'sessionid' cookie")
             self.progress.emit(f"   ")
-            self.progress.emit(f"   4️⃣ Try download again")
-            self.progress.emit(f"   ")
-            self.progress.emit(f"   📖 Full guide: https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp")
+            self.progress.emit(f"   💡 Checked {total_cookies} cookie file(s) - all invalid/expired")
             self.progress.emit(f"   ")
             return False
 

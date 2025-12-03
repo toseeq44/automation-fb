@@ -49,12 +49,16 @@ def _get_random_user_agent() -> str:
     ]
     return random.choice(user_agents)
 
-def _is_ip_block_error(stderr_text: str) -> bool:
+def _is_ip_block_error(error_text: str) -> bool:
     """Detect if error is due to IP blocking"""
-    if not stderr_text:
+    if not error_text:
         return False
 
-    error_text = stderr_text.lower()
+    # Remove ANSI color codes (e.g., [0;31m, [0m)
+    import re
+    clean_text = re.sub(r'\x1b\[[0-9;]*m', '', error_text)
+    clean_text = clean_text.lower()
+
     ip_block_indicators = [
         'ip address is blocked',
         'ip blocked',
@@ -66,7 +70,7 @@ def _is_ip_block_error(stderr_text: str) -> bool:
         'region',
     ]
 
-    return any(indicator in error_text for indicator in ip_block_indicators)
+    return any(indicator in clean_text for indicator in ip_block_indicators)
 
 # ===================== MAIN THREAD ====================
 class VideoDownloaderThread(QThread):
@@ -526,9 +530,17 @@ class VideoDownloaderThread(QThread):
                             'ip_blocked': False
                         }
                     else:
-                        last_error = result.stderr
+                        # Check BOTH stdout and stderr (yt-dlp can use either)
+                        error_output = (result.stderr or '') + (result.stdout or '')
+                        last_error = error_output
+
+                        # Show error on last attempt for debugging
+                        if i == len(formats) and cookie_attempt_idx == len(cookie_files):
+                            error_snippet = error_output[:150] if error_output else "Unknown error"
+                            self.progress.emit(f"   ❌ Error: {error_snippet}")
+
                         # Check if IP blocked
-                        if _is_ip_block_error(result.stderr):
+                        if _is_ip_block_error(error_output):
                             ip_blocked = True
 
                 except Exception as e:

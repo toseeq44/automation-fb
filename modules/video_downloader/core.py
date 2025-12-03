@@ -3,6 +3,8 @@
 import os
 import subprocess
 import re
+import time
+import random
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -33,6 +35,38 @@ def _detect_platform(url: str) -> str:
     if 'facebook.com' in url or 'fb.com' in url: return 'facebook'
     if 'twitter.com' in url or 'x.com' in url: return 'twitter'
     return 'other'
+
+def _get_random_user_agent() -> str:
+    """Get random user agent to avoid detection"""
+    user_agents = [
+        # Real mobile browsers
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+        'Mozilla/5.0 (Linux; Android 13; SM-S901B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
+        'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36',
+        # TikTok app user agents (more realistic)
+        'com.zhiliaoapp.musically/2023405020 (Linux; U; Android 13; en_US; Pixel 7; Build/TP1A.220624.014; Cronet/TTNetVersion:7d6d3f56 2023-03-22 QuicVersion:47946a6c 2023-01-18)',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    ]
+    return random.choice(user_agents)
+
+def _is_ip_block_error(stderr_text: str) -> bool:
+    """Detect if error is due to IP blocking"""
+    if not stderr_text:
+        return False
+
+    error_text = stderr_text.lower()
+    ip_block_indicators = [
+        'ip address is blocked',
+        'ip blocked',
+        'access denied',
+        '403 forbidden',
+        'not available in your country',
+        'video is not available',
+        'this video isn\'t available',
+        'region',
+    ]
+
+    return any(indicator in error_text for indicator in ip_block_indicators)
 
 # ===================== MAIN THREAD ====================
 class VideoDownloaderThread(QThread):
@@ -77,6 +111,13 @@ class VideoDownloaderThread(QThread):
             quality_pref = self.options.get('quality')
             format_override = quality_to_format(quality_pref)
         self.format_override = format_override
+
+        # Proxy configuration (for IP block bypass)
+        self.proxy_url = self.options.get('proxy_url', os.environ.get('HTTPS_PROXY', ''))
+
+        # Rate limiting (to avoid triggering IP blocks)
+        self.last_request_times = {}  # domain -> timestamp
+        self.rate_limit_delay = self.options.get('rate_limit_delay', 2.5)  # seconds between requests
 
         # Bulk mode support
         self.bulk_mode_data = bulk_mode_data
@@ -134,6 +175,23 @@ class VideoDownloaderThread(QThread):
 
         normalized = normalize_url(url)
         return normalized in self.downloaded_links
+
+    def _apply_rate_limit(self, domain: str):
+        """Apply rate limiting to avoid triggering IP blocks"""
+        if domain not in self.last_request_times:
+            self.last_request_times[domain] = time.time()
+            return
+
+        now = time.time()
+        elapsed = now - self.last_request_times[domain]
+
+        if elapsed < self.rate_limit_delay:
+            wait_time = self.rate_limit_delay - elapsed
+            if wait_time > 0.1:  # Only show message if waiting more than 100ms
+                self.progress.emit(f"   ⏳ Rate limiting: waiting {wait_time:.1f}s...")
+            time.sleep(wait_time)
+
+        self.last_request_times[domain] = time.time()
 
     # Removed old timestamp logic - now using history.json only
 
@@ -305,13 +363,24 @@ class VideoDownloaderThread(QThread):
             return False
 
     def _method2_tiktok_special(self, url, output_path, cookie_file=None):
+        """
+        Enhanced TikTok download with:
+        - IP block detection and retry
+        - Proxy support
+        - Better headers and user agent rotation
+        - Rate limiting
+        - Exponential backoff
+        """
         try:
             if 'tiktok.com' not in url.lower():
                 return False
 
             from datetime import datetime
             start_time = datetime.now()
-            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] 🎵 Method 2: TikTok Special (No Watermark)")
+            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] 🎵 TikTok Enhanced (Multi-Strategy)")
+
+            # Apply rate limiting
+            self._apply_rate_limit('tiktok.com')
 
             # IMPROVED: Prioritize watermark-free formats
             tiktok_formats = [
@@ -322,78 +391,182 @@ class VideoDownloaderThread(QThread):
                 ('best', 'Best Available'),
             ]
 
-            # Try all available cookies if first fails
+            # Collect all available cookies
             cookie_files_to_try = []
             if cookie_file:
                 cookie_files_to_try.append(cookie_file)
 
-            # Add other available cookies as fallback
             if hasattr(self, '_all_cookie_files'):
                 for cf in self._all_cookie_files:
                     if cf and cf not in cookie_files_to_try:
                         cookie_files_to_try.append(cf)
 
-            # If no cookies, try without
             if not cookie_files_to_try:
                 cookie_files_to_try.append(None)
 
-            for cookie_attempt_idx, current_cookie in enumerate(cookie_files_to_try, 1):
-                if cookie_attempt_idx > 1:
-                    self.progress.emit(f"   🔄 Trying alternate cookies ({cookie_attempt_idx}/{len(cookie_files_to_try)})")
-                    if current_cookie:
-                        self.progress.emit(f"   🍪 Using: {Path(current_cookie).name}")
+            # STRATEGY 1: Try direct download (fast, works 70% of time)
+            self.progress.emit(f"   📥 Strategy 1: Direct download")
+            result = self._try_tiktok_download(url, output_path, cookie_files_to_try,
+                                               tiktok_formats, use_proxy=False, retry_count=0)
+            if result['success']:
+                elapsed = (datetime.now() - start_time).total_seconds()
+                self.progress.emit(f"   ✅ SUCCESS ({elapsed:.1f}s) {result['message']}")
+                return True
 
-                for i, (fmt, desc) in enumerate(tiktok_formats, 1):
-                    try:
-                        self.progress.emit(f"   🔄 Format {i}/{len(tiktok_formats)}: {desc}")
+            # Check if IP blocked
+            ip_blocked = result.get('ip_blocked', False)
 
-                        cmd = [
-                            'yt-dlp',
-                            '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
-                            '-f', fmt,
-                            '--no-playlist',
-                            '--geo-bypass',
-                            '--user-agent', 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36',
-                            '--restrict-filenames',
-                            '--no-warnings',
-                            '--retries', str(self.max_retries),
-                        ]
+            # STRATEGY 2: Try with proxy (if available and IP blocked)
+            if ip_blocked and self.proxy_url:
+                self.progress.emit(f"   🌐 Strategy 2: Trying with proxy (IP block detected)")
+                time.sleep(2)  # Brief delay before retry
 
-                        if current_cookie:
-                            cmd.extend(['--cookies', current_cookie])
+                result = self._try_tiktok_download(url, output_path, cookie_files_to_try,
+                                                   tiktok_formats, use_proxy=True, retry_count=0)
+                if result['success']:
+                    elapsed = (datetime.now() - start_time).total_seconds()
+                    self.progress.emit(f"   ✅ SUCCESS via proxy ({elapsed:.1f}s) {result['message']}")
+                    return True
 
-                        cmd.append(url)
+            # STRATEGY 3: Retry with exponential backoff (if IP blocked)
+            if ip_blocked:
+                self.progress.emit(f"   🔄 Strategy 3: Retry with exponential backoff")
 
-                        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, encoding='utf-8', errors='replace')
+                for retry_attempt in range(2):  # Try 2 more times
+                    wait_time = 2 ** (retry_attempt + 1)  # 2s, 4s
+                    self.progress.emit(f"   ⏳ Waiting {wait_time}s before retry {retry_attempt + 1}/2...")
+                    time.sleep(wait_time)
 
-                        if result.returncode == 0:
-                            elapsed = (datetime.now() - start_time).total_seconds()
-                            watermark_status = "🎉 NO WATERMARK!" if "hd-1" in fmt else ""
-                            self.progress.emit(f"   ✅ SUCCESS in {elapsed:.1f}s {watermark_status}")
-                            return True
-                        else:
-                            error_snippet = result.stderr[:100] if result.stderr else "Unknown"
-                            # Only show error on last attempt of last cookie
-                            if i == len(tiktok_formats) and cookie_attempt_idx == len(cookie_files_to_try):
-                                self.progress.emit(f"   ❌ Error: {error_snippet}")
+                    # Try with enhanced headers and random user agent
+                    result = self._try_tiktok_download(url, output_path, cookie_files_to_try,
+                                                       tiktok_formats, use_proxy=bool(self.proxy_url),
+                                                       retry_count=retry_attempt + 1)
+                    if result['success']:
+                        elapsed = (datetime.now() - start_time).total_seconds()
+                        self.progress.emit(f"   ✅ SUCCESS on retry {retry_attempt + 1} ({elapsed:.1f}s) {result['message']}")
+                        return True
 
-                    except Exception as e:
-                        # Only show error on last attempt
-                        if i == len(tiktok_formats) and cookie_attempt_idx == len(cookie_files_to_try):
-                            self.progress.emit(f"   ❌ Attempt error: {str(e)[:50]}")
-                        continue
-
+            # ALL STRATEGIES FAILED
             elapsed = (datetime.now() - start_time).total_seconds()
-            self.progress.emit(f"   ⚠️ All attempts failed ({elapsed:.1f}s)")
-            self.progress.emit(f"   💡 Tips:")
-            self.progress.emit(f"      • Make sure cookies/tiktok.txt exists")
-            self.progress.emit(f"      • Video might be private or age-restricted")
-            self.progress.emit(f"      • Try adding TikTok cookies (same as Link Grabber)")
+            self.progress.emit(f"   ❌ All strategies failed ({elapsed:.1f}s)")
+
+            # Show specific error message
+            if ip_blocked:
+                self._show_tiktok_ip_block_help()
+            else:
+                self.progress.emit(f"   💡 Tips:")
+                self.progress.emit(f"      • Make sure cookies/tiktok.txt exists")
+                self.progress.emit(f"      • Video might be private or age-restricted")
+                self.progress.emit(f"      • Try adding TikTok cookies (same as Link Grabber)")
+
             return False
 
         except Exception as e:
-            self.progress.emit(f"   ❌ TikTok special error: {str(e)[:100]}")
+            self.progress.emit(f"   ❌ TikTok error: {str(e)[:100]}")
             return False
+
+    def _try_tiktok_download(self, url, output_path, cookie_files, formats, use_proxy=False, retry_count=0):
+        """
+        Try TikTok download with given configuration
+        Returns: {'success': bool, 'message': str, 'ip_blocked': bool}
+        """
+        last_error = ""
+        ip_blocked = False
+
+        for cookie_attempt_idx, current_cookie in enumerate(cookie_files, 1):
+            if cookie_attempt_idx > 1:
+                self.progress.emit(f"   🔄 Cookie {cookie_attempt_idx}/{len(cookie_files)}")
+                if current_cookie:
+                    self.progress.emit(f"   🍪 Using: {Path(current_cookie).name}")
+
+            for i, (fmt, desc) in enumerate(formats, 1):
+                try:
+                    # Only show format on first attempt to reduce noise
+                    if retry_count == 0 and cookie_attempt_idx == 1:
+                        self.progress.emit(f"   🔄 Format {i}/{len(formats)}: {desc}")
+
+                    # Build command with enhanced headers
+                    user_agent = _get_random_user_agent()
+
+                    cmd = [
+                        'yt-dlp',
+                        '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
+                        '-f', fmt,
+                        '--no-playlist',
+                        '--geo-bypass',
+                        '--user-agent', user_agent,
+                        '--restrict-filenames',
+                        '--no-warnings',
+                        '--retries', str(self.max_retries),
+                        # Enhanced headers for better bot evasion
+                        '--add-header', 'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                        '--add-header', 'Accept-Language:en-US,en;q=0.9',
+                        '--add-header', 'Accept-Encoding:gzip, deflate, br',
+                        '--add-header', 'Referer:https://www.tiktok.com/',
+                    ]
+
+                    # Add proxy if requested
+                    if use_proxy and self.proxy_url:
+                        cmd.extend(['--proxy', self.proxy_url])
+
+                    if current_cookie:
+                        cmd.extend(['--cookies', current_cookie])
+
+                    cmd.append(url)
+
+                    result = subprocess.run(cmd, capture_output=True, text=True,
+                                          timeout=300, encoding='utf-8', errors='replace')
+
+                    if result.returncode == 0:
+                        watermark_status = "🎉 NO WATERMARK!" if "hd-1" in fmt else ""
+                        proxy_status = " via proxy" if use_proxy else ""
+                        return {
+                            'success': True,
+                            'message': f"{watermark_status}{proxy_status}",
+                            'ip_blocked': False
+                        }
+                    else:
+                        last_error = result.stderr
+                        # Check if IP blocked
+                        if _is_ip_block_error(result.stderr):
+                            ip_blocked = True
+
+                except Exception as e:
+                    last_error = str(e)
+                    continue
+
+        return {
+            'success': False,
+            'message': last_error[:100] if last_error else "Unknown error",
+            'ip_blocked': ip_blocked
+        }
+
+    def _show_tiktok_ip_block_help(self):
+        """Show helpful message when IP block detected"""
+        self.progress.emit("")
+        self.progress.emit("   ╔═══════════════════════════════════════════════╗")
+        self.progress.emit("   ║  🚫 TIKTOK IP BLOCK DETECTED                  ║")
+        self.progress.emit("   ╚═══════════════════════════════════════════════╝")
+        self.progress.emit("")
+        self.progress.emit("   🔧 SOLUTIONS:")
+        self.progress.emit("")
+        self.progress.emit("   1️⃣ Use VPN or Proxy:")
+        self.progress.emit("      • Enable VPN on your computer")
+        self.progress.emit("      • Or set proxy: export HTTPS_PROXY=socks5://127.0.0.1:1080")
+        self.progress.emit("      • Try different proxy location")
+        self.progress.emit("")
+        self.progress.emit("   2️⃣ Wait and Retry:")
+        self.progress.emit("      • TikTok may have rate-limited your IP")
+        self.progress.emit("      • Wait 15-60 minutes and try again")
+        self.progress.emit("      • Temporary blocks usually expire")
+        self.progress.emit("")
+        self.progress.emit("   3️⃣ Check Video Availability:")
+        self.progress.emit("      • Video might be private/deleted")
+        self.progress.emit("      • Try opening in browser first")
+        self.progress.emit("      • Check if region-locked")
+        self.progress.emit("")
+        self.progress.emit("   💡 Quick fix: Switch to different network (WiFi ↔ Mobile data)")
+        self.progress.emit("")
 
     def _method3_optimized_ytdlp(self, url, output_path, cookie_file=None):
         try:

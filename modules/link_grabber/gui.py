@@ -15,6 +15,8 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 from pathlib import Path
 import pyperclip
+import shutil
+from datetime import datetime
 from .core import (
     LinkGrabberThread,
     BulkLinkGrabberThread,
@@ -24,6 +26,7 @@ from .core import (
     _create_creator_folder,
     _save_links_to_file
 )
+from .cookie_validator import EnhancedCookieValidator, validate_cookie_file
 
 class LinkGrabberPage(QWidget):
     def __init__(self, go_back_callback=None, shared_links=None, download_callback=None):
@@ -674,39 +677,133 @@ class LinkGrabberPage(QWidget):
             self.cookie_status.setStyleSheet("color: #E74C3C; font-size: 11px;")
 
     def save_cookies(self):
-        """Save cookies as master chrome_cookies.txt file"""
+        """Save cookies as master chrome_cookies.txt file with comprehensive validation"""
         cookies = self.cookie_text.toPlainText().strip()
         if not cookies:
             QMessageBox.warning(self, "Error", "No cookies to save!")
             return
 
-        if not self.validate_cookies(cookies):
-            QMessageBox.warning(
-                self, "Invalid Format",
-                "Cookies must be in Netscape format!\n\n"
-                "Expected: .domain.com  TRUE  /  TRUE  expiry  name  value\n\n"
-                "TIP: Use 'Get cookies.txt' Chrome extension"
+        # === STEP 1: Comprehensive Validation ===
+        self.log_area.append("🔍 Validating cookies...")
+        validator = EnhancedCookieValidator()
+        validation_result = validator.validate(cookies)
+
+        # Show validation results
+        if not validation_result.is_valid:
+            # Validation FAILED - show detailed error
+            error_details = validation_result.get_summary()
+            self.log_area.append(f"❌ Cookie validation failed!\n{error_details}")
+
+            # Show error dialog with detailed message
+            QMessageBox.critical(
+                self, "❌ Cookie Validation Failed",
+                f"{error_details}\n"
+                f"Please fix the errors and try again.\n\n"
+                f"TIP: Use 'Get cookies.txt' Chrome extension to export cookies in correct format."
             )
             return
 
-        # Save as master cookie file for all platforms
+        # Validation SUCCESSFUL - but check for warnings
+        if validation_result.warnings:
+            warning_msg = "⚠️ Cookies are valid but have some warnings:\n\n"
+            for i, warning in enumerate(validation_result.warnings, 1):
+                warning_msg += f"{i}. {warning}\n"
+            warning_msg += "\n✅ Do you want to save anyway?"
+
+            reply = QMessageBox.question(
+                self, "⚠️ Validation Warnings",
+                warning_msg,
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes
+            )
+
+            if reply == QMessageBox.No:
+                self.log_area.append("❌ Cookie save cancelled by user")
+                return
+
+        # Log validation success
+        self.log_area.append(f"✅ Validation passed: {validation_result.cookie_count} cookies, "
+                           f"{len(validation_result.platforms_detected)} platforms")
+
+        # === STEP 2: Backup Existing Cookies ===
         cookie_file = self.cookies_dir / "chrome_cookies.txt"
+        backup_created = False
+
+        if cookie_file.exists():
+            try:
+                # Create backup with timestamp
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup_file = self.cookies_dir / f"chrome_cookies_{timestamp}.txt.bak"
+
+                shutil.copy2(cookie_file, backup_file)
+                backup_created = True
+                self.log_area.append(f"💾 Backup created: {backup_file.name}")
+
+                # Keep only last 5 backups to save space
+                self._cleanup_old_backups()
+
+            except Exception as e:
+                # Backup failed - ask user if they want to continue
+                reply = QMessageBox.warning(
+                    self, "⚠️ Backup Failed",
+                    f"Failed to create backup: {str(e)}\n\n"
+                    f"Do you want to save anyway (existing cookies will be overwritten)?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No
+                )
+
+                if reply == QMessageBox.No:
+                    self.log_area.append("❌ Save cancelled - backup failed")
+                    return
+
+        # === STEP 3: Save New Cookies ===
         try:
             with open(cookie_file, 'w', encoding='utf-8') as f:
                 f.write(cookies)
 
-            # Detect platforms in cookies
+            self.log_area.append(f"✅ Cookies saved to: cookies/chrome_cookies.txt")
+
+            # Update UI status
             self.detect_cookie_platforms(cookies)
 
-            self.log_area.append(f"✅ Cookies saved to: cookies/chrome_cookies.txt")
-            QMessageBox.information(
-                self, "Success",
-                f"Cookies saved successfully!\n\n"
-                f"File: cookies/chrome_cookies.txt\n"
-                f"This master file will be used for ALL platforms automatically."
-            )
+            # === STEP 4: Show Detailed Success Message ===
+            success_msg = validation_result.get_summary()
+            success_msg += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            success_msg += f"📁 Saved to: cookies/chrome_cookies.txt\n"
+
+            if backup_created:
+                success_msg += f"💾 Previous cookies backed up\n"
+
+            success_msg += f"\n✅ These cookies will be used automatically for ALL link extraction operations."
+
+            QMessageBox.information(self, "✅ Cookies Saved Successfully", success_msg)
+
         except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to save cookies: {str(e)}")
+            # Save failed
+            self.log_area.append(f"❌ Failed to save cookies: {str(e)}")
+            QMessageBox.critical(
+                self, "❌ Save Failed",
+                f"Failed to save cookies:\n{str(e)}\n\n"
+                f"Check file permissions and try again."
+            )
+
+    def _cleanup_old_backups(self):
+        """Keep only last 5 cookie backups"""
+        try:
+            backup_files = sorted(
+                self.cookies_dir.glob("chrome_cookies_*.txt.bak"),
+                key=lambda x: x.stat().st_mtime,
+                reverse=True
+            )
+
+            # Remove old backups (keep only 5 most recent)
+            for old_backup in backup_files[5:]:
+                old_backup.unlink()
+                self.log_area.append(f"🗑️ Removed old backup: {old_backup.name}")
+
+        except Exception as e:
+            # Cleanup failure is not critical, just log it
+            self.log_area.append(f"⚠️ Backup cleanup warning: {str(e)}")
 
     def validate_cookies(self, cookies):
         """Validate Netscape cookie format"""

@@ -5,17 +5,24 @@ Best error-free approach for all platforms
 """
 
 import os
+import sys
 import json
 import requests
+from pathlib import Path
 from PyQt5.QtCore import QThread, pyqtSignal
 import yt_dlp
 from typing import Dict, List, Optional, Tuple
+
+# Import shared config utilities
+from modules.config.utils import get_config_path
 
 
 class APIManager:
     """Centralized API management for all platforms"""
     
     def __init__(self):
+        # Use shared config path utility for consistency with config_manager
+        self.config_path = get_config_path("api_config.json")
         self.api_keys = self.load_api_keys()
         self.session = requests.Session()
         self.session.headers.update({
@@ -24,7 +31,6 @@ class APIManager:
     
     def load_api_keys(self) -> Dict[str, str]:
         """Load API keys from config file"""
-        config_file = "api_config.json"
         default_keys = {
             "youtube_api_key": "",
             "instagram_access_token": "",
@@ -32,23 +38,31 @@ class APIManager:
             "facebook_access_token": ""
         }
         
-        if os.path.exists(config_file):
+        if self.config_path.exists():
             try:
-                with open(config_file, 'r') as f:
+                with open(self.config_path, 'r') as f:
                     return json.load(f)
-            except:
-                pass
+            except Exception as e:
+                print(f"Error loading API config: {e}")
         
         # Create default config
-        with open(config_file, 'w') as f:
-            json.dump(default_keys, f, indent=2)
+        try:
+            with open(self.config_path, 'w') as f:
+                json.dump(default_keys, f, indent=2)
+            print(f"Created default API config at: {self.config_path}")
+        except Exception as e:
+            print(f"Error creating API config: {e}")
         
         return default_keys
     
     def save_api_keys(self):
         """Save API keys to config file"""
-        with open("api_config.json", 'w') as f:
-            json.dump(self.api_keys, f, indent=2)
+        try:
+            with open(self.config_path, 'w') as f:
+                json.dump(self.api_keys, f, indent=2)
+            print(f"Saved API config to: {self.config_path}")
+        except Exception as e:
+            print(f"Error saving API config: {e}")
 
 
 class YouTubeAPI:

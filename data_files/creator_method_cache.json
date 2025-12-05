@@ -1566,5 +1566,275 @@
         "last_success": "2025-11-20T15:05:21.252341"
       }
     }
+  },
+  "instagram:sno_glass": {
+    "creator": "sno_glass",
+    "platform": "instagram",
+    "best_method": "Method 8: Selenium",
+    "total_extractions": 9,
+    "first_seen": "2025-12-05T19:50:48.315703",
+    "last_extraction": "2025-12-05T20:06:11.172256",
+    "performance_history": {
+      "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 1: yt-dlp --dump-json (with dates)": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 3: yt-dlp with retries": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 4: yt-dlp with user agent": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 6: gallery-dl": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 5: Instaloader": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 7: Playwright": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 8: Selenium": {
+        "success_count": 2,
+        "fail_count": 0,
+        "total_links": 24,
+        "total_time": 46.75357699394226,
+        "avg_links": 12.0,
+        "avg_time": 23.37678849697113,
+        "success_rate": 100.0,
+        "score": 197.7823211503029,
+        "last_error": null,
+        "last_success": "2025-12-05T20:06:11.172275"
+      }
+    }
+  },
+  "instagram:silvertostrands": {
+    "creator": "silvertostrands",
+    "platform": "instagram",
+    "best_method": null,
+    "total_extractions": 7,
+    "first_seen": "2025-12-05T20:06:44.576455",
+    "last_extraction": "2025-12-05T20:07:06.390595",
+    "performance_history": {
+      "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 1: yt-dlp --dump-json (with dates)": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 3: yt-dlp with retries": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 4: yt-dlp with user agent": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 6: gallery-dl": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 5: Instaloader": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 7: Playwright": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      }
+    }
+  },
+  "instagram:coppertist.wu": {
+    "creator": "coppertist.wu",
+    "platform": "instagram",
+    "best_method": null,
+    "total_extractions": 5,
+    "first_seen": "2025-12-05T20:25:12.706697",
+    "last_extraction": "2025-12-05T20:25:22.903490",
+    "performance_history": {
+      "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 1: yt-dlp --dump-json (with dates)": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 3: yt-dlp with retries": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 4: yt-dlp with user agent": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      },
+      "Method 6: gallery-dl": {
+        "success_count": 0,
+        "fail_count": 1,
+        "total_links": 0,
+        "total_time": 0.0,
+        "avg_links": 0.0,
+        "avg_time": 0.0,
+        "success_rate": 0.0,
+        "score": 0.0,
+        "last_error": "Unknown error",
+        "last_success": null
+      }
+    }
   }
 }

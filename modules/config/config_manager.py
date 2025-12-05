@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from datetime import datetime
 
+from .utils import get_config_directory
+
 
 class ConfigManager:
     """
@@ -88,26 +90,14 @@ class ConfigManager:
         Initialize Config Manager
 
         Args:
-            config_path: Path to config file (default: ~/.onesoul/config.json)
+            config_path: Path to config file (default: auto-determined based on running mode)
         """
         if config_path:
             self.config_path = config_path
         else:
-            # Determine application path (handles both frozen EXE and script)
-            if getattr(sys, 'frozen', False):
-                application_path = Path(sys.executable).parent
-            else:
-                application_path = Path.cwd()
-
-            # Check for portable config next to the executable
-            local_config = application_path / "config.json"
-            
-            if local_config.exists():
-                self.config_path = local_config
-            else:
-                config_dir = Path.home() / ".onesoul"
-                config_dir.mkdir(parents=True, exist_ok=True)
-                self.config_path = config_dir / "config.json"
+            # Use shared config directory utility
+            config_dir = get_config_directory()
+            self.config_path = config_dir / "config.json"
 
         self.config = self._load_or_create_config()
 

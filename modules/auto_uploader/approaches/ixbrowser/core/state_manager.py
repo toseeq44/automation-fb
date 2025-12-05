@@ -451,7 +451,19 @@ class StateManager:
         Get today's upload statistics.
 
         Returns:
-            Dict with today's stats: {date, bookmarks_uploaded, videos_uploaded, started_at}
+            Dict with today's stats: {
+                date,
+                bookmarks_uploaded,     # Count of unique bookmarks/pages used
+                videos_uploaded,        # Total videos uploaded
+                started_at,
+                bookmarks_usage: {      # Per-bookmark detailed tracking
+                    'BookmarkName': {
+                        'videos': count,
+                        'first_upload': timestamp,
+                        'last_upload': timestamp
+                    }
+                }
+            }
         """
         from datetime import datetime
 
@@ -463,11 +475,16 @@ class StateManager:
                 'date': datetime.now().strftime("%Y-%m-%d"),
                 'bookmarks_uploaded': 0,
                 'videos_uploaded': 0,
-                'started_at': time.strftime("%Y-%m-%d %H:%M:%S")
+                'started_at': time.strftime("%Y-%m-%d %H:%M:%S"),
+                'bookmarks_usage': {}  # NEW: Per-bookmark tracking
             }
             self.save_state(state)
 
         daily_stats = state['daily_stats']
+
+        # Backward compatibility: Add bookmarks_usage if missing
+        if 'bookmarks_usage' not in daily_stats:
+            daily_stats['bookmarks_usage'] = {}
 
         # Check if date changed (new day) - reset counter
         today = datetime.now().strftime("%Y-%m-%d")
@@ -477,35 +494,77 @@ class StateManager:
                 'date': today,
                 'bookmarks_uploaded': 0,
                 'videos_uploaded': 0,
-                'started_at': time.strftime("%Y-%m-%d %H:%M:%S")
+                'started_at': time.strftime("%Y-%m-%d %H:%M:%S"),
+                'bookmarks_usage': {}  # Reset per-bookmark tracking
             }
             state['daily_stats'] = daily_stats
             self.save_state(state)
 
         return daily_stats
 
-    def increment_daily_bookmarks(self, count: int = 1):
+    def increment_daily_bookmarks(self, count: int = 1, bookmark_name: str = None):
         """
-        Increment daily bookmark counter.
+        Increment daily bookmark counter with per-bookmark tracking.
 
         Args:
-            count: Number of bookmarks to add (default: 1)
+            count: Number of videos uploaded (default: 1)
+            bookmark_name: Name of the bookmark/page (optional for backward compatibility)
+
+        Behavior:
+            - If bookmark_name provided: Tracks unique bookmarks and per-bookmark video count
+            - If bookmark_name is None: Legacy behavior (simple increment)
+            - First upload to a bookmark: Increments bookmarks_uploaded counter
+            - Subsequent uploads to same bookmark: Only increments videos_uploaded counter
         """
         state = self.load_state()
 
         # Get current stats (will auto-reset if new day)
         daily_stats = self.get_daily_stats()
 
-        # Increment counter
-        daily_stats['bookmarks_uploaded'] += count
-        daily_stats['videos_uploaded'] += count  # Assuming 1 video per bookmark
-        daily_stats['last_updated'] = time.strftime("%Y-%m-%d %H:%M:%S")
+        current_timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+
+        if bookmark_name:
+            # NEW: Per-bookmark tracking with deduplication
+            bookmarks_usage = daily_stats.get('bookmarks_usage', {})
+
+            # Check if this bookmark was already used today
+            is_new_bookmark = bookmark_name not in bookmarks_usage
+
+            if is_new_bookmark:
+                # First upload to this bookmark today
+                bookmarks_usage[bookmark_name] = {
+                    'videos': count,
+                    'first_upload': current_timestamp,
+                    'last_upload': current_timestamp
+                }
+                # Increment unique bookmark counter
+                daily_stats['bookmarks_uploaded'] += 1
+                logger.info("[StateManager] ✓ New bookmark used today: '%s' (unique bookmarks: %d)",
+                           bookmark_name, daily_stats['bookmarks_uploaded'])
+            else:
+                # Bookmark already used today - just increment video count
+                bookmarks_usage[bookmark_name]['videos'] += count
+                bookmarks_usage[bookmark_name]['last_upload'] = current_timestamp
+                logger.debug("[StateManager] Updated existing bookmark '%s' (videos: %d)",
+                            bookmark_name, bookmarks_usage[bookmark_name]['videos'])
+
+            # Always increment total videos uploaded
+            daily_stats['videos_uploaded'] += count
+            daily_stats['bookmarks_usage'] = bookmarks_usage
+
+        else:
+            # LEGACY: Backward compatibility - simple increment without bookmark tracking
+            daily_stats['bookmarks_uploaded'] += count
+            daily_stats['videos_uploaded'] += count
+            logger.debug("[StateManager] Legacy increment (no bookmark name provided)")
+
+        daily_stats['last_updated'] = current_timestamp
 
         state['daily_stats'] = daily_stats
         self.save_state(state)
 
-        logger.debug("[StateManager] Daily stats updated: %d bookmarks today",
-                    daily_stats['bookmarks_uploaded'])
+        logger.debug("[StateManager] Daily stats: %d unique bookmarks, %d total videos",
+                    daily_stats['bookmarks_uploaded'], daily_stats['videos_uploaded'])
 
     def check_daily_limit(self, user_type: str = "basic", limit: int = 200) -> Dict[str, Any]:
         """
@@ -556,6 +615,70 @@ class StateManager:
             result['message'] = f'Daily usage: {current_count}/{limit} bookmarks ({remaining} remaining)'
 
         return result
+
+    def get_bookmark_usage_stats(self, bookmark_name: str = None) -> Dict[str, Any]:
+        """
+        Get usage statistics for specific bookmark or all bookmarks.
+
+        Args:
+            bookmark_name: Name of bookmark (if None, returns all)
+
+        Returns:
+            If bookmark_name provided: {'videos': int, 'first_upload': str, 'last_upload': str}
+            If None: Dict of all bookmarks with their stats
+        """
+        daily_stats = self.get_daily_stats()
+        bookmarks_usage = daily_stats.get('bookmarks_usage', {})
+
+        if bookmark_name:
+            return bookmarks_usage.get(bookmark_name, {
+                'videos': 0,
+                'first_upload': None,
+                'last_upload': None
+            })
+        else:
+            return bookmarks_usage
+
+    def get_bookmarks_used_today(self) -> list:
+        """
+        Get list of all bookmark names used today.
+
+        Returns:
+            List of bookmark names (strings)
+        """
+        daily_stats = self.get_daily_stats()
+        bookmarks_usage = daily_stats.get('bookmarks_usage', {})
+        return list(bookmarks_usage.keys())
+
+    def get_detailed_daily_summary(self) -> str:
+        """
+        Get detailed human-readable summary of today's uploads.
+
+        Returns:
+            Formatted string with statistics
+        """
+        daily_stats = self.get_daily_stats()
+        bookmarks_usage = daily_stats.get('bookmarks_usage', {})
+
+        summary = []
+        summary.append("=" * 60)
+        summary.append("DAILY UPLOAD SUMMARY")
+        summary.append("=" * 60)
+        summary.append(f"Date: {daily_stats.get('date')}")
+        summary.append(f"Unique Bookmarks/Pages Used: {daily_stats.get('bookmarks_uploaded', 0)}")
+        summary.append(f"Total Videos Uploaded: {daily_stats.get('videos_uploaded', 0)}")
+
+        if bookmarks_usage:
+            summary.append("\nPer-Bookmark Details:")
+            summary.append("-" * 60)
+            for bookmark_name, stats in sorted(bookmarks_usage.items()):
+                summary.append(f"  📄 {bookmark_name}:")
+                summary.append(f"     Videos: {stats['videos']}")
+                summary.append(f"     First Upload: {stats['first_upload']}")
+                summary.append(f"     Last Upload: {stats['last_upload']}")
+
+        summary.append("=" * 60)
+        return "\n".join(summary)
 
     # ═══════════════════════════════════════════════════════════
     # Multi-Profile State Management

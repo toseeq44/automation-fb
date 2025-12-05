@@ -945,8 +945,9 @@ class IXBrowserApproach(BaseApproach):
                                 logger.info("[IXApproach] ✓ Upload successful")
 
                                 # Increment daily counter after successful upload
-                                self._state_manager.increment_daily_bookmarks(count=1)
-                                logger.debug("[IXApproach] Daily bookmark counter incremented")
+                                # Pass bookmark name for per-bookmark tracking and deduplication
+                                self._state_manager.increment_daily_bookmarks(count=1, bookmark_name=folder_name)
+                                logger.debug("[IXApproach] Daily bookmark counter updated for '%s'", folder_name)
 
                                 # Brief pause between uploads
                                 logger.info("[IXApproach] Waiting 5 seconds before next upload...")

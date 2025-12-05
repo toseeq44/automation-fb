@@ -15,3 +15,13 @@ dist/
 *.exe
 instance/
 *.db
+
+# User settings and runtime data (don't commit)
+modules/auto_uploader/data_files/settings.json
+modules/auto_uploader/approaches/ixbrowser/data/bot_state.json
+modules/auto_uploader/approaches/ixbrowser/data/folder_progress.json
+data_files/creator_method_cache.json
+api_config.json
+
+# License data (don't commit user licenses)
+modules/license/.license

@@ -88,6 +88,25 @@ class EnhancedCookieValidator:
         'youtube': ['SID', 'HSID'],
     }
 
+    # Optional tokens (don't error if missing, only warn)
+    OPTIONAL_TOKENS = {
+        'instagram': ['rur', 'ds_user_id', 'mid'],
+        'facebook': ['datr', 'sb', 'fr'],
+        'tiktok': ['tt_csrf_token', 'tt_chain_token'],
+        'twitter': ['guest_id'],
+        'youtube': ['LOGIN_INFO', 'PREF'],
+    }
+
+    # Supported platform domains (only check these)
+    SUPPORTED_DOMAINS = [
+        '.instagram.com', 'instagram.com',
+        '.facebook.com', 'facebook.com',
+        '.tiktok.com', 'tiktok.com',
+        '.twitter.com', 'twitter.com',
+        '.x.com', 'x.com',
+        '.youtube.com', 'youtube.com',
+    ]
+
     # Minimum cookie counts for reasonable validation
     MIN_COOKIE_COUNT = 2
 
@@ -191,15 +210,17 @@ class EnhancedCookieValidator:
                 "This is recommended but not required."
             )
 
-        if valid_lines < self.MIN_COOKIE_COUNT:
-            self.result.add_warning(
-                f"Only {valid_lines} cookie(s) found. Minimum {self.MIN_COOKIE_COUNT} recommended for authentication."
-            )
+        # Note: We don't check MIN_COOKIE_COUNT here because we filter to
+        # only relevant platform cookies later. The actual count will be checked
+        # after parsing and filtering.
 
         return True
 
     def _parse_cookies(self, lines: List[str]) -> List[Dict[str, str]]:
-        """Parse cookie lines into structured format"""
+        """
+        Parse cookie lines into structured format.
+        Only returns cookies from SUPPORTED platforms to avoid checking irrelevant cookies.
+        """
         cookies = []
 
         for line_num, line in enumerate(lines, 1):
@@ -212,8 +233,20 @@ class EnhancedCookieValidator:
                 continue
 
             try:
+                domain = parts[0]
+
+                # FILTER: Only include cookies from supported platforms
+                # This prevents checking Gmail, Perplexity, and other irrelevant cookies
+                is_relevant = any(
+                    supported_domain in domain.lower()
+                    for supported_domain in self.SUPPORTED_DOMAINS
+                )
+
+                if not is_relevant:
+                    continue  # Skip irrelevant cookies
+
                 cookie = {
-                    'domain': parts[0],
+                    'domain': domain,
                     'flag': parts[1],
                     'path': parts[2],
                     'secure': parts[3],
@@ -302,18 +335,22 @@ class EnhancedCookieValidator:
                 )
 
     def _check_expiration(self, cookies: List[Dict[str, str]]):
-        """Check cookie expiration dates"""
+        """
+        Check cookie expiration dates.
+        Only checks REQUIRED cookies for authentication.
+        Handles session cookies (expiry=0) properly.
+        """
         now = datetime.now()
 
         # Track expiration by platform
         platform_expiration = {}
 
+        # Deduplicate cookies to avoid multiple errors for same cookie
+        seen_cookies = set()
+
         for cookie in cookies:
             try:
-                expiry_timestamp = int(cookie['expiry'])
-                expiry_date = datetime.fromtimestamp(expiry_timestamp)
-
-                # Determine platform
+                # Determine platform first
                 domain = cookie['domain'].lower()
                 platform = 'unknown'
                 if 'instagram' in domain:
@@ -326,6 +363,38 @@ class EnhancedCookieValidator:
                     platform = 'twitter'
                 elif 'youtube' in domain:
                     platform = 'youtube'
+
+                # Deduplicate: skip if we've seen this cookie before
+                cookie_key = f"{platform}_{cookie['name']}"
+                if cookie_key in seen_cookies:
+                    continue
+                seen_cookies.add(cookie_key)
+
+                # Only check expiration for REQUIRED authentication cookies
+                # Skip optional cookies (like rur, datr, etc.)
+                cookie_name = cookie['name']
+                is_required = False
+
+                if platform in self.PLATFORM_TOKENS:
+                    required_tokens = self.PLATFORM_TOKENS[platform]
+                    is_required = any(token in cookie_name for token in required_tokens)
+
+                # If not a required cookie, skip expiration check
+                if not is_required:
+                    continue
+
+                # Parse expiration
+                expiry_timestamp = int(cookie['expiry'])
+
+                # FIX: Session cookies (expiry=0) are VALID until browser closes
+                if expiry_timestamp == 0:
+                    # Session cookie - valid
+                    if platform not in platform_expiration:
+                        platform_expiration[platform] = "✅ Session cookie (valid)"
+                    continue
+
+                # Regular cookie with expiration date
+                expiry_date = datetime.fromtimestamp(expiry_timestamp)
 
                 # Check if expired
                 if expiry_date < now:
@@ -349,43 +418,60 @@ class EnhancedCookieValidator:
                                 platform_expiration[platform] = f"✅ Valid for {days_until_expiry} days"
 
             except (ValueError, TypeError):
-                self.result.add_warning(
-                    f"Invalid expiration date for cookie '{cookie['name']}' (line {cookie['line_number']})"
-                )
+                # Only warn if it's a required cookie
+                if is_required:
+                    self.result.add_warning(
+                        f"Invalid expiration date for cookie '{cookie['name']}' (line {cookie['line_number']})"
+                    )
 
         self.result.expiration_info = platform_expiration
 
     def _additional_validations(self, cookies: List[Dict[str, str]]):
-        """Additional validation checks"""
-        # Check for suspicious patterns
-        empty_values = [c for c in cookies if not c['value'].strip()]
-        if empty_values:
-            self.result.add_warning(
-                f"{len(empty_values)} cookie(s) have empty values"
-            )
+        """Additional validation checks - only for required authentication cookies"""
 
-        # Check for very short values (might be invalid)
-        short_values = [c for c in cookies if len(c['value']) < 5]
-        if short_values:
-            self.result.add_warning(
-                f"{len(short_values)} cookie(s) have suspiciously short values (< 5 characters)"
-            )
-
-        # Check sessionid/csrftoken length for Instagram (if present)
+        # Only check length for REQUIRED authentication cookies
         for cookie in cookies:
-            if 'instagram' in cookie['domain'].lower():
-                if cookie['name'] == 'sessionid':
-                    if len(cookie['value']) < 20:
+            domain = cookie['domain'].lower()
+            cookie_name = cookie['name']
+            cookie_value = cookie['value']
+
+            # Instagram validation
+            if 'instagram' in domain:
+                if cookie_name == 'sessionid':
+                    # Check if empty
+                    if not cookie_value.strip():
+                        self.result.add_error("Instagram sessionid is empty")
+                    # Check length (only if not empty)
+                    elif len(cookie_value) < 20:
                         self.result.add_error(
-                            f"Instagram sessionid is too short ({len(cookie['value'])} chars). "
+                            f"Instagram sessionid is too short ({len(cookie_value)} chars). "
                             f"Valid sessionid should be at least 20 characters."
                         )
-                elif cookie['name'] == 'csrftoken':
-                    if len(cookie['value']) < 10:
+                elif cookie_name == 'csrftoken':
+                    # Check if empty
+                    if not cookie_value.strip():
+                        self.result.add_error("Instagram csrftoken is empty")
+                    # Check length (only if not empty)
+                    elif len(cookie_value) < 10:
                         self.result.add_error(
-                            f"Instagram csrftoken is too short ({len(cookie['value'])} chars). "
+                            f"Instagram csrftoken is too short ({len(cookie_value)} chars). "
                             f"Valid csrftoken should be at least 10 characters."
                         )
+
+            # Facebook validation
+            elif 'facebook' in domain:
+                if cookie_name == 'c_user':
+                    if not cookie_value.strip():
+                        self.result.add_error("Facebook c_user is empty")
+                elif cookie_name == 'xs':
+                    if not cookie_value.strip():
+                        self.result.add_error("Facebook xs is empty")
+
+            # TikTok validation
+            elif 'tiktok' in domain:
+                if cookie_name == 'sessionid':
+                    if not cookie_value.strip():
+                        self.result.add_error("TikTok sessionid is empty")
 
 
 def validate_cookie_file(file_path: Path) -> CookieValidationResult:

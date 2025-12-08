@@ -5,6 +5,7 @@ Handles browser cookies for bypassing anti-bot protection
 
 import json
 import os
+import sys
 import pickle
 import requests
 from pathlib import Path
@@ -15,13 +16,25 @@ class CookiesManager:
     """Manages cookies for different social media platforms"""
     
     def __init__(self, project_root: str = None):
-        self.project_root = project_root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if project_root:
+            self.project_root = project_root
+        else:
+            # Determine correct root path (handles EXE vs Script)
+            if getattr(sys, 'frozen', False):
+                self.project_root = os.path.dirname(sys.executable)
+            else:
+                self.project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        
         self.cookies_dir = os.path.join(self.project_root, "cookies")
         self.config_dir = os.path.join(self.project_root, "config")
         
         # Ensure directories exist
-        os.makedirs(self.cookies_dir, exist_ok=True)
-        os.makedirs(self.config_dir, exist_ok=True)
+        try:
+            os.makedirs(self.cookies_dir, exist_ok=True)
+            os.makedirs(self.config_dir, exist_ok=True)
+        except Exception as e:
+            print(f"Warning: Could not create directories: {e}")
+
         
         # Platform-specific cookie files
         self.cookie_files = {

@@ -10,10 +10,17 @@ block_cipher = None
 a = Analysis(
     ['main.py'],
     pathex=['.'],
-    binaries=[],
+    binaries=[
+        ('cloudflared.exe', '.'),
+    ],
     datas=[
         # Helper images for auto uploader
         ('modules/auto_uploader/helper_images/*.png', 'modules/auto_uploader/helper_images'),
+        ('modules/auto_uploader/creator_shortcuts', 'modules/auto_uploader/creator_shortcuts'),
+        ('modules/auto_uploader/creators', 'modules/auto_uploader/creators'),
+        ('modules/auto_uploader/data', 'modules/auto_uploader/data'),
+        ('modules/auto_uploader/ix_data', 'modules/auto_uploader/ix_data'),
+
         
         # GUI assets (new design)
         ('gui-redesign/assets/*.html', 'gui-redesign/assets'),
@@ -22,6 +29,12 @@ a = Analysis(
         
         # Include presets folder if exists
         ('presets', 'presets'),
+
+        # FFMPEG
+        ('ffmpeg', 'ffmpeg'),
+
+        # Configs to bundle
+        ('api_config.json', '.'),
     ],
     hiddenimports=[
         # PyQt5 essentials

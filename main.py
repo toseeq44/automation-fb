@@ -26,8 +26,79 @@ except ImportError:
     DEV_CONFIG = {}
 
 
+import os
+import shutil
+from pathlib import Path
+
+def restore_bundled_configs():
+    """
+    Restore configuration files from the bundled PyInstaller temporary directory
+    to the executable's directory if they don't exist.
+    This allows the EXE to self-extract its default/bundled configs on a new PC.
+    """
+    # Only run if frozen (bundled as EXE)
+    if not getattr(sys, 'frozen', False):
+        return
+
+    # PyInstaller unpacks data to a temporary folder at sys._MEIPASS
+    base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+    base_path = Path(base_path)
+    
+    # Directory where the EXE is running
+    exe_dir = Path(sys.executable).parent
+    
+    # List of files/folders to restore
+    files_to_restore = [
+        "api_config.json",
+        "folder_mappings.json"
+    ]
+    
+    for filename in files_to_restore:
+        source = base_path / filename
+        target = exe_dir / filename
+        
+        # If source exists in bundle but target missing in exe dir, copy it
+        if source.exists() and not target.exists():
+            try:
+                shutil.copy2(source, target)
+                print(f"Restored bundled config: {filename}")
+            except Exception as e:
+                print(f"Failed to restore {filename}: {e}")
+    
+    # Also ensure cookies directory exists
+    cookies_dir = exe_dir / "cookies"
+    if not cookies_dir.exists():
+        try:
+            cookies_dir.mkdir(exist_ok=True)
+            print(f"Created cookies directory at: {cookies_dir}")
+        except Exception as e:
+            print(f"Failed to create cookies directory: {e}")
+
+    # Restore auto_uploader assets
+    # We need to copy modules/auto_uploader/creator_shortcuts etc.
+    auto_uploader_src = base_path / "modules" / "auto_uploader"
+    auto_uploader_dst = exe_dir / "modules" / "auto_uploader"
+    
+    # List of subfolders to ensure exist/copy
+    uploader_folders = ["creator_shortcuts", "creators", "data", "ix_data"]
+    
+    if auto_uploader_src.exists():
+        for folder in uploader_folders:
+            src = auto_uploader_src / folder
+            dst = auto_uploader_dst / folder
+            
+            if src.exists() and not dst.exists():
+                try:
+                    shutil.copytree(src, dst)
+                    print(f"Restored auto_uploader asset: {folder}")
+                except Exception as e:
+                    print(f"Failed to restore {folder}: {e}")
+
 def main():
     """Launch the OneSoul application"""
+    # Attempt to restore configs first
+    restore_bundled_configs()
+
     # Initialize application
     app = QApplication(sys.argv)
     app.setStyle('Fusion')  # Modern look across platforms

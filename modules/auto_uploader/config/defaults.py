@@ -2,7 +2,16 @@
 
 from pathlib import Path
 
-_BASE_PATH = Path(__file__).resolve().parents[1]
+import sys
+import os
+
+if getattr(sys, 'frozen', False):
+    # If frozen, usage depends on whether we want to read from internal bundle
+    # or external folder.
+    # For now, let's point to the external folder next to EXE to allow user customization
+    _BASE_PATH = Path(sys.executable).parent / "modules" / "auto_uploader"
+else:
+    _BASE_PATH = Path(__file__).resolve().parents[1]
 
 DEFAULT_CONFIG = {
     "automation": {

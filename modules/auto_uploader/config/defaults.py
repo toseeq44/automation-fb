@@ -18,10 +18,10 @@ DEFAULT_CONFIG = {
         "mode": "free_automation",
         "setup_completed": False,
         "paths": {
-            "creators_root": str((_BASE_PATH / "creators").resolve()),
-            "shortcuts_root": str((_BASE_PATH / "creator_shortcuts").resolve()),
-            "history_file": str((_BASE_PATH / "data" / "history.json").resolve()),
-            "ix_data_root": str((_BASE_PATH / "ix_data").resolve()),
+            "creators_root": str((_BASE_PATH / "creators").resolve(strict=False)),
+            "shortcuts_root": str((_BASE_PATH / "creator_shortcuts").resolve(strict=False)),
+            "history_file": str((_BASE_PATH / "data" / "history.json").resolve(strict=False)),
+            "ix_data_root": str((_BASE_PATH / "ix_data").resolve(strict=False)),
         },
         "credentials": {
             "gologin": {},

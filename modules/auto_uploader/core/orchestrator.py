@@ -219,8 +219,21 @@ class UploadOrchestrator:
         if not shortcuts_root.exists():
             missing.append(f"Shortcuts folder not found: {shortcuts_root}")
 
+        # Auto-create missing directories instead of crashing
         if missing:
-            raise ValueError("; ".join(missing))
+            logging.warning("⚠ Some folders were missing and will be created:")
+            for msg in missing:
+                logging.warning("  - %s", msg)
+
+        # Ensure directories exist
+        try:
+            creators_root.mkdir(parents=True, exist_ok=True)
+            shortcuts_root.mkdir(parents=True, exist_ok=True)
+            logging.info("✓ Verified/Created automation directories")
+        except Exception as e:
+            logging.error("✗ Failed to create directories: %s", e)
+            # Only fail if we absolutely cannot create the folders
+            raise ValueError(f"Could not create automation folders: {e}")
 
         history_file.parent.mkdir(parents=True, exist_ok=True)
         ix_data_root.mkdir(parents=True, exist_ok=True)

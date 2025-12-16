@@ -284,8 +284,18 @@ class VideoUploadHelper:
             logger.info("[Upload] Opening bookmark: %s", title)
             logger.info("[Upload]   URL: %s", url)
 
+            # CRITICAL: Validate driver session before navigation
+            try:
+                # Test if session is still valid
+                _ = self.driver.current_url
+                logger.debug("✓ Driver session valid")
+            except Exception as session_error:
+                logger.error("❌ Driver session invalid: %s", str(session_error))
+                logger.error("Browser may have been closed or disconnected")
+                return False
+
             self.driver.get(url)
-            time.sleep(5)  # Wait for page load (increased to 5 seconds)
+            time.sleep(3)  # Wait for page load
 
             # Verify loaded
             if "facebook.com" not in self.driver.current_url:
@@ -1223,8 +1233,8 @@ class VideoUploadHelper:
                                         self.state_manager.update_current_upload(progress=progress)
 
                                     if progress >= 100:
-                                        logger.info("✓ Upload reached 100%! Confirming...")
-                                        time.sleep(3)  # Extra wait to ensure Facebook processes fully
+                                        logger.info("✓ Upload reached 100%!")
+                                        time.sleep(1)  # Brief wait - prevent session timeout
                                         self.state_manager.update_current_upload(progress=100, status="completed")
                                         logger.info("✓✓✓ Upload COMPLETE!")
                                         return True
@@ -1253,8 +1263,8 @@ class VideoUploadHelper:
                                                 self.state_manager.update_current_upload(progress=progress)
 
                                             if progress >= 100:
-                                                logger.info("✓ Upload reached 100%! Confirming...")
-                                                time.sleep(3)  # Extra wait to ensure Facebook processes fully
+                                                logger.info("✓ Upload reached 100%!")
+                                                time.sleep(1)  # Brief wait - prevent session timeout
                                                 self.state_manager.update_current_upload(progress=100, status="completed")
                                                 logger.info("✓✓✓ Upload COMPLETE!")
                                                 return True
@@ -1288,8 +1298,8 @@ class VideoUploadHelper:
                                     self.state_manager.update_current_upload(progress=progress)
 
                                 if progress >= 100:
-                                    logger.info("✓ Upload reached 100%! Confirming...")
-                                    time.sleep(3)  # Extra wait to ensure Facebook processes fully
+                                    logger.info("✓ Upload reached 100%!")
+                                    time.sleep(1)  # Brief wait - prevent session timeout
                                     self.state_manager.update_current_upload(progress=100, status="completed")
                                     logger.info("✓✓✓ Upload COMPLETE!")
                                     return True
@@ -1307,7 +1317,7 @@ class VideoUploadHelper:
                     for indicator in complete_indicators:
                         if indicator.is_displayed():
                             logger.info("✓ Upload completed!")
-                            time.sleep(3)  # Extra wait to ensure Facebook processes fully
+                            time.sleep(1)  # Brief wait - prevent session timeout
                             self.state_manager.update_current_upload(progress=100, status="completed")
                             return True
 
@@ -1815,20 +1825,15 @@ class VideoUploadHelper:
                 logger.info("[Upload] ═══════════════════════════════════════════")
 
                 if self.click_publish_button(button):
-                    logger.info("[Upload] ✓ Publish button clicked successfully!")
-                    logger.info("[Upload] Waiting 5 seconds for Facebook to process publish...")
-                    time.sleep(5)  # Extra wait after publish to ensure processing completes
+                    logger.info("✓ Publish button clicked!")
+                    time.sleep(1)  # Minimal wait - prevent session timeout
                 else:
-                    logger.warning("[Upload] ⚠ Click failed, but continuing...")
+                    logger.warning("⚠ Click failed, but continuing...")
 
-            # Step 5: Wait for Facebook "bulk upload processing" notification
-            # Facebook shows this notification after publish button appears
-            # User's smart solution: Let it show, then navigate to next page (dismisses automatically)
+            # Step 5: Brief wait for Facebook (reduced to prevent session timeout)
             try:
                 from .config.upload_config import NOTIFICATION_CONFIG
-                post_publish_wait = NOTIFICATION_CONFIG.get('post_publish_wait', 5)  # Increased from 3 to 5
-
-                logger.info("[Upload] Waiting %d seconds for Facebook to finalize...", post_publish_wait)
+                post_publish_wait = NOTIFICATION_CONFIG.get('post_publish_wait', 1)  # Reduced to 1 second
 
                 time.sleep(post_publish_wait)
 
@@ -2202,6 +2207,8 @@ class VideoUploadHelper:
             True if upload successful
         """
         bookmark_title = bookmark['title']
+        video_name = "unknown"  # Initialize to prevent error if navigation fails
+        video_file = None
 
         # Phase 2: Check network before starting
         if not self.network_monitor.is_network_stable():

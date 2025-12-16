@@ -2224,22 +2224,30 @@ class VideoUploadHelper:
                 logger.info("[Upload] ═══════════════════════════════════════════")
 
                 # Step 1: Navigate to bookmark
+                import datetime
                 logger.info("🔗 Step 1: Navigating to bookmark...")
+                logger.info("[TIMESTAMP] Before navigation: %s", datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3])
+
                 if not self.navigate_to_bookmark(bookmark):
                     if attempt < max_retries:
                         logger.warning("⚠ Navigation failed, retrying...")
                         continue
                     raise Exception("Failed to navigate to bookmark")
+
+                logger.info("[TIMESTAMP] After navigation: %s", datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3])
                 logger.info("✓ Navigation successful")
 
                 # Step 2: Get video file FIRST (before clicking button!)
                 logger.info("📁 Step 2: Finding video in folder...")
+                logger.info("[TIMESTAMP] Finding video: %s", datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3])
+
                 video_file = self.get_first_video_from_folder(folder_path)
                 if not video_file:
                     raise Exception("No video found in folder")
 
                 video_name = os.path.splitext(os.path.basename(video_file))[0]
                 logger.info("✓ Video found: %s", video_name)
+                logger.info("[TIMESTAMP] Video found: %s", datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3])
 
                 # Phase 2: Track current upload in state
                 self.current_video = video_file
@@ -2258,13 +2266,20 @@ class VideoUploadHelper:
 
                 # Step 3: Wait for page to stabilize with star animation
                 logger.info("⏱️  Step 3: Waiting for page to stabilize...")
+                logger.info("[TIMESTAMP] Before stabilization wait: %s", datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3])
+
                 self.idle_mouse_activity(duration=3.0, base_radius=95)  # Give Facebook time to load all elements
 
+                logger.info("[TIMESTAMP] After stabilization wait: %s", datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3])
+
                 # Step 3-Priority2: Dismiss any popups/notifications before proceeding
+                logger.info("[TIMESTAMP] Before dismiss notifications: %s", datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3])
                 self.dismiss_notifications()
+                logger.info("[TIMESTAMP] After dismiss notifications: %s", datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3])
 
                 # Step 3a: Find file input element (BEFORE clicking "Add Videos" button)
                 logger.info("📤 Step 4: Pre-loading file (prevents dialog)...")
+                logger.info("[TIMESTAMP] Before file pre-load: %s", datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3])
 
                 file_inputs = self.driver.find_elements(By.XPATH, "//input[@type='file']")
                 file_preloaded = False
@@ -2285,7 +2300,9 @@ class VideoUploadHelper:
                                 pass
 
                             # Inject file path
+                            logger.info("[TIMESTAMP] Injecting file #%d: %s", idx, datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3])
                             file_input.send_keys(video_file)
+                            logger.info("[TIMESTAMP] File injected #%d: %s", idx, datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3])
                             time.sleep(0.5)
 
                             # Verify injection
@@ -2306,12 +2323,16 @@ class VideoUploadHelper:
 
                     if file_preloaded:
                         logger.info("✓ File pre-loaded successfully")
+                        logger.info("[TIMESTAMP] File pre-loaded: %s", datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3])
+                        logger.info("[TIMESTAMP] Waiting 2s for settle: %s", datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3])
                         self.idle_mouse_activity(duration=2.0, base_radius=85)  # Let it settle
+                        logger.info("[TIMESTAMP] After 2s settle: %s", datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3])
                 else:
                     file_preloaded = False
 
                 # Step 4: Now find and click "Add Videos" button
                 logger.info("🔘 Step 5: Finding 'Add Videos' button...")
+                logger.info("[TIMESTAMP] Finding button: %s", datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3])
 
                 # DEFENSIVE CHECK: Ensure window is ready before finding button
                 if not self.ensure_window_ready("finding Add Videos button"):

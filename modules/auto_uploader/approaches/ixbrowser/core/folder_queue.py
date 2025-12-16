@@ -146,6 +146,7 @@ class FolderQueueManager:
                 return []
 
             videos = []
+            seen_videos = set()  # Track unique video paths (prevent duplicates)
 
             # Search for videos with each extension
             for ext in self.video_extensions:
@@ -157,9 +158,14 @@ class FolderQueueManager:
                 if found:
                     logger.debug("[FolderQueue] Found %d file(s) with extension %s", len(found), ext)
 
-                videos.extend(found)
+                # Only add unique videos (prevent same file counted multiple times)
+                for video_path in found:
+                    if video_path not in seen_videos:
+                        videos.append(video_path)
+                        seen_videos.add(video_path)
 
             logger.debug("[FolderQueue] Total files found (all extensions): %d", len(videos))
+            logger.debug("[FolderQueue] Unique videos after deduplication: %d", len(videos))
 
             # Filter out 'uploaded videos' subfolder
             if exclude_uploaded:

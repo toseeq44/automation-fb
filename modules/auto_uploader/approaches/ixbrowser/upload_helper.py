@@ -2452,8 +2452,15 @@ class VideoUploadHelper:
                 logger.info("🚀 Step 8: Publishing video...")
                 publish_success = self.detect_and_hover_publish_button()
 
+                # CRITICAL: Only move/delete video if publish was successful!
                 if not publish_success:
-                    logger.warning("⚠ Publish button click failed, but video uploaded")
+                    logger.error("❌ PUBLISH FAILED - Video NOT moved/deleted")
+                    logger.error("   Video remains in folder for retry")
+                    logger.error("   Manual check needed!")
+                    raise Exception("Publish button click failed - video not published")
+
+                # SUCCESS! Publish completed, now safe to move/delete video
+                logger.info("✅ PUBLISH SUCCESSFUL - Processing video file...")
 
                 # Handle video file based on user preference (delete vs move)
                 delete_after_publish = self.settings.get_delete_after_publish()

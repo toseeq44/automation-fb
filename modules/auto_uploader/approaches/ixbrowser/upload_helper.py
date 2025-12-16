@@ -92,20 +92,43 @@ class VideoUploadHelper:
                     logger.debug("[Upload] Checking %d open windows...", len(all_windows))
 
                     for window in all_windows:
-                        # Skip if it's the main browser window
-                        if browser_title in window.title:
-                            continue
+                        window_title = window.title
 
-                        # Close common popup windows (file dialogs, notifications, etc.)
-                        unwanted_patterns = [
-                            'Open', 'Save', 'File Explorer', 'Choose File',
-                            'Select File', 'Browse', 'Upload', 'Dialog'
+                        # CRITICAL FIX: Skip if it's ANY browser-related window
+                        # Prevent accidentally closing the browser!
+                        browser_keywords = [
+                            browser_title,  # Exact page title
+                            'Chrome', 'Firefox', 'Edge', 'IXBrowser', 'Incogniton',
+                            'Facebook', 'Instagram', 'TikTok', 'Twitter',
+                            'Mozilla', 'Chromium', 'Brave', 'Opera', 'Safari'
                         ]
 
-                        for pattern in unwanted_patterns:
-                            if pattern.lower() in window.title.lower():
+                        # Skip this window if it contains any browser keyword
+                        is_browser = False
+                        for keyword in browser_keywords:
+                            if keyword and keyword.lower() in window_title.lower():
+                                is_browser = True
+                                logger.debug("[Upload] Skipping browser window: %s", window_title)
+                                break
+
+                        if is_browser:
+                            continue
+
+                        # STRICT: Only close windows that are DEFINITELY file dialogs
+                        # These are OS-level file picker dialogs
+                        file_dialog_patterns = [
+                            'Open',  # Windows "Open" dialog (exact match)
+                            'Save As',  # "Save As" dialog
+                            'Choose File to Upload',  # File upload dialog
+                            'Select File',  # File selection dialog
+                            'Browse for Folder',  # Folder browser
+                        ]
+
+                        # Only close if exact match or starts with pattern
+                        for pattern in file_dialog_patterns:
+                            if window_title.strip() == pattern or window_title.startswith(pattern):
                                 try:
-                                    logger.warning("[Upload] Closing unwanted window: %s", window.title)
+                                    logger.warning("[Upload] Closing file dialog: '%s'", window_title)
                                     window.close()
                                     closed_count += 1
                                     time.sleep(0.3)
@@ -125,17 +148,22 @@ class VideoUploadHelper:
             logger.debug("[Upload] Window cleanup error: %s", str(e))
             return 0
 
-    def enforce_browser_focus(self) -> bool:
+    def enforce_browser_focus(self, close_popups: bool = False) -> bool:
         """
         Aggressively enforce browser window focus.
         Ensures browser stays on top and active during upload.
+
+        Args:
+            close_popups: Whether to attempt closing popup windows (default: False for safety)
 
         Returns:
             True if successful
         """
         try:
-            # Close any unwanted popups first
-            self.close_unwanted_windows()
+            # OPTIONAL: Close unwanted popups (disabled by default for safety)
+            if close_popups:
+                self.close_unwanted_windows()
+                logger.debug("[Upload] Popup closing was requested")
 
             # Maximize and focus browser
             self.driver.maximize_window()

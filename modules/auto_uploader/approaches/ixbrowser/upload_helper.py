@@ -2454,10 +2454,18 @@ class VideoUploadHelper:
 
                 # CRITICAL: Only move/delete video if publish was successful!
                 if not publish_success:
-                    logger.error("❌ PUBLISH FAILED - Video NOT moved/deleted")
-                    logger.error("   Video remains in folder for retry")
-                    logger.error("   Manual check needed!")
-                    raise Exception("Publish button click failed - video not published")
+                    logger.warning("═══════════════════════════════════════════")
+                    logger.warning("⚠ PUBLISH BUTTON NOT CLICKED")
+                    logger.warning("   Video uploaded to Facebook (100%)")
+                    logger.warning("   But publish button failed")
+                    logger.warning("   Video STAYS in folder (will retry next run)")
+                    logger.warning("   Moving to next video...")
+                    logger.warning("═══════════════════════════════════════════")
+
+                    # Clear state and return success to move to next video
+                    # Don't throw exception - that causes retry and page reload!
+                    self.state_manager.clear_current_upload()
+                    return True  # Return success to avoid retry loop
 
                 # SUCCESS! Publish completed, now safe to move/delete video
                 logger.info("✅ PUBLISH SUCCESSFUL - Processing video file...")

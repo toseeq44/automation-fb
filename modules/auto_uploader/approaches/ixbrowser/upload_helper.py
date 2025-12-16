@@ -65,16 +65,6 @@ class VideoUploadHelper:
         self.current_bookmark = None
         self.current_attempt = 0
 
-        # Import mouse controller for user interference detection
-        try:
-            from ...browser.mouse_controller_enhanced import UserMovementDetector
-            self.user_detector = UserMovementDetector()
-            self.user_detector.start_monitoring()
-            logger.info("[Upload] ✓ User interference detection ENABLED")
-        except Exception as e:
-            self.user_detector = None
-            logger.warning("[Upload] User interference detection not available: %s", str(e))
-
         logger.info("[Upload] ✓ VideoUploadHelper initialized with Phase 2 robustness")
 
     def close_unwanted_windows(self) -> int:
@@ -1901,35 +1891,6 @@ class VideoUploadHelper:
             logger.error("[Upload] Error in detect_and_hover_publish_button: %s", str(e))
             return False
 
-    def _check_user_interference(self) -> None:
-        """
-        Check if user moved mouse and wait for them to finish.
-        Pauses bot mouse movement until user is idle.
-        """
-        if self.user_detector and self.user_detector.user_moved:
-            logger.warning("[Mouse] ⚠️ User interference detected! Pausing bot...")
-            self.user_detector.wait_for_user_idle(min_idle_time=1.0, max_idle_time=4.0)
-            logger.info("[Mouse] ✅ User idle, resuming bot movement...")
-
-    def _smart_move_to(self, x: int, y: int, duration: float = 0.1) -> None:
-        """
-        Smart mouse movement with user interference detection.
-
-        Args:
-            x: Target X coordinate
-            y: Target Y coordinate
-            duration: Movement duration
-        """
-        # Check for user interference before moving
-        self._check_user_interference()
-
-        # Perform movement
-        pyautogui.moveTo(x, y, duration=duration)
-
-        # Update detector position if available
-        if self.user_detector:
-            self.user_detector.update_bot_position(x, y)
-
     def idle_mouse_activity(self, duration: float = 3.0, base_radius: int = 100) -> None:
         """
         Move mouse with random human-like patterns during idle/wait periods.
@@ -1959,9 +1920,6 @@ class VideoUploadHelper:
                 if time.time() - start >= dur:
                     break
 
-                # CRITICAL: Check for user interference
-                self._check_user_interference()
-
                 # Decrease radius each round
                 current_radius = max_radius - (round_num * (max_radius - min_radius) // 10)
                 # Add wobble (±5%)
@@ -1973,10 +1931,6 @@ class VideoUploadHelper:
                 for i in range(num_points):
                     if time.time() - start >= dur:
                         return  # Incomplete circle OK
-
-                    # Check user interference every few moves
-                    if i % 5 == 0:
-                        self._check_user_interference()
 
                     angle = (360 / num_points) * i
                     # Add wobble to angle (±3°)
@@ -1992,10 +1946,6 @@ class VideoUploadHelper:
                     # Variable speed
                     move_dur = random.uniform(0.05, 0.15)
                     pyautogui.moveTo(x, y, duration=move_dur)
-
-                    # Update detector position
-                    if self.user_detector:
-                        self.user_detector.update_bot_position(x, y)
 
                     # Random pause (sometimes none)
                     if random.random() < 0.3:

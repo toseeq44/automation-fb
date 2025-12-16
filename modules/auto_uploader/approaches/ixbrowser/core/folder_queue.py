@@ -39,9 +39,22 @@ class FolderQueueManager:
         self.base_path = Path(base_path)
         self.state_manager = state_manager
 
-        # Video file extensions
-        self.video_extensions = ['*.mp4', '*.mov', '*.avi', '*.mkv', '*.wmv',
-                                 '*.MP4', '*.MOV', '*.AVI', '*.MKV', '*.WMV']
+        # Video file extensions (comprehensive list)
+        self.video_extensions = [
+            '*.mp4', '*.MP4',    # MP4
+            '*.webm', '*.WEBM',  # WebM (common for web videos)
+            '*.mov', '*.MOV',    # QuickTime
+            '*.avi', '*.AVI',    # AVI
+            '*.mkv', '*.MKV',    # Matroska
+            '*.wmv', '*.WMV',    # Windows Media
+            '*.flv', '*.FLV',    # Flash Video
+            '*.m4v', '*.M4V',    # iTunes Video
+            '*.mpg', '*.MPG',    # MPEG
+            '*.mpeg', '*.MPEG',  # MPEG
+            '*.3gp', '*.3GP',    # 3GPP
+            '*.ts', '*.TS',      # MPEG Transport Stream
+            '*.vob', '*.VOB',    # DVD Video
+        ]
 
         logger.info("[FolderQueue] Initialized with base_path: %s", self.base_path)
 
@@ -140,7 +153,13 @@ class FolderQueueManager:
                 found = glob.glob(pattern)
                 # CRITICAL FIX: Normalize all paths from glob to ensure consistency
                 found = [os.path.normpath(f) for f in found]
+
+                if found:
+                    logger.debug("[FolderQueue] Found %d file(s) with extension %s", len(found), ext)
+
                 videos.extend(found)
+
+            logger.debug("[FolderQueue] Total files found (all extensions): %d", len(videos))
 
             # Filter out 'uploaded videos' subfolder
             if exclude_uploaded:

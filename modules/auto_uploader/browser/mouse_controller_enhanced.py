@@ -8,6 +8,7 @@ Improvements:
 - Adaptive speed based on distance
 - Micro-jitter for realism
 - Smart resume after user interference
+- Screen sleep prevention (OS-level)
 """
 
 import logging
@@ -15,6 +16,7 @@ import time
 import random
 import math
 import threading
+import platform
 from typing import Tuple, Optional, Callable
 
 try:
@@ -25,6 +27,103 @@ except ImportError:
     logging.warning("pyautogui not available. Mouse control will not work.")
 
 logger = logging.getLogger(__name__)
+
+
+class ScreenWakePrevention:
+    """
+    Prevents screen from sleeping using OS-level API calls.
+    Uses ctypes to call Windows API for keeping display awake.
+    """
+
+    def __init__(self):
+        self.is_active = False
+        self.original_state = None
+
+        # Windows constants
+        self.ES_CONTINUOUS = 0x80000000
+        self.ES_DISPLAY_REQUIRED = 0x00000002
+        self.ES_SYSTEM_REQUIRED = 0x00000001
+
+    def prevent_sleep(self) -> bool:
+        """
+        Prevent screen and system from sleeping.
+
+        Returns:
+            True if successful
+        """
+        try:
+            if platform.system() == "Windows":
+                import ctypes
+
+                # Set thread execution state to prevent sleep
+                # ES_CONTINUOUS: Informs system that state being set should remain in effect
+                # ES_DISPLAY_REQUIRED: Forces display to stay on
+                # ES_SYSTEM_REQUIRED: Forces system to stay awake
+                result = ctypes.windll.kernel32.SetThreadExecutionState(
+                    self.ES_CONTINUOUS | self.ES_DISPLAY_REQUIRED | self.ES_SYSTEM_REQUIRED
+                )
+
+                if result:
+                    self.is_active = True
+                    logger.info("[ScreenWake] ✓ Screen sleep prevention ENABLED (OS-level)")
+                    logger.info("[ScreenWake] Display will stay awake until disabled")
+                    return True
+                else:
+                    logger.warning("[ScreenWake] ⚠ Failed to set execution state")
+                    return False
+
+            elif platform.system() == "Linux":
+                # Linux: Could use systemd-inhibit or xdg-screensaver
+                logger.info("[ScreenWake] Linux sleep prevention not implemented")
+                return False
+
+            else:
+                logger.info("[ScreenWake] Screen wake prevention not available for %s", platform.system())
+                return False
+
+        except Exception as e:
+            logger.error("[ScreenWake] Error preventing sleep: %s", str(e))
+            return False
+
+    def allow_sleep(self) -> bool:
+        """
+        Re-allow screen and system sleep (restore normal behavior).
+
+        Returns:
+            True if successful
+        """
+        try:
+            if platform.system() == "Windows" and self.is_active:
+                import ctypes
+
+                # Reset to normal (allow sleep)
+                result = ctypes.windll.kernel32.SetThreadExecutionState(
+                    self.ES_CONTINUOUS
+                )
+
+                if result:
+                    self.is_active = False
+                    logger.info("[ScreenWake] ✓ Screen sleep prevention DISABLED")
+                    logger.info("[ScreenWake] System can sleep normally now")
+                    return True
+                else:
+                    logger.warning("[ScreenWake] ⚠ Failed to reset execution state")
+                    return False
+
+            return True
+
+        except Exception as e:
+            logger.error("[ScreenWake] Error allowing sleep: %s", str(e))
+            return False
+
+    def __enter__(self):
+        """Context manager entry - prevent sleep"""
+        self.prevent_sleep()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - allow sleep"""
+        self.allow_sleep()
 
 
 class UserMovementDetector:
@@ -79,9 +178,14 @@ class UserMovementDetector:
                 time.sleep(0.1)
 
     def update_bot_position(self, x: int, y: int):
-        """Update last known bot position"""
+        """
+        Update last known bot position.
+
+        CRITICAL: Do NOT reset user_moved flag here!
+        Flag should only be reset in wait_for_user_idle() after user stops moving.
+        """
         self.last_bot_position = (x, y)
-        self.user_moved = False  # Reset flag
+        # REMOVED: self.user_moved = False  # ❌ BUG! Don't reset flag here!
 
     def wait_for_user_idle(self, min_idle_time: float = 1.0, max_idle_time: float = 4.0):
         """
@@ -127,23 +231,31 @@ class UserMovementDetector:
 class EnhancedMouseController:
     """Enhanced mouse controller with user detection and natural movements"""
 
-    def __init__(self, speed_factor: float = 0.6):
+    def __init__(self, speed_factor: float = 0.6, prevent_screen_sleep: bool = True):
         """
         Initialize enhanced mouse controller.
 
         Args:
             speed_factor: Speed multiplier (0.6 = slower/more natural, 1.0 = normal)
+            prevent_screen_sleep: Enable OS-level screen sleep prevention (default: True)
         """
         if not PYAUTOGUI_AVAILABLE:
             raise ImportError("pyautogui is required for mouse control")
 
         self.speed_factor = speed_factor
         self.user_detector = UserMovementDetector()
+        self.screen_wake = ScreenWakePrevention()
 
         pyautogui.FAILSAFE = True
         pyautogui.PAUSE = 0.01
 
+        # Automatically prevent screen sleep if enabled
+        if prevent_screen_sleep:
+            self.screen_wake.prevent_sleep()
+
         logger.debug("[MouseController] Initialized with speed_factor: %.2f", speed_factor)
+        logger.debug("[MouseController] Screen sleep prevention: %s",
+                    "ENABLED" if prevent_screen_sleep else "DISABLED")
 
     @staticmethod
     def ease_in_out_cubic(t: float) -> float:
@@ -215,8 +327,10 @@ class EnhancedMouseController:
             logger.debug("[Mouse] Moving from (%d,%d) to (%d,%d), distance=%.1fpx, duration=%.2fs",
                         current_x, current_y, x, y, distance, duration)
 
-            # Scale control point variance to distance (not fixed ±100px)
-            max_variance = min(100, int(distance * 0.25))  # Max 25% of distance
+            # FIXED: Reduced control point variance for smoother, less erratic curves
+            # OLD: max_variance = min(100, int(distance * 0.25))  # Too high! Caused erratic movement
+            # NEW: Reduced to 15% of distance, max 40px (much smoother)
+            max_variance = min(40, int(distance * 0.15))  # Max 15% of distance, capped at 40px
             control_x = (current_x + x) / 2 + random.randint(-max_variance, max_variance)
             control_y = (current_y + y) / 2 + random.randint(-max_variance, max_variance)
 
@@ -224,9 +338,11 @@ class EnhancedMouseController:
             if easing is None:
                 easing = self.ease_in_out_cubic
 
-            # Calculate steps (slower for smoother movement)
-            steps = int(duration * 60)  # 60 steps per second (reduced from 100)
-            steps = max(15, steps)
+            # FIXED: Reduced steps for smoother movement
+            # OLD: steps = int(duration * 60)  # 60 steps per second - too many, caused jerkiness
+            # NEW: 30 steps per second - smoother, more natural
+            steps = int(duration * 30)  # 30 steps per second (smoother)
+            steps = max(10, steps)  # Minimum 10 steps
 
             # Move along bezier curve with easing
             for i in range(steps + 1):
@@ -246,9 +362,15 @@ class EnhancedMouseController:
                 bx = (1 - t)**2 * current_x + 2 * (1 - t) * t * control_x + t**2 * x
                 by = (1 - t)**2 * current_y + 2 * (1 - t) * t * control_y + t**2 * y
 
-                # Add micro-jitter for realism (±1px)
-                jitter_x = random.uniform(-1, 1)
-                jitter_y = random.uniform(-1, 1)
+                # FIXED: Reduced micro-jitter for smoother movement
+                # OLD: jitter = ±1px every step - too much, caused erratic movement
+                # NEW: ±0.5px with 50% chance of no jitter - much smoother
+                if random.random() < 0.5:
+                    jitter_x = random.uniform(-0.5, 0.5)
+                    jitter_y = random.uniform(-0.5, 0.5)
+                else:
+                    jitter_x = 0
+                    jitter_y = 0
 
                 final_x = int(bx + jitter_x)
                 final_y = int(by + jitter_y)
@@ -558,6 +680,31 @@ class EnhancedMouseController:
         except Exception as e:
             logger.error("[Mouse] Error with hotkey: %s", e)
             return False
+
+    def cleanup(self) -> None:
+        """
+        Cleanup resources and restore system settings.
+        Should be called when mouse controller is no longer needed.
+        """
+        try:
+            # Stop user movement detection
+            self.user_detector.stop_monitoring()
+
+            # Re-allow screen sleep
+            if self.screen_wake.is_active:
+                self.screen_wake.allow_sleep()
+
+            logger.info("[MouseController] ✓ Cleanup completed")
+
+        except Exception as e:
+            logger.error("[MouseController] Cleanup error: %s", str(e))
+
+    def __del__(self):
+        """Destructor - ensure cleanup happens"""
+        try:
+            self.cleanup()
+        except:
+            pass
 
 
 # Backward compatibility - alias old class name

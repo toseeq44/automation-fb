@@ -124,7 +124,10 @@ class FolderQueueManager:
             List of video file paths
         """
         try:
+            # CRITICAL FIX: Normalize folder path to OS format (handles / and \ correctly)
+            folder_path = os.path.normpath(folder_path)
             folder = Path(folder_path)
+
             if not folder.exists():
                 logger.error("[FolderQueue] Folder not found: %s", folder_path)
                 return []
@@ -135,15 +138,29 @@ class FolderQueueManager:
             for ext in self.video_extensions:
                 pattern = str(folder / ext)
                 found = glob.glob(pattern)
+                # CRITICAL FIX: Normalize all paths from glob to ensure consistency
+                found = [os.path.normpath(f) for f in found]
                 videos.extend(found)
 
             # Filter out 'uploaded videos' subfolder
             if exclude_uploaded:
-                uploaded_folder = folder / "uploaded videos"
+                # CRITICAL FIX: Normalize uploaded folder path
+                uploaded_folder = os.path.normpath(str(folder / "uploaded videos"))
+
+                logger.debug("[FolderQueue] Uploaded folder path: %s", uploaded_folder)
+                logger.debug("[FolderQueue] Total videos before filter: %d", len(videos))
+
+                # Filter using normalized paths
+                videos_before = len(videos)
                 videos = [
                     v for v in videos
-                    if not v.startswith(str(uploaded_folder))
+                    if not v.startswith(uploaded_folder)
                 ]
+
+                filtered_count = videos_before - len(videos)
+                if filtered_count > 0:
+                    logger.info("[FolderQueue] Filtered out %d video(s) from 'uploaded videos' subfolder",
+                               filtered_count)
 
             # Sort for consistent ordering
             videos.sort()

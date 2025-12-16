@@ -67,6 +67,105 @@ class VideoUploadHelper:
 
         logger.info("[Upload] ✓ VideoUploadHelper initialized with Phase 2 robustness")
 
+    def close_unwanted_windows(self) -> int:
+        """
+        Close any unwanted popup windows/dialogs that appear during upload.
+        Keeps only the main browser window active.
+
+        Returns:
+            Number of windows closed
+        """
+        try:
+            import platform
+            closed_count = 0
+
+            if platform.system() == "Windows":
+                try:
+                    import pygetwindow as gw
+
+                    # Get browser window title
+                    browser_title = self.driver.title
+
+                    # Get all windows
+                    all_windows = gw.getAllWindows()
+
+                    logger.debug("[Upload] Checking %d open windows...", len(all_windows))
+
+                    for window in all_windows:
+                        # Skip if it's the main browser window
+                        if browser_title in window.title:
+                            continue
+
+                        # Close common popup windows (file dialogs, notifications, etc.)
+                        unwanted_patterns = [
+                            'Open', 'Save', 'File Explorer', 'Choose File',
+                            'Select File', 'Browse', 'Upload', 'Dialog'
+                        ]
+
+                        for pattern in unwanted_patterns:
+                            if pattern.lower() in window.title.lower():
+                                try:
+                                    logger.warning("[Upload] Closing unwanted window: %s", window.title)
+                                    window.close()
+                                    closed_count += 1
+                                    time.sleep(0.3)
+                                except Exception as e:
+                                    logger.debug("[Upload] Could not close window: %s", str(e))
+                                break
+
+                    if closed_count > 0:
+                        logger.info("[Upload] ✓ Closed %d unwanted window(s)", closed_count)
+
+                except ImportError:
+                    logger.debug("[Upload] pygetwindow not available, skipping window cleanup")
+
+            return closed_count
+
+        except Exception as e:
+            logger.debug("[Upload] Window cleanup error: %s", str(e))
+            return 0
+
+    def enforce_browser_focus(self) -> bool:
+        """
+        Aggressively enforce browser window focus.
+        Ensures browser stays on top and active during upload.
+
+        Returns:
+            True if successful
+        """
+        try:
+            # Close any unwanted popups first
+            self.close_unwanted_windows()
+
+            # Maximize and focus browser
+            self.driver.maximize_window()
+            self.driver.switch_to.window(self.driver.current_window_handle)
+            self.driver.execute_script("window.focus(); window.scrollTo(0, 0);")
+
+            # OS-level window activation (Windows)
+            import platform
+            if platform.system() == "Windows":
+                try:
+                    import pygetwindow as gw
+                    browser_title = self.driver.title
+
+                    windows = gw.getWindowsWithTitle(browser_title)
+                    if windows:
+                        window = windows[0]
+                        if window.isMinimized:
+                            window.restore()
+                        window.activate()
+                        logger.debug("[Upload] ✓ Browser window activated (OS-level)")
+                except:
+                    pass
+
+            logger.debug("[Upload] ✓ Browser focus enforced")
+            return True
+
+        except Exception as e:
+            logger.debug("[Upload] Focus enforcement error: %s", str(e))
+            return False
+
     def ensure_window_ready(self, operation_name: str = "operation") -> bool:
         """
         **DEFENSIVE CHECK** - Ensure browser window is ready before any critical operation.
@@ -89,23 +188,17 @@ class VideoUploadHelper:
             logger.info("[Upload] DEFENSIVE CHECK: Preparing for %s", operation_name)
             logger.info("[Upload] ═══════════════════════════════════════════")
 
-            # Step 1: Activate browser window (bring to foreground)
+            # Step 1: Enforce browser focus and close unwanted windows
             try:
-                logger.info("[Upload] Step 1/3: Activating browser window...")
+                logger.info("[Upload] Step 1/3: Enforcing browser focus & closing popups...")
 
-                # Maximize window
-                self.driver.maximize_window()
+                # ENHANCED: Use aggressive window management
+                self.enforce_browser_focus()
 
-                # Bring to front using JavaScript
-                self.driver.execute_script("window.focus();")
-
-                # Switch to window (ensure it's active)
-                self.driver.switch_to.window(self.driver.current_window_handle)
-
-                logger.info("[Upload] ✓ Browser window activated")
+                logger.info("[Upload] ✓ Browser window enforced as active")
 
             except Exception as e:
-                logger.warning("[Upload] ⚠ Window activation failed: %s", str(e))
+                logger.warning("[Upload] ⚠ Window enforcement failed: %s", str(e))
                 # Continue anyway - not critical
 
             # Step 2: Dismiss any notifications/popups

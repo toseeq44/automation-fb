@@ -858,14 +858,20 @@ class IXBrowserApproach(BaseApproach):
                             folder_name = os.path.basename(current_folder)
 
                             # Check if this folder has a matching bookmark
+                            # IMPROVED: Case-insensitive + trimmed comparison for better matching
                             matching_bookmark = None
+                            folder_name_normalized = folder_name.strip().lower()
+
                             for bookmark in facebook_bookmarks:
-                                if bookmark['title'] == folder_name:
+                                bookmark_title_normalized = bookmark['title'].strip().lower()
+                                if bookmark_title_normalized == folder_name_normalized:
                                     matching_bookmark = bookmark
+                                    logger.info("✓ MATCHED: Folder '%s' → Bookmark '%s'", folder_name, bookmark['title'])
                                     break
 
                             if not matching_bookmark:
-                                logger.info("[IXApproach] Folder '%s' has no bookmark, skipping", folder_name)
+                                logger.warning("✗ SKIPPED: Folder '%s' - No matching bookmark found", folder_name)
+                                logger.debug("Available bookmarks: %s", [b['title'] for b in facebook_bookmarks[:5]])
                                 self._folder_queue.move_to_next_folder()
                                 continue
 

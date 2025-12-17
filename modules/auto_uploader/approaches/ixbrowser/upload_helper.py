@@ -602,7 +602,7 @@ class VideoUploadHelper:
 
     def get_first_video_from_folder(self, folder_path: str) -> Optional[str]:
         """
-        Get first video file from folder.
+        Get first video file from folder using FolderQueueManager for consistency.
 
         Args:
             folder_path: Path to creator folder
@@ -617,16 +617,16 @@ class VideoUploadHelper:
                 logger.error("[Upload] ✗ Folder not found: %s", folder_path)
                 return None
 
-            # Supported video formats
-            video_extensions = ['*.mp4', '*.mov', '*.avi', '*.mkv', '*.wmv', '*.MP4', '*.MOV']
+            # CRITICAL FIX: Use folder_queue to get videos (consistent with queue manager)
+            # This ensures same video formats are supported everywhere
+            from .core.folder_queue import FolderQueueManager
 
-            videos = []
-            for ext in video_extensions:
-                pattern = os.path.join(folder_path, ext)
-                videos.extend(glob.glob(pattern))
+            temp_queue = FolderQueueManager(base_path=os.path.dirname(folder_path))
+            videos = temp_queue.get_videos_in_folder(folder_path, exclude_uploaded=True)
 
             if not videos:
                 logger.error("[Upload] ✗ No videos found in folder")
+                logger.debug("[Upload] Folder checked: %s", folder_path)
                 return None
 
             # Sort and get first
@@ -635,6 +635,7 @@ class VideoUploadHelper:
 
             logger.info("[Upload] ✓ Found video: %s", os.path.basename(first_video))
             logger.info("[Upload]   Size: %.2f MB", os.path.getsize(first_video) / (1024 * 1024))
+            logger.info("[Upload]   Total videos in folder: %d", len(videos))
 
             return first_video
 

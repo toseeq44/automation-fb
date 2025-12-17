@@ -2359,57 +2359,87 @@ class VideoUploadHelper:
                 logger.info("✓ Button clicked successfully")
 
                 # CRITICAL: Monitor for file dialog and close it if it appears
-                logger.info("[Upload] Monitoring for unwanted file dialog...")
-                time.sleep(1)  # Give time for dialog to appear if it's going to
+                # Use POLLING approach - check multiple times over 3 seconds
+                logger.info("[Upload] 🔍 Monitoring for unwanted file dialog (polling 6x)...")
 
-                # Check if dialog opened (Windows-specific)
                 import platform
                 if platform.system() == "Windows":
-                    try:
-                        import subprocess
-                        # Check for "Open" dialog window
-                        ps_check = '''
-                        $windows = Get-Process | Where-Object {$_.MainWindowTitle -like "*Open*" -or $_.MainWindowTitle -like "*Browse*"}
-                        if ($windows) { Write-Output "DialogFound" } else { Write-Output "NoDialog" }
-                        '''
+                    import subprocess
 
-                        result = subprocess.run(
-                            ["powershell", "-Command", ps_check],
-                            capture_output=True,
-                            text=True,
-                            timeout=2
-                        )
+                    # Poll 6 times over 3 seconds (every 0.5s)
+                    dialog_found_and_closed = False
 
-                        if "DialogFound" in result.stdout:
-                            logger.warning("[Upload] ⚠ File dialog detected! Closing it...")
-
-                            # Send ESC key to close dialog
-                            ps_close = '''
-                            Add-Type @"
-                            using System;
-                            using System.Runtime.InteropServices;
-                            public class KeySend {
-                                [DllImport("user32.dll")]
-                                public static extern void keybd_event(byte bVk, byte bScan, int dwFlags, int dwExtraInfo);
+                    for poll_attempt in range(6):
+                        try:
+                            # Check for file selection dialog windows
+                            # Enhanced patterns to catch more dialog types
+                            ps_check = '''
+                            $dialogs = Get-Process | Where-Object {
+                                $_.MainWindowTitle -like "*Open*" -or
+                                $_.MainWindowTitle -like "*Browse*" -or
+                                $_.MainWindowTitle -like "*Choose*" -or
+                                $_.MainWindowTitle -like "*Select*" -or
+                                $_.MainWindowTitle -like "*File*"
                             }
-"@
-                            [KeySend]::keybd_event(0x1B, 0, 0, 0)  # ESC key down
-                            Start-Sleep -Milliseconds 100
-                            [KeySend]::keybd_event(0x1B, 0, 2, 0)  # ESC key up
+                            if ($dialogs) {
+                                Write-Output "DialogFound:$($dialogs[0].MainWindowTitle)"
+                            } else {
+                                Write-Output "NoDialog"
+                            }
                             '''
 
-                            subprocess.run(
-                                ["powershell", "-ExecutionPolicy", "Bypass", "-Command", ps_close],
-                                timeout=2
+                            result = subprocess.run(
+                                ["powershell", "-Command", ps_check],
+                                capture_output=True,
+                                text=True,
+                                timeout=1
                             )
 
-                            logger.info("[Upload] ✓ Dialog closed with ESC key")
-                            time.sleep(0.5)
-                        else:
-                            logger.info("[Upload] ✓ No file dialog detected (good!)")
+                            if "DialogFound:" in result.stdout:
+                                dialog_title = result.stdout.split("DialogFound:")[-1].strip()
+                                logger.warning("[Upload] ⚠ FILE DIALOG DETECTED! Title: '%s'", dialog_title)
+                                logger.warning("[Upload] 🔨 Closing dialog with ESC key...")
 
-                    except Exception as e:
-                        logger.debug("[Upload] Dialog check failed: %s", str(e))
+                                # Send ESC key to close dialog
+                                ps_close = '''
+                                Add-Type @"
+                                using System;
+                                using System.Runtime.InteropServices;
+                                public class KeySend {
+                                    [DllImport("user32.dll")]
+                                    public static extern void keybd_event(byte bVk, byte bScan, int dwFlags, int dwExtraInfo);
+                                }
+"@
+                                [KeySend]::keybd_event(0x1B, 0, 0, 0)
+                                Start-Sleep -Milliseconds 100
+                                [KeySend]::keybd_event(0x1B, 0, 2, 0)
+                                '''
+
+                                subprocess.run(
+                                    ["powershell", "-ExecutionPolicy", "Bypass", "-Command", ps_close],
+                                    timeout=1
+                                )
+
+                                logger.info("[Upload] ✅ Dialog closed successfully!")
+                                dialog_found_and_closed = True
+                                time.sleep(0.3)  # Brief pause after closing
+                                break  # Exit polling loop
+                            else:
+                                # No dialog found in this check
+                                if poll_attempt == 0:
+                                    logger.debug("[Upload] Poll %d/6: No dialog (checking again...)", poll_attempt + 1)
+
+                                time.sleep(0.5)  # Wait before next poll
+
+                        except Exception as e:
+                            logger.debug("[Upload] Poll %d/6 check failed: %s", poll_attempt + 1, str(e))
+                            time.sleep(0.5)
+
+                    # Final status
+                    if not dialog_found_and_closed:
+                        logger.info("[Upload] ✅ No file dialog detected after 6 polls (GOOD!)")
+                    else:
+                        logger.info("[Upload] ✅ Dialog was closed, browser should be visible now")
 
                 logger.info("[Upload] Waiting for page response (with star animation)...")
                 self.idle_mouse_activity(duration=2.0, base_radius=90)  # Wait for page response

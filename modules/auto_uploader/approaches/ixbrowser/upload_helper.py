@@ -5,6 +5,7 @@ Handles bulk video upload to Facebook bookmarks
 
 import logging
 import os
+import sys
 import time
 import glob
 import pyautogui
@@ -30,10 +31,46 @@ from ...config.settings_manager import SettingsManager
 
 logger = logging.getLogger(__name__)
 
-# Image paths for buttons
-ADD_VIDEOS_BUTTON_IMAGE = "/home/user/automation-fb/modules/auto_uploader/helper_images/add_videos_button.png"
-PUBLISH_BUTTON_ENABLED_IMAGE = "/home/user/automation-fb/modules/auto_uploader/helper_images/publish_button_after_data.png"
-PUBLISH_BUTTON_DISABLED_IMAGE = "/home/user/automation-fb/modules/auto_uploader/helper_images/publish_button_befor_data.png"
+
+def get_resource_path(relative_path: str) -> Path:
+    """
+    Get absolute path to resource - works for dev and PyInstaller frozen EXE.
+
+    When running as EXE (frozen), PyInstaller extracts files to _MEIPASS temp folder.
+    When running as script, uses normal file paths.
+
+    Args:
+        relative_path: Path relative to auto_uploader module (e.g., "helper_images/add_videos_button.png")
+
+    Returns:
+        Absolute Path object that works in both dev and frozen environments
+    """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        if getattr(sys, 'frozen', False):
+            # Running as compiled EXE
+            base_path = Path(sys._MEIPASS) / "modules" / "auto_uploader"
+        else:
+            # Running as script - go up 2 levels from current file to auto_uploader root
+            base_path = Path(__file__).resolve().parents[2]
+
+        resource_path = base_path / relative_path
+
+        # Verify path exists and log warning if not
+        if not resource_path.exists():
+            logger.warning(f"Resource not found: {resource_path}")
+
+        return resource_path
+    except Exception as e:
+        logger.error(f"Error resolving resource path for '{relative_path}': {e}")
+        # Fallback to relative path
+        return Path(relative_path)
+
+
+# Image paths for buttons - dynamically resolved for EXE compatibility
+ADD_VIDEOS_BUTTON_IMAGE = str(get_resource_path("helper_images/add_videos_button.png"))
+PUBLISH_BUTTON_ENABLED_IMAGE = str(get_resource_path("helper_images/publish_button_after_data.png"))
+PUBLISH_BUTTON_DISABLED_IMAGE = str(get_resource_path("helper_images/publish_button_befor_data.png"))
 
 
 class VideoUploadHelper:

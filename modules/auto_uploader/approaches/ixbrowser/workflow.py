@@ -598,10 +598,18 @@ class IXBrowserApproach(BaseApproach):
             logger.info("[IXApproach] ═══════════════════════════════════════════")
 
             try:
+                # CRITICAL: Strip whitespace from profile name to avoid path issues
+                # Windows paths don't work with trailing spaces
+                profile_name_clean = profile_name.strip()
+                if profile_name != profile_name_clean:
+                    logger.warning("[IXApproach] ⚠ Profile name has trailing spaces - auto-cleaned")
+                    logger.warning("[IXApproach]   Original: '%s'", profile_name)
+                    logger.warning("[IXApproach]   Cleaned:  '%s'", profile_name_clean)
+
                 # 1. Get Desktop path
                 desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
                 creators_base = os.path.join(desktop_path, "creators data")
-                profile_folder = os.path.join(creators_base, profile_name)
+                profile_folder = os.path.join(creators_base, profile_name_clean)
 
                 logger.info("[IXApproach] Checking folders...")
                 logger.info("[IXApproach]   Desktop: %s", desktop_path)
@@ -619,9 +627,9 @@ class IXBrowserApproach(BaseApproach):
                     logger.warning("[IXApproach] ═══════════════════════════════════════════")
                     logger.warning("[IXApproach] Profile Folder Not Found - SKIPPING")
                     logger.warning("[IXApproach] ═══════════════════════════════════════════")
-                    logger.warning("[IXApproach] Profile: %s", profile_name)
+                    logger.warning("[IXApproach] Profile: %s", profile_name_clean)
                     logger.warning("[IXApproach] Expected path: %s", profile_folder)
-                    logger.warning("[IXApproach] Please create: Desktop/creators data/%s/", profile_name)
+                    logger.warning("[IXApproach] Please create: Desktop/creators data/%s/", profile_name_clean)
                     logger.warning("[IXApproach] Skipping to next profile...")
                     logger.warning("[IXApproach] ═══════════════════════════════════════════")
 
@@ -696,7 +704,7 @@ class IXBrowserApproach(BaseApproach):
                     logger.info("[IXApproach] ═══════════════════════════════════════════")
                     logger.info("[IXApproach] Bookmark-Folder Comparison Result")
                     logger.info("[IXApproach] ═══════════════════════════════════════════")
-                    logger.info("[IXApproach] Profile: %s", profile_name)
+                    logger.info("[IXApproach] Profile: %s", profile_name_clean)
                     logger.info("[IXApproach] Creator Folder: %s", profile_folder)
                     logger.info("[IXApproach] ")
                     logger.info("[IXApproach] Total bookmarks: %d", len(all_bookmarks))
@@ -984,7 +992,7 @@ class IXBrowserApproach(BaseApproach):
 
                         # Display upload summary for this profile
                         logger.info("[IXApproach] ═══════════════════════════════════════════")
-                        logger.info("[IXApproach] Profile Upload Summary: %s", profile_name)
+                        logger.info("[IXApproach] Profile Upload Summary: %s", profile_name_clean)
                         logger.info("[IXApproach] ═══════════════════════════════════════════")
                         logger.info("[IXApproach] Total uploads attempted: %d", len(upload_results))
                         logger.info("[IXApproach] Successful: %d", successful)
@@ -1010,7 +1018,7 @@ class IXBrowserApproach(BaseApproach):
         finally:
             # IMPORTANT: Close profile after processing
             logger.info("[IXApproach] ═══════════════════════════════════════════")
-            logger.info("[IXApproach] Closing Profile: %s", profile_name)
+            logger.info("[IXApproach] Closing Profile: %s", profile_name_clean if 'profile_name_clean' in locals() else profile_name)
             logger.info("[IXApproach] ═══════════════════════════════════════════")
 
             try:

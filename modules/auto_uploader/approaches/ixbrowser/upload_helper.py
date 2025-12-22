@@ -2395,88 +2395,112 @@ class VideoUploadHelper:
 
                 logger.info("✓ Button clicked successfully")
 
-                # CRITICAL: Monitor for file dialog and close it if it appears
-                # Use POLLING approach - check multiple times over 3 seconds
-                logger.info("[Upload] 🔍 Monitoring for unwanted file dialog (polling 6x)...")
+                # CRITICAL: Monitor for file dialog and close it INSTANTLY if it appears
+                # Use FAST POLLING with Windows API - 30 checks over 3 seconds (every 100ms)
+                logger.info("[Upload] 🔍 Monitoring for unwanted file dialog (fast polling 30x)...")
 
                 import platform
                 if platform.system() == "Windows":
-                    import subprocess
+                    import ctypes
+                    from ctypes import wintypes
 
-                    # Poll 6 times over 3 seconds (every 0.5s)
+                    # Load Windows API functions
+                    user32 = ctypes.windll.user32
+
+                    # Define Windows API constants and functions
+                    WM_CLOSE = 0x0010
+
+                    # Fast polling: 30 checks over 3 seconds (every 100ms)
                     dialog_found_and_closed = False
+                    max_polls = 30
+                    poll_interval = 0.1  # 100ms - MUCH faster than old 500ms
 
-                    for poll_attempt in range(6):
+                    # Common file dialog class names and title patterns
+                    dialog_class_names = [
+                        b"#32770",  # Standard dialog box
+                        b"OpenFileDialog",
+                        b"SaveFileDialog"
+                    ]
+
+                    dialog_title_keywords = [
+                        "Open", "Browse", "Choose", "Select", "File",
+                        "Upload", "Pick", "Find"
+                    ]
+
+                    for poll_attempt in range(max_polls):
                         try:
-                            # Check for file selection dialog windows
-                            # Enhanced patterns to catch more dialog types
-                            ps_check = '''
-                            $dialogs = Get-Process | Where-Object {
-                                $_.MainWindowTitle -like "*Open*" -or
-                                $_.MainWindowTitle -like "*Browse*" -or
-                                $_.MainWindowTitle -like "*Choose*" -or
-                                $_.MainWindowTitle -like "*Select*" -or
-                                $_.MainWindowTitle -like "*File*"
-                            }
-                            if ($dialogs) {
-                                Write-Output "DialogFound:$($dialogs[0].MainWindowTitle)"
-                            } else {
-                                Write-Output "NoDialog"
-                            }
-                            '''
+                            # EnumWindows callback to find dialog windows
+                            found_dialogs = []
 
-                            result = subprocess.run(
-                                ["powershell", "-Command", ps_check],
-                                capture_output=True,
-                                text=True,
-                                timeout=1
-                            )
+                            def enum_window_callback(hwnd, lParam):
+                                if user32.IsWindowVisible(hwnd):
+                                    # Get window title
+                                    length = user32.GetWindowTextLengthW(hwnd)
+                                    if length > 0:
+                                        buffer = ctypes.create_unicode_buffer(length + 1)
+                                        user32.GetWindowTextW(hwnd, buffer, length + 1)
+                                        title = buffer.value
 
-                            if "DialogFound:" in result.stdout:
-                                dialog_title = result.stdout.split("DialogFound:")[-1].strip()
-                                logger.warning("[Upload] ⚠ FILE DIALOG DETECTED! Title: '%s'", dialog_title)
-                                logger.warning("[Upload] 🔨 Closing dialog with ESC key...")
+                                        # Get window class name
+                                        class_buffer = ctypes.create_string_buffer(256)
+                                        user32.GetClassNameA(hwnd, class_buffer, 256)
+                                        class_name = class_buffer.value
 
-                                # Send ESC key to close dialog
-                                ps_close = '''
-                                Add-Type @"
-                                using System;
-                                using System.Runtime.InteropServices;
-                                public class KeySend {
-                                    [DllImport("user32.dll")]
-                                    public static extern void keybd_event(byte bVk, byte bScan, int dwFlags, int dwExtraInfo);
-                                }
-"@
-                                [KeySend]::keybd_event(0x1B, 0, 0, 0)
-                                Start-Sleep -Milliseconds 100
-                                [KeySend]::keybd_event(0x1B, 0, 2, 0)
-                                '''
+                                        # Check if it's a file dialog
+                                        is_dialog = False
 
-                                subprocess.run(
-                                    ["powershell", "-ExecutionPolicy", "Bypass", "-Command", ps_close],
-                                    timeout=1
-                                )
+                                        # Check by class name
+                                        if class_name in dialog_class_names:
+                                            is_dialog = True
 
-                                logger.info("[Upload] ✅ Dialog closed successfully!")
-                                dialog_found_and_closed = True
-                                time.sleep(0.3)  # Brief pause after closing
-                                break  # Exit polling loop
+                                        # Check by title keywords
+                                        if title and any(keyword.lower() in title.lower() for keyword in dialog_title_keywords):
+                                            is_dialog = True
+
+                                        if is_dialog:
+                                            found_dialogs.append((hwnd, title, class_name))
+
+                                return True  # Continue enumeration
+
+                            # Create callback function type
+                            WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+                            callback = WNDENUMPROC(enum_window_callback)
+
+                            # Enumerate all windows
+                            user32.EnumWindows(callback, 0)
+
+                            if found_dialogs:
+                                for hwnd, title, class_name in found_dialogs:
+                                    logger.warning("[Upload] ⚠ FILE DIALOG DETECTED! Title: '%s' | Class: %s",
+                                                 title, class_name.decode('utf-8', errors='ignore'))
+                                    logger.warning("[Upload] 🔨 Closing dialog INSTANTLY with WM_CLOSE...")
+
+                                    # Close window immediately using Windows API (faster than ESC key)
+                                    user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+
+                                    logger.info("[Upload] ✅ Dialog closed in ~%dms!", int((poll_attempt + 1) * poll_interval * 1000))
+                                    dialog_found_and_closed = True
+
+                                if dialog_found_and_closed:
+                                    time.sleep(0.2)  # Brief pause after closing
+                                    break  # Exit polling loop
                             else:
                                 # No dialog found in this check
                                 if poll_attempt == 0:
-                                    logger.debug("[Upload] Poll %d/6: No dialog (checking again...)", poll_attempt + 1)
+                                    logger.debug("[Upload] Poll %d/%d: No dialog (checking every %dms...)",
+                                               poll_attempt + 1, max_polls, int(poll_interval * 1000))
 
-                                time.sleep(0.5)  # Wait before next poll
+                                time.sleep(poll_interval)  # Wait 100ms before next poll
 
                         except Exception as e:
-                            logger.debug("[Upload] Poll %d/6 check failed: %s", poll_attempt + 1, str(e))
-                            time.sleep(0.5)
+                            logger.debug("[Upload] Poll %d/%d check failed: %s", poll_attempt + 1, max_polls, str(e))
+                            time.sleep(poll_interval)
 
                     # Final status
                     if not dialog_found_and_closed:
-                        logger.info("[Upload] ✅ No file dialog detected after 6 polls (GOOD!)")
+                        logger.info("[Upload] ✅ No file dialog detected after %d fast polls (GOOD!)", max_polls)
                     else:
-                        logger.info("[Upload] ✅ Dialog was closed, browser should be visible now")
+                        logger.info("[Upload] ✅ Dialog was closed instantly, no visible flash!")
 
                 logger.info("[Upload] Waiting for page response (with star animation)...")
                 self.idle_mouse_activity(duration=2.0, base_radius=90)  # Wait for page response

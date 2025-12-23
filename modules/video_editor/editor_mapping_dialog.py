@@ -934,6 +934,12 @@ class BulkProcessingDialog(QDialog):
             # Create destination folders if needed
             self.mapping_manager.create_destination_folders(self.current_mapping)
 
+            # Log before emitting signal
+            logger.info(f"🚀 Emitting start_processing signal with {config['total_count']} videos")
+            logger.info(f"   Config keys: {list(config.keys())}")
+            logger.info(f"   Videos count: {len(config.get('videos', []))}")
+
             # Emit signal and close
             self.start_processing.emit(config)
+            logger.info("✅ Signal emitted, closing dialog")
             self.accept()

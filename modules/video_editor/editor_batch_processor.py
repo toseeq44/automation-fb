@@ -57,11 +57,18 @@ class EditorBatchWorker(QThread):
 
     def __init__(self, config: Dict[str, Any], parent=None):
         super().__init__(parent)
+        logger.info("🧵 EditorBatchWorker.__init__ called")
+        logger.info(f"   Config keys: {list(config.keys()) if config else 'None'}")
+
         self.config = config
         self.videos = config.get('videos', [])
         self.settings: EditorMappingSettings = config.get('settings')
         self.mapping: EditorFolderMapping = config.get('mapping')
         self.plan_checker: PlanLimitChecker = config.get('plan_checker')
+
+        logger.info(f"   Videos to process: {len(self.videos)}")
+        logger.info(f"   Settings: {self.settings is not None}")
+        logger.info(f"   Mapping: {self.mapping is not None}")
 
         self._cancelled = False
         self._paused = False
@@ -85,14 +92,19 @@ class EditorBatchWorker(QThread):
 
     def run(self):
         """Main processing loop"""
+        logger.info("🏃 EditorBatchWorker.run() - Thread started")
+
         total = len(self.videos)
+        logger.info(f"   Total videos to process: {total}")
 
         if total == 0:
+            logger.warning("   No videos to process!")
             self.log_message.emit("No videos to process", "warning")
             self.processing_finished.emit(self._get_summary())
             return
 
         self.log_message.emit(f"Starting batch processing of {total} videos", "info")
+        logger.info(f"   Processing loop starting...")
 
         # Load preset if specified
         preset = None
@@ -508,8 +520,15 @@ class BatchProcessor:
         Returns:
             EditorBatchWorker instance
         """
+        logger.info("🔧 BatchProcessor.start_processing() called")
+        logger.info(f"   Config: {list(config.keys()) if config else 'None'}")
+        logger.info(f"   Videos: {len(config.get('videos', []))}")
+
         self.worker = EditorBatchWorker(config)
+        logger.info(f"   Worker created: {self.worker is not None}")
+
         self.worker.start()
+        logger.info(f"   Worker.start() called, is running: {self.worker.isRunning()}")
         return self.worker
 
     def cancel(self):

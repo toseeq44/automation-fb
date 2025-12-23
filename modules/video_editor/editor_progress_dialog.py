@@ -28,6 +28,10 @@ class EditorProgressDialog(QDialog):
 
     def __init__(self, config: Dict[str, Any], parent=None):
         super().__init__(parent)
+        logger.info("🎬 EditorProgressDialog.__init__ called")
+        logger.info(f"   Config received: {list(config.keys()) if config else 'None'}")
+        logger.info(f"   Total videos: {config.get('total_count', 0)}")
+
         self.config = config
         self.worker: Optional[EditorBatchWorker] = None
         self.batch_processor = BatchProcessor()
@@ -35,9 +39,11 @@ class EditorProgressDialog(QDialog):
         self.start_time = None
         self.is_processing = False
 
+        logger.info("   Initializing UI...")
         self.init_ui()
         self.apply_theme()
 
+        logger.info("   Scheduling start_processing in 500ms...")
         # Start processing after dialog shows
         QTimer.singleShot(500, self.start_processing)
 
@@ -333,6 +339,10 @@ class EditorProgressDialog(QDialog):
 
     def start_processing(self):
         """Start the batch processing"""
+        logger.info("⏱️  start_processing() method called")
+        logger.info(f"   Config available: {self.config is not None}")
+        logger.info(f"   Total videos to process: {self.config.get('total_count', 0) if self.config else 0}")
+
         self.is_processing = True
         self.start_time = datetime.now()
         self.elapsed_timer.start(1000)
@@ -342,9 +352,11 @@ class EditorProgressDialog(QDialog):
 
         # Log start
         self.log_message(f"Starting batch processing of {total} videos", "info")
+        logger.info(f"   Creating batch worker...")
 
         # Create and connect worker
         self.worker = self.batch_processor.start_processing(self.config)
+        logger.info(f"   Worker created: {self.worker is not None}")
 
         # Connect signals
         self.worker.progress.connect(self.on_progress)
@@ -352,6 +364,7 @@ class EditorProgressDialog(QDialog):
         self.worker.video_completed.connect(self.on_video_completed)
         self.worker.log_message.connect(self.log_message)
         self.worker.processing_finished.connect(self.on_processing_finished)
+        logger.info("   All signals connected, worker should be running")
 
     def on_progress(self, current: int, total: int):
         """Handle progress update"""

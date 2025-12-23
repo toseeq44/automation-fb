@@ -2385,6 +2385,28 @@ class VideoUploadHelper:
 
                 logger.info("✓ Button found, clicking...")
 
+                # === CRITICAL: Save existing windows BEFORE clicking button ===
+                existing_window_handles = set()
+                if platform.system() == "Windows":
+                    import ctypes
+                    from ctypes import wintypes
+
+                    try:
+                        # Get all current window handles
+                        def save_windows_callback(hwnd, lParam):
+                            if user32.IsWindowVisible(hwnd):
+                                existing_window_handles.add(hwnd)
+                            return True
+
+                        WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+                        save_callback = WNDENUMPROC(save_windows_callback)
+                        user32.EnumWindows(save_callback, 0)
+
+                        logger.info("[Upload] 📋 Saved %d existing window handles before button click", len(existing_window_handles))
+                    except Exception as e:
+                        logger.warning("[Upload] ⚠ Could not save window list: %s", str(e))
+
+                # Now click the button
                 if isinstance(button_result, tuple):
                     # Image recognition result - use PyAutoGUI
                     button_x, button_y = button_result
@@ -2434,6 +2456,11 @@ class VideoUploadHelper:
 
                             def enum_window_callback(hwnd, lParam):
                                 if user32.IsWindowVisible(hwnd):
+                                    # === CRITICAL: Only check NEW windows (not in saved list) ===
+                                    if hwnd in existing_window_handles:
+                                        # This window existed before button click - SAFE, ignore it
+                                        return True
+
                                     # Get window title
                                     length = user32.GetWindowTextLengthW(hwnd)
                                     if length > 0:
@@ -2458,7 +2485,9 @@ class VideoUploadHelper:
                                             is_dialog = True
 
                                         if is_dialog:
+                                            # This is a NEW window AND matches dialog patterns
                                             found_dialogs.append((hwnd, title, class_name))
+                                            logger.debug("[Upload] 🆕 NEW dialog detected: '%s' (handle: %d)", title, hwnd)
 
                                 return True  # Continue enumeration
 
@@ -2471,9 +2500,10 @@ class VideoUploadHelper:
 
                             if found_dialogs:
                                 for hwnd, title, class_name in found_dialogs:
-                                    logger.warning("[Upload] ⚠ FILE DIALOG DETECTED! Title: '%s' | Class: %s",
+                                    logger.warning("[Upload] ⚠ NEW FILE DIALOG DETECTED! Title: '%s' | Class: %s",
                                                  title, class_name.decode('utf-8', errors='ignore'))
-                                    logger.warning("[Upload] 🔨 Closing dialog INSTANTLY with WM_CLOSE...")
+                                    logger.info("[Upload] 📝 This window is NEW (wasn't in saved list)")
+                                    logger.warning("[Upload] 🔨 Closing NEW dialog INSTANTLY with WM_CLOSE...")
 
                                     # Close window immediately using Windows API (faster than ESC key)
                                     user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)

@@ -2574,11 +2574,26 @@ class VideoUploadHelper:
                 if not self.ensure_window_ready("monitoring upload progress"):
                     logger.warning("[Upload] ⚠ Window readiness check failed, but continuing...")
 
-                if not self.monitor_upload_progress():
-                    if attempt < max_retries:
-                        logger.warning("[Upload] Upload did not complete, retrying...")
-                        continue
-                    raise Exception("Upload did not complete")
+                # CRITICAL FIX: Don't retry page navigation if upload already started
+                # Video is already selected and uploading - page reload would lose progress!
+                try:
+                    upload_completed = self.monitor_upload_progress()
+                except Exception as monitor_error:
+                    logger.error("[Upload] ⚠ Monitor failed with exception: %s", str(monitor_error))
+                    logger.warning("[Upload] Video upload may still be in progress...")
+                    logger.warning("[Upload] Attempting to continue with publish detection...")
+                    upload_completed = False  # Continue to publish step anyway
+
+                if not upload_completed:
+                    logger.warning("[Upload] ═══════════════════════════════════════════")
+                    logger.warning("[Upload] ⚠ Upload monitoring did not confirm 100%")
+                    logger.warning("[Upload] This could mean:")
+                    logger.warning("[Upload]   1. Upload is still in progress")
+                    logger.warning("[Upload]   2. Upload interface changed")
+                    logger.warning("[Upload]   3. Network issue")
+                    logger.warning("[Upload] Proceeding to publish step (upload may be done)...")
+                    logger.warning("[Upload] ═══════════════════════════════════════════")
+                    # DON'T retry here - video already selected, just continue to publish
 
                 # Success!
                 logger.info("═══════════════════════════════════════════")

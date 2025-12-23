@@ -2446,7 +2446,8 @@ class VideoUploadHelper:
 
                     dialog_title_keywords = [
                         "Open", "Browse", "Choose", "Select", "File",
-                        "Upload", "Pick", "Find"
+                        "Pick", "Find"
+                        # REMOVED "Upload" - too broad, was closing upload progress windows!
                     ]
 
                     for poll_attempt in range(max_polls):

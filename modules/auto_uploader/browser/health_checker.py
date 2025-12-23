@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import socket
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -54,6 +55,14 @@ class CheckResult:
         return self.passed
 
 
+def get_default_helper_images() -> Path:
+    """Get helper_images directory - works for both dev and frozen EXE."""
+    if getattr(sys, 'frozen', False):
+        return Path(sys._MEIPASS) / "modules" / "auto_uploader" / "helper_images"
+    else:
+        return Path(__file__).resolve().parent.parent / "helper_images"
+
+
 class HealthChecker:
     """Run and aggregate pre-flight checks for the automation workflow."""
 
@@ -67,7 +76,7 @@ class HealthChecker:
         min_available_memory: int = 1_000_000_000,
         clipboard_test_value: str = "automation-health-check",
     ) -> None:
-        self.images_dir = Path(images_dir or Path(__file__).parent.parent / "helper_images")
+        self.images_dir = Path(images_dir or get_default_helper_images())
         self.required_images = list(required_images or [])
         self.browser_title_hints = list(browser_title_hints or [])
         self.network_test_url = network_test_url

@@ -16,6 +16,11 @@ dist/
 instance/
 *.db
 
+# Large binary files (keep locally, don't push to git)
+cloudflared.exe
+ffmpeg/
+*.dll
+
 # User settings and runtime data (don't commit)
 modules/auto_uploader/data_files/settings.json
 modules/auto_uploader/approaches/ixbrowser/data/bot_state.json

@@ -4,6 +4,7 @@ Uses image recognition to automatically login to ixBrowser desktop application
 """
 
 import logging
+import sys
 import time
 from pathlib import Path
 from typing import Optional, Tuple
@@ -13,8 +14,19 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+
+def get_helper_images_dir() -> Path:
+    """Get helper_images directory path - works for both dev and frozen EXE."""
+    if getattr(sys, 'frozen', False):
+        # Running as EXE - use _MEIPASS
+        return Path(sys._MEIPASS) / "modules" / "auto_uploader" / "helper_images"
+    else:
+        # Running as script
+        return Path(__file__).resolve().parents[2] / "helper_images"
+
+
 # Helper images directory
-HELPER_IMAGES_DIR = Path(__file__).parents[2] / "helper_images"
+HELPER_IMAGES_DIR = get_helper_images_dir()
 
 
 class IXBrowserLoginHelper:

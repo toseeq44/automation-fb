@@ -3,40 +3,66 @@
 """
 OneSoul PyInstaller Spec File
 Comprehensive configuration for bundling all dependencies
+
+IMPORTANT: Before building, ensure these files exist:
+- cloudflared.exe (in root directory)
+- ffmpeg/ffmpeg.exe and ffmpeg/ffprobe.exe
 """
 
+import os
+from pathlib import Path
+
 block_cipher = None
+
+# Optional binaries - only include if they exist
+optional_binaries = []
+if os.path.exists('cloudflared.exe'):
+    optional_binaries.append(('cloudflared.exe', '.'))
+else:
+    print("⚠️  WARNING: cloudflared.exe not found - skipping")
+
+# Optional data files - only include if they exist
+optional_datas = []
+
+# Check for ffmpeg
+if os.path.exists('ffmpeg') and os.path.isdir('ffmpeg'):
+    optional_datas.append(('ffmpeg', 'ffmpeg'))
+    print("✓ ffmpeg directory found")
+else:
+    print("⚠️  WARNING: ffmpeg directory not found - video editing may not work")
+
+# Check for presets
+if os.path.exists('presets') and os.path.isdir('presets'):
+    optional_datas.append(('presets', 'presets'))
+    print("✓ presets directory found")
+else:
+    print("⚠️  WARNING: presets directory not found")
 
 a = Analysis(
     ['main.py'],
     pathex=['.'],
     binaries=[
         ('cloudflared.exe', '.'),
-        ('yt-dlp.exe', '.'),  # Bundle yt-dlp for video downloads
     ],
     datas=[
-        # Helper images for auto uploader
+        # Helper images for auto uploader (REQUIRED - image recognition)
         ('modules/auto_uploader/helper_images/*.png', 'modules/auto_uploader/helper_images'),
+
+        # Creator shortcuts and data (for IXBrowser/GoLogin)
         ('modules/auto_uploader/creator_shortcuts', 'modules/auto_uploader/creator_shortcuts'),
         ('modules/auto_uploader/creators', 'modules/auto_uploader/creators'),
         ('modules/auto_uploader/data', 'modules/auto_uploader/data'),
-        ('modules/auto_uploader/ix_data', 'modules/auto_uploader/ix_data'),
 
-        
+        # NOTE: ix_data is NOT included - it's a runtime workspace created automatically
+
         # GUI assets (new design)
         ('gui-redesign/assets/*.html', 'gui-redesign/assets'),
         ('gui-redesign/assets/*.svg', 'gui-redesign/assets'),
         ('gui-redesign/assets/*.ico', 'gui-redesign/assets'),
-        
-        # Include presets folder if exists
-        ('presets', 'presets'),
-
-        # FFMPEG
-        ('ffmpeg', 'ffmpeg'),
 
         # Configs to bundle
         ('api_config.json', '.'),
-    ],
+    ] + optional_datas,  # Add optional data files
     hiddenimports=[
         # PyQt5 essentials
         'PyQt5.sip',

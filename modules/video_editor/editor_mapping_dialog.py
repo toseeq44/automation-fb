@@ -217,11 +217,25 @@ class BulkProcessingDialog(QDialog):
         ])
         self.mapping_table.setMinimumHeight(200)
         self.mapping_table.setMaximumHeight(400)
-        self.mapping_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.mapping_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
-        self.mapping_table.setColumnWidth(0, 60)
-        self.mapping_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Fixed)
+
+        # Set column widths properly to prevent text overlapping
+        header = self.mapping_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Fixed)
+        header.setMinimumSectionSize(80)
+        self.mapping_table.setColumnWidth(0, 80)
+
+        header.setSectionResizeMode(1, QHeaderView.Interactive)
+        self.mapping_table.setColumnWidth(1, 250)
+
+        header.setSectionResizeMode(2, QHeaderView.Interactive)
+        self.mapping_table.setColumnWidth(2, 250)
+
+        header.setSectionResizeMode(3, QHeaderView.Fixed)
         self.mapping_table.setColumnWidth(3, 80)
+
+        # Enable word wrap in cells
+        self.mapping_table.setWordWrap(True)
+
         layout.addWidget(self.mapping_table)
 
         # Mapping actions
@@ -566,11 +580,12 @@ class BulkProcessingDialog(QDialog):
         # Update scan result
         if self.folder_mode == 'simple':
             video_count = self.folder_info['source_video_count']
+            total_videos = self.folder_info.get('total_video_count', video_count)
             self.scan_result_label.setText(
-                f"Simple Mode: Found {video_count} videos in source folder.\n"
+                f"✅ Simple Mode: Found {total_videos} video(s) in source folder.\n"
                 f"Videos will be processed and saved to destination folder."
             )
-            self.scan_result_label.setStyleSheet("color: #4caf50;")
+            self.scan_result_label.setStyleSheet("color: #4caf50; font-weight: bold;")
 
             # Create simple mapping
             self.current_mapping = EditorFolderMapping(
@@ -585,11 +600,12 @@ class BulkProcessingDialog(QDialog):
 
         else:  # complex mode
             source_subs = self.folder_info['source_subfolders']
+            total_videos = self.folder_info.get('total_video_count', 0)
             self.scan_result_label.setText(
-                f"Complex Mode: Found {len(source_subs)} subfolders in source.\n"
-                f"Please configure mapping for each subfolder."
+                f"✅ Complex Mode: Found {len(source_subs)} subfolder(s) with {total_videos} total video(s).\n"
+                f"All nested subfolders included. Please configure mapping below."
             )
-            self.scan_result_label.setStyleSheet("color: #00bcd4;")
+            self.scan_result_label.setStyleSheet("color: #00bcd4; font-weight: bold;")
 
             # Create mapping with subfolders
             self.current_mapping = EditorFolderMapping(
@@ -658,13 +674,15 @@ class BulkProcessingDialog(QDialog):
             )
             self.mapping_table.setCellWidget(row, 2, dest_combo)
 
-            # Video count
+            # Video count (recursive - includes all nested subfolders)
             source_path = os.path.join(
                 self.current_mapping.source_folder,
                 sm.source_subfolder
             )
-            video_count = FolderScanner.count_videos_in_folder(source_path)
-            self.mapping_table.setItem(row, 3, QTableWidgetItem(str(video_count)))
+            video_count = FolderScanner.count_videos_in_folder(source_path, recursive=True)
+            count_item = QTableWidgetItem(str(video_count))
+            count_item.setTextAlignment(Qt.AlignCenter)
+            self.mapping_table.setItem(row, 3, count_item)
 
     def on_mapping_enabled_changed(self, row: int, state: int):
         """Handle mapping enabled checkbox change"""
@@ -768,11 +786,12 @@ class BulkProcessingDialog(QDialog):
         if not self.current_mapping:
             return
 
-        # Count total videos
+        # Count total videos (recursively - includes all nested subfolders)
         total_videos = 0
         if self.current_mapping.is_simple_mode:
             total_videos = FolderScanner.count_videos_in_folder(
-                self.current_mapping.source_folder
+                self.current_mapping.source_folder,
+                recursive=True
             )
         else:
             for sm in self.current_mapping.subfolder_mappings:
@@ -781,7 +800,7 @@ class BulkProcessingDialog(QDialog):
                         self.current_mapping.source_folder,
                         sm.source_subfolder
                     )
-                    total_videos += FolderScanner.count_videos_in_folder(source_path)
+                    total_videos += FolderScanner.count_videos_in_folder(source_path, recursive=True)
 
         # Check daily limit
         can_process_all, can_process_count = self.plan_checker.can_process_count(total_videos)
@@ -832,33 +851,60 @@ class BulkProcessingDialog(QDialog):
             quality=self.quality_combo.currentText()
         )
 
-        # Calculate videos to process
+        # Calculate videos to process (recursively)
         total_videos = 0
         video_list = []
 
         if self.current_mapping.is_simple_mode:
-            source_path = Path(self.current_mapping.source_folder)
-            for f in source_path.iterdir():
-                if f.is_file() and f.suffix.lower() in VIDEO_EXTENSIONS:
-                    video_list.append({
-                        'source': str(f),
-                        'destination': str(Path(self.current_mapping.destination_folder) / f.name)
-                    })
+            # Recursively find all videos in source folder
+            source_base = Path(self.current_mapping.source_folder)
+            dest_base = Path(self.current_mapping.destination_folder)
+
+            for root, dirs, files in os.walk(source_base):
+                # Filter out hidden directories
+                dirs[:] = [d for d in dirs if not d.startswith('.')]
+
+                root_path = Path(root)
+                for f in files:
+                    file_path = root_path / f
+                    if file_path.suffix.lower() in VIDEO_EXTENSIONS:
+                        # Preserve folder structure
+                        rel_path = file_path.relative_to(source_base)
+                        dest_file = dest_base / rel_path
+
+                        video_list.append({
+                            'source': str(file_path),
+                            'destination': str(dest_file)
+                        })
+
             total_videos = len(video_list)
         else:
+            # Complex mode - process each enabled subfolder mapping recursively
             for sm in self.current_mapping.subfolder_mappings:
                 if sm.enabled:
-                    source_path = Path(self.current_mapping.source_folder) / sm.source_subfolder
-                    dest_path = Path(self.current_mapping.destination_folder) / sm.destination_subfolder
+                    source_base = Path(self.current_mapping.source_folder) / sm.source_subfolder
+                    dest_base = Path(self.current_mapping.destination_folder) / sm.destination_subfolder
 
-                    for f in source_path.iterdir():
-                        if f.is_file() and f.suffix.lower() in VIDEO_EXTENSIONS:
-                            video_list.append({
-                                'source': str(f),
-                                'destination': str(dest_path / f.name),
-                                'subfolder': sm.source_subfolder
-                            })
-                    total_videos += len([v for v in video_list if v.get('subfolder') == sm.source_subfolder])
+                    # Recursively walk through this subfolder
+                    for root, dirs, files in os.walk(source_base):
+                        # Filter out hidden directories
+                        dirs[:] = [d for d in dirs if not d.startswith('.')]
+
+                        root_path = Path(root)
+                        for f in files:
+                            file_path = root_path / f
+                            if file_path.suffix.lower() in VIDEO_EXTENSIONS:
+                                # Preserve folder structure within subfolder
+                                rel_path = file_path.relative_to(source_base)
+                                dest_file = dest_base / rel_path
+
+                                video_list.append({
+                                    'source': str(file_path),
+                                    'destination': str(dest_file),
+                                    'subfolder': sm.source_subfolder
+                                })
+
+            total_videos = len(video_list)
 
         # Apply daily limit
         can_process_all, can_process_count = self.plan_checker.can_process_count(len(video_list))

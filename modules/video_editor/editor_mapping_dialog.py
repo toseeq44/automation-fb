@@ -162,17 +162,23 @@ class BulkProcessingDialog(QDialog):
         source_btn.clicked.connect(self.browse_source)
         layout.addWidget(source_btn, 0, 2)
 
+        # Same folder checkbox
+        self.same_folder_checkbox = QCheckBox("Save edited videos in same folder as source (In-place editing)")
+        self.same_folder_checkbox.stateChanged.connect(self.on_same_folder_changed)
+        layout.addWidget(self.same_folder_checkbox, 1, 0, 1, 3)
+
         # Destination folder
-        layout.addWidget(QLabel("Destination Folder (Edited Videos):"), 1, 0)
+        self.dest_label = QLabel("Destination Folder (Edited Videos):")
+        layout.addWidget(self.dest_label, 2, 0)
 
         self.dest_input = QLineEdit()
         self.dest_input.setPlaceholderText("Select folder for edited videos...")
         self.dest_input.textChanged.connect(self.on_folder_changed)
-        layout.addWidget(self.dest_input, 1, 1)
+        layout.addWidget(self.dest_input, 2, 1)
 
-        dest_btn = QPushButton("Browse")
-        dest_btn.clicked.connect(self.browse_destination)
-        layout.addWidget(dest_btn, 1, 2)
+        self.dest_btn = QPushButton("Browse")
+        self.dest_btn.clicked.connect(self.browse_destination)
+        layout.addWidget(self.dest_btn, 2, 2)
 
         # Scan button
         scan_layout = QHBoxLayout()
@@ -183,12 +189,12 @@ class BulkProcessingDialog(QDialog):
         self.scan_btn.clicked.connect(self.scan_folders)
         scan_layout.addWidget(self.scan_btn)
 
-        layout.addLayout(scan_layout, 2, 0, 1, 3)
+        layout.addLayout(scan_layout, 3, 0, 1, 3)
 
         # Scan results label
         self.scan_result_label = QLabel("")
         self.scan_result_label.setWordWrap(True)
-        layout.addWidget(self.scan_result_label, 3, 0, 1, 3)
+        layout.addWidget(self.scan_result_label, 4, 0, 1, 3)
 
         group.setLayout(layout)
         return group
@@ -483,12 +489,44 @@ class BulkProcessingDialog(QDialog):
         if folder:
             self.dest_input.setText(folder)
 
+    def on_same_folder_changed(self, state):
+        """Handle same folder checkbox change"""
+        is_checked = state == Qt.Checked
+
+        # Enable/disable destination folder controls
+        self.dest_label.setEnabled(not is_checked)
+        self.dest_input.setEnabled(not is_checked)
+        self.dest_btn.setEnabled(not is_checked)
+
+        if is_checked:
+            # Auto-fill destination with source folder
+            source = self.source_input.text().strip()
+            if source:
+                self.dest_input.setText(source)
+        else:
+            # Clear destination when unchecked
+            self.dest_input.clear()
+
+        # Update scan button state
+        self.on_folder_changed()
+
     def on_folder_changed(self):
         """Handle folder input change"""
         source = self.source_input.text().strip()
         dest = self.dest_input.text().strip()
 
-        self.scan_btn.setEnabled(bool(source and dest))
+        # Enable scan button if source is provided
+        # For same folder mode, only source is needed
+        # For different folder mode, both source and dest are needed
+        is_same_folder = self.same_folder_checkbox.isChecked()
+
+        if is_same_folder:
+            self.scan_btn.setEnabled(bool(source))
+            # Auto-sync destination with source
+            if source:
+                self.dest_input.setText(source)
+        else:
+            self.scan_btn.setEnabled(bool(source and dest))
 
         # Hide subsequent steps
         self.mapping_group.setVisible(False)
@@ -750,9 +788,12 @@ class BulkProcessingDialog(QDialog):
         plan_info = self.plan_checker.get_plan_info_display()
 
         # Build summary
+        is_same_folder = self.same_folder_checkbox.isChecked()
+
         summary_lines = [
             f"Videos to process: {total_videos}",
             f"Mode: {'Simple' if self.current_mapping.is_simple_mode else 'Subfolder Mapping'}",
+            f"In-place editing: {'Yes (Same folder)' if is_same_folder else 'No (Different folders)'}",
             f"Source: {self.current_mapping.source_folder}",
             f"Destination: {self.current_mapping.destination_folder}"
         ]
@@ -841,9 +882,12 @@ class BulkProcessingDialog(QDialog):
             return
 
         # Confirm
+        is_same_folder = self.same_folder_checkbox.isChecked()
+
         reply = QMessageBox.question(
             self, "Start Processing",
             f"Are you sure you want to process {config['total_count']} videos?\n\n"
+            f"In-place editing: {'Yes (Same folder)' if is_same_folder else 'No (Different folders)'}\n"
             f"Delete source after edit: {'Yes' if config['settings'].delete_source_after_edit else 'No'}\n"
             f"Preset: {config['settings'].preset_id or 'None'}\n"
             f"Output format: {config['settings'].output_format}\n"

@@ -196,6 +196,11 @@ class EditorBatchWorker(QThread):
         Returns:
             VideoProcessResult
         """
+        logger.info(f"🎥 _process_single_video() called")
+        logger.info(f"   Source: {source_path}")
+        logger.info(f"   Destination: {dest_path}")
+        logger.info(f"   Preset: {preset is not None}")
+
         result = VideoProcessResult(
             source_path=source_path,
             destination_path=dest_path,
@@ -204,23 +209,31 @@ class EditorBatchWorker(QThread):
 
         try:
             # Validate source exists
+            logger.info(f"   Checking if source exists...")
             if not os.path.exists(source_path):
+                logger.error(f"   ❌ Source file not found: {source_path}")
                 result.status = ProcessingStatus.FAILED
                 result.error_message = "Source file not found"
                 return result
+            logger.info(f"   ✅ Source file exists")
 
             # Ensure destination directory exists
             dest_dir = os.path.dirname(dest_path)
+            logger.info(f"   Creating destination directory: {dest_dir}")
             os.makedirs(dest_dir, exist_ok=True)
 
             result.status = ProcessingStatus.PROCESSING
 
             if preset:
                 # Process with preset using VideoEditor
+                logger.info(f"   Processing WITH preset...")
                 success = self._process_with_preset(source_path, dest_path, preset)
             else:
                 # Just copy/convert without effects
+                logger.info(f"   Processing WITHOUT preset...")
                 success = self._process_without_preset(source_path, dest_path)
+
+            logger.info(f"   Processing result: {'SUCCESS' if success else 'FAILED'}")
 
             if success:
                 result.status = ProcessingStatus.SUCCESS
@@ -259,16 +272,20 @@ class EditorBatchWorker(QThread):
             True if successful
         """
         try:
+            logger.info(f"   🎨 _process_with_preset() starting")
             from modules.video_editor.preset_manager import PresetManager
 
             preset_manager = PresetManager()
+            logger.info(f"      PresetManager created")
 
             # Get quality setting
             quality = 'high'
             if self.settings:
                 quality = self.settings.quality
+            logger.info(f"      Quality: {quality}")
 
             # Apply preset
+            logger.info(f"      Applying preset to video...")
             success = preset_manager.apply_preset_to_video(
                 preset=preset,
                 video_path=source_path,
@@ -277,10 +294,12 @@ class EditorBatchWorker(QThread):
                 progress_callback=lambda msg: self.log_message.emit(msg, "info")
             )
 
+            logger.info(f"      Preset apply result: {success}")
             return success
 
         except Exception as e:
-            logger.error(f"Error applying preset: {e}")
+            logger.error(f"   ❌ Error applying preset: {e}", exc_info=True)
+            self.log_message.emit(f"💥 Preset error: {type(e).__name__}: {str(e)}", "error")
             return False
 
     def _process_without_preset(self, source_path: str, dest_path: str) -> bool:
@@ -296,10 +315,17 @@ class EditorBatchWorker(QThread):
             True if successful
         """
         try:
+            logger.info(f"   📦 _process_without_preset() starting")
+            logger.info(f"      Source: {source_path}")
+            logger.info(f"      Dest: {dest_path}")
+
             # Validate source exists
+            logger.info(f"      Validating source exists...")
             if not os.path.exists(source_path):
+                logger.error(f"      ❌ Source file not found!")
                 self.log_message.emit(f"⚠️  Source file not found: {source_path}", "warning")
                 return False
+            logger.info(f"      ✅ Source validated")
 
             # Create destination directory if it doesn't exist
             dest_dir = os.path.dirname(dest_path)

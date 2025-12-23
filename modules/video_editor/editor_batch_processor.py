@@ -108,14 +108,27 @@ class EditorBatchWorker(QThread):
 
         # Load preset if specified
         preset = None
+        logger.info(f"   Checking for preset...")
+        logger.info(f"   Settings: {self.settings is not None}")
+        if self.settings:
+            logger.info(f"   Preset ID: {self.settings.preset_id}")
+
         if self.settings and self.settings.preset_id:
+            logger.info(f"   Loading preset: {self.settings.preset_id}")
             preset = self._load_preset(self.settings.preset_id)
             if preset:
+                logger.info(f"   ✅ Preset loaded successfully")
                 self.log_message.emit(f"Loaded preset: {self.settings.preset_id}", "info")
             else:
+                logger.warning(f"   ⚠️  Preset not found or failed to load")
                 self.log_message.emit(f"Preset not found: {self.settings.preset_id}", "warning")
+        else:
+            logger.info(f"   No preset specified, will process without preset")
 
         for idx, video_info in enumerate(self.videos):
+            logger.info(f"   📹 Processing video {idx + 1}/{total}")
+            logger.info(f"      Video info: {video_info}")
+
             # Check if cancelled
             if self._cancelled:
                 # Mark remaining as cancelled
@@ -136,6 +149,9 @@ class EditorBatchWorker(QThread):
 
             source_path = video_info['source']
             dest_path = video_info['destination']
+
+            logger.info(f"      Source path: {source_path}")
+            logger.info(f"      Dest path: {dest_path}")
 
             # Emit progress
             self.progress.emit(idx + 1, total)
@@ -486,12 +502,17 @@ class EditorBatchWorker(QThread):
     def _load_preset(self, preset_name: str):
         """Load preset by name"""
         try:
+            logger.info(f"      _load_preset() called for: {preset_name}")
             from modules.video_editor.preset_manager import PresetManager
 
             preset_manager = PresetManager()
-            return preset_manager.load_preset(preset_name)
+            logger.info(f"      PresetManager created")
+
+            preset = preset_manager.load_preset(preset_name)
+            logger.info(f"      Preset loaded: {preset is not None}")
+            return preset
         except Exception as e:
-            logger.error(f"Error loading preset {preset_name}: {e}")
+            logger.error(f"      ❌ Error loading preset {preset_name}: {e}", exc_info=True)
             return None
 
     def _get_summary(self) -> Dict[str, Any]:

@@ -199,6 +199,32 @@ class VideoDownloaderThread(QThread):
 
     # Removed old timestamp logic - now using history.json only
 
+    def _get_ytdlp_command(self):
+        """
+        Get yt-dlp command with smart detection and fallbacks.
+
+        Priority:
+        1. Bundled with EXE (OneSoul/_internal/yt-dlp.exe)
+        2. System PATH (yt-dlp or yt-dlp.exe)
+        3. Common Windows install locations
+        4. None (use Python library API as final fallback)
+
+        Returns:
+            str or None: Command to use, or None to trigger Python API fallback
+        """
+        # Cache the result to avoid repeated lookups
+        if hasattr(self, '_ytdlp_cmd_cache'):
+            return self._ytdlp_cmd_cache
+
+        try:
+            from modules.config.paths import find_ytdlp_executable
+            cmd = find_ytdlp_executable()
+            self._ytdlp_cmd_cache = cmd
+            return cmd
+        except Exception:
+            self._ytdlp_cmd_cache = None
+            return None
+
     def _cleanup_tracking_files(self, folder_path: str):
         """Remove any leftover tracking files (for single mode cleanup)"""
         if self.is_bulk_mode:
@@ -258,51 +284,61 @@ class VideoDownloaderThread(QThread):
             pass
 
     def get_cookie_file(self, url, source_folder=None):
-        """Return the most relevant cookies file for the given URL."""
-        # IMPROVED: Returns first valid cookie (single cookie for backward compatibility)
-        # But also stores all valid cookies in self._all_cookie_files for fallback
+        """
+        Return the most relevant cookies file for the given URL.
+
+        Priority (in order):
+        1. chrome_cookies.txt (Link Grabber master file)
+        2. Platform-specific files (tiktok.txt, instagram.txt, etc.)
+        3. Generic fallback (cookies.txt)
+        4. Desktop fallback (toseeq-cookies.txt)
+
+        Also stores all valid cookies in self._all_cookie_files for fallback attempts.
+        """
         try:
+            from modules.config.paths import get_cookies_dir
+
             candidates = []
             platform = _detect_platform(url)
 
-            def _extend_with_platform_variants(base_path: Path):
-                if not base_path:
-                    return
-                names = ["cookies.txt"]
-                if platform != 'other':
-                    names.insert(0, f"{platform}.txt")
-                for name in names:
-                    candidate = base_path / name
+            # Get persistent cookies directory
+            cookies_dir = get_cookies_dir()
+
+            # === PRIORITY 1: chrome_cookies.txt (Link Grabber saves here) ===
+            master_cookie = cookies_dir / "chrome_cookies.txt"
+            candidates.append(master_cookie)
+
+            # === PRIORITY 2: Platform-specific cookies ===
+            if platform != 'other':
+                platform_cookie = cookies_dir / f"{platform}.txt"
+                candidates.append(platform_cookie)
+
+            # === PRIORITY 3: Generic fallback ===
+            universal_cookie = cookies_dir / "cookies.txt"
+            candidates.append(universal_cookie)
+
+            # === PRIORITY 4: Desktop fallback (user convenience) ===
+            desktop_cookie = Path.home() / "Desktop" / "toseeq-cookies.txt"
+            candidates.append(desktop_cookie)
+
+            # === PRIORITY 5: Source folder cookies (for bulk mode compatibility) ===
+            if source_folder:
+                folder_path = Path(source_folder)
+
+                # Check source folder directly
+                for name in ["chrome_cookies.txt", f"{platform}.txt", "cookies.txt"]:
+                    candidate = folder_path / name
                     if candidate not in candidates:
                         candidates.append(candidate)
 
-            if source_folder:
-                folder_path = Path(source_folder)
-                _extend_with_platform_variants(folder_path)
+                # Check source_folder/cookies/ subdirectory
                 cookies_sub = folder_path / "cookies"
-                _extend_with_platform_variants(cookies_sub)
-                parent_cookies = folder_path.parent / "cookies"
-                if parent_cookies != cookies_sub:
-                    _extend_with_platform_variants(parent_cookies)
+                for name in ["chrome_cookies.txt", f"{platform}.txt", "cookies.txt"]:
+                    candidate = cookies_sub / name
+                    if candidate not in candidates:
+                        candidates.append(candidate)
 
-            current_file = Path(__file__).resolve()
-            project_root = current_file.parent.parent.parent
-            cookies_dir = project_root / "cookies"
-            cookies_dir.mkdir(parents=True, exist_ok=True)
-
-            if platform != 'other':
-                platform_cookie = cookies_dir / f"{platform}.txt"
-                _extend_with_platform_variants(platform_cookie.parent)
-
-            universal_cookie = cookies_dir / "cookies.txt"
-            if universal_cookie not in candidates:
-                candidates.append(universal_cookie)
-
-            desktop_cookie = Path.home() / "Desktop" / "toseeq-cookies.txt"
-            if desktop_cookie not in candidates:
-                candidates.append(desktop_cookie)
-
-            # IMPROVED: Store ALL valid cookie files for fallback attempts
+            # Find all valid cookie files
             valid_cookies = []
             for candidate in candidates:
                 try:
@@ -311,15 +347,16 @@ class VideoDownloaderThread(QThread):
                 except Exception:
                     continue
 
-            # Store for fallback use
+            # Store for fallback use by other methods
             self._all_cookie_files = valid_cookies
 
-            # Return first valid cookie (backward compatible)
+            # Return first valid cookie (highest priority)
             if valid_cookies:
                 return valid_cookies[0]
 
         except Exception:
             pass
+
         return None
 
     # -----------------------
@@ -331,9 +368,15 @@ class VideoDownloaderThread(QThread):
             start_time = datetime.now()
             self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] 🚀 Method 1: YT-DLP Standard")
 
+            # Smart yt-dlp detection
+            ytdlp_cmd = self._get_ytdlp_command()
+            if not ytdlp_cmd:
+                self.progress.emit(f"   ⚠️ yt-dlp not found, skipping command-based method")
+                return False
+
             format_string = self.format_override or 'best'
             cmd = [
-                'yt-dlp',
+                ytdlp_cmd,  # Use detected command instead of hardcoded 'yt-dlp'
                 '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
                 '--rm-cache-dir',
                 '-f', format_string,
@@ -474,6 +517,15 @@ class VideoDownloaderThread(QThread):
         Try TikTok download with given configuration
         Returns: {'success': bool, 'message': str, 'ip_blocked': bool}
         """
+        # Smart yt-dlp detection
+        ytdlp_cmd = self._get_ytdlp_command()
+        if not ytdlp_cmd:
+            return {
+                'success': False,
+                'message': 'yt-dlp command not found',
+                'ip_blocked': False
+            }
+
         last_error = ""
         ip_blocked = False
 
@@ -493,7 +545,7 @@ class VideoDownloaderThread(QThread):
                     user_agent = _get_random_user_agent()
 
                     cmd = [
-                        'yt-dlp',
+                        ytdlp_cmd,  # Use detected command
                         '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
                         '-f', fmt,
                         '--no-playlist',
@@ -685,8 +737,15 @@ class VideoDownloaderThread(QThread):
 
                 # Try download with validated cookie
                 self.progress.emit(f"   📥 Attempting download...")
+
+                # Smart yt-dlp detection
+                ytdlp_cmd = self._get_ytdlp_command()
+                if not ytdlp_cmd:
+                    self.progress.emit(f"   ⚠️ yt-dlp not found, skipping")
+                    continue
+
                 cmd = [
-                    'yt-dlp',
+                    ytdlp_cmd,  # Use detected command
                     '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
                     '--cookies', current_cookie_file,
                     '-f', 'best',
@@ -917,9 +976,16 @@ class VideoDownloaderThread(QThread):
     def _method5_force_ipv4(self, url, output_path, cookie_file=None):
         try:
             self.progress.emit("🔄 Method 5: Force IPv4 fallback")
+
+            # Smart yt-dlp detection
+            ytdlp_cmd = self._get_ytdlp_command()
+            if not ytdlp_cmd:
+                self.progress.emit(f"   ⚠️ yt-dlp not found, skipping")
+                return False
+
             format_string = self.format_override or 'best'
             cmd = [
-                'yt-dlp',
+                ytdlp_cmd,  # Use detected command
                 '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
                 '-f', format_string,
                 '--force-ipv4', '--no-warnings', '--geo-bypass',
@@ -1115,12 +1181,19 @@ class VideoDownloaderThread(QThread):
 
                     # Count successes/failures per creator
                     for creator, creator_info in self.bulk_creators.items():
-                        creator_links = set(creator_info.get('links', []))
+                        # === FIX: Normalize creator links for accurate matching ===
+                        raw_links = creator_info.get('links', [])
+                        creator_links_normalized = set(normalize_url(link) for link in raw_links)
+
                         success = 0
                         failed = 0
 
                         for url in self.urls:
-                            if url in creator_links:
+                            # === FIX: Normalize current URL for comparison ===
+                            url_normalized = normalize_url(url)
+
+                            # Now comparison will work correctly
+                            if url_normalized in creator_links_normalized:
                                 if url in self.downloaded_links:
                                     success += 1
                                 else:

@@ -38,9 +38,9 @@ class LinkGrabberPage(QWidget):
         self.creator = "unknown"
         self.creator_results = {}
 
-        # Root cookies folder
-        self.cookies_dir = Path(__file__).parent.parent.parent / "cookies"
-        self.cookies_dir.mkdir(parents=True, exist_ok=True)
+        # Root cookies folder - use persistent path (works in dev and EXE mode)
+        from modules.config.paths import get_cookies_dir
+        self.cookies_dir = get_cookies_dir()
 
         self.init_ui()
 

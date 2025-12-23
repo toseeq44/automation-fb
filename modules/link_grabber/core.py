@@ -1177,10 +1177,9 @@ class LinkGrabberThread(QThread):
         self.found_links = []
         self.creator_name = ""
 
-        # Use root cookies folder
-        this_file = Path(__file__).resolve()
-        self.cookies_dir = this_file.parent.parent.parent / "cookies"
-        self.cookies_dir.mkdir(parents=True, exist_ok=True)
+        # Use root cookies folder - persistent path (works in dev and EXE mode)
+        from modules.config.paths import get_cookies_dir
+        self.cookies_dir = get_cookies_dir()
 
     def run(self):
         try:
@@ -1286,10 +1285,9 @@ class BulkLinkGrabberThread(QThread):
         self.found_links = []
         self.creator_data = {}
 
-        # Use root cookies folder
-        this_file = Path(__file__).resolve()
-        self.cookies_dir = this_file.parent.parent.parent / "cookies"
-        self.cookies_dir.mkdir(parents=True, exist_ok=True)
+        # Use root cookies folder - persistent path (works in dev and EXE mode)
+        from modules.config.paths import get_cookies_dir
+        self.cookies_dir = get_cookies_dir()
 
     def run(self):
         try:

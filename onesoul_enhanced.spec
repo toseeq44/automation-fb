@@ -12,6 +12,7 @@ a = Analysis(
     pathex=['.'],
     binaries=[
         ('cloudflared.exe', '.'),
+        ('yt-dlp.exe', '.'),  # Bundle yt-dlp for video downloads
     ],
     datas=[
         # Helper images for auto uploader

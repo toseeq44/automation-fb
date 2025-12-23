@@ -2570,10 +2570,6 @@ class VideoUploadHelper:
                 # Step 7: Monitor progress (upload continues in background)
                 logger.info("📊 Step 7: Monitoring upload progress...")
 
-                # DEFENSIVE CHECK: Ensure window is ready before monitoring
-                if not self.ensure_window_ready("monitoring upload progress"):
-                    logger.warning("[Upload] ⚠ Window readiness check failed, but continuing...")
-
                 # CRITICAL FIX: Don't retry page navigation if upload already started
                 # Video is already selected and uploading - page reload would lose progress!
                 try:
@@ -2601,10 +2597,6 @@ class VideoUploadHelper:
                 logger.info("   Bookmark: %s", bookmark_title)
                 logger.info("   Video: %s", video_name)
                 logger.info("═══════════════════════════════════════════")
-
-                # DEFENSIVE CHECK: Ensure window is ready before finding publish button
-                if not self.ensure_window_ready("finding publish button"):
-                    logger.warning("[Upload] ⚠ Window readiness check failed, but continuing...")
 
                 # Detect, hover, and CLICK publish button
                 logger.info("🚀 Step 8: Publishing video...")

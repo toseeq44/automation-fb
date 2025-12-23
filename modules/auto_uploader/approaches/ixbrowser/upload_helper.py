@@ -2310,10 +2310,32 @@ class VideoUploadHelper:
 
                 logger.info("[TIMESTAMP] After stabilization wait: %s", datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3])
 
-                # Step 3-Priority2: Dismiss any popups/notifications before proceeding
-                logger.info("[TIMESTAMP] Before dismiss notifications: %s", datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3])
-                self.dismiss_notifications()
-                logger.info("[TIMESTAMP] After dismiss notifications: %s", datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3])
+                # ═══════════════════════════════════════════════════════════════
+                # STEP 1 (USER APPROACH): Save all currently open windows in queue
+                # This queue will help us identify NEW windows after button click
+                # ═══════════════════════════════════════════════════════════════
+                logger.info("[Upload] 📋 STEP 1: Creating queue of current windows...")
+                existing_window_handles = set()
+
+                import platform
+                if platform.system() == "Windows":
+                    import ctypes
+                    from ctypes import wintypes
+
+                    user32 = ctypes.windll.user32
+
+                    def save_windows_callback(hwnd, lParam):
+                        if user32.IsWindowVisible(hwnd):
+                            existing_window_handles.add(hwnd)
+                        return True
+
+                    WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+                    save_callback = WNDENUMPROC(save_windows_callback)
+                    user32.EnumWindows(save_callback, 0)
+
+                    logger.info("[Upload] ✓ Window queue created: %d windows saved", len(existing_window_handles))
+                else:
+                    logger.warning("[Upload] ⚠ Non-Windows system, skipping window queue")
 
                 # Step 3a: Find file input element (BEFORE clicking "Add Videos" button)
                 logger.info("📤 Step 4: Pre-loading file (prevents dialog)...")
@@ -2368,13 +2390,10 @@ class VideoUploadHelper:
                 else:
                     file_preloaded = False
 
-                # Step 4: Now find and click "Add Videos" button
-                logger.info("🔘 Step 5: Finding 'Add Videos' button...")
-                logger.info("[TIMESTAMP] Finding button: %s", datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3])
-
-                # DEFENSIVE CHECK: Ensure window is ready before finding button
-                if not self.ensure_window_ready("finding Add Videos button"):
-                    logger.warning("[Upload] ⚠ Window readiness check failed, but continuing...")
+                # ═══════════════════════════════════════════════════════════════
+                # STEP 2 (USER APPROACH): Detect and click "Add Videos" button
+                # ═══════════════════════════════════════════════════════════════
+                logger.info("[Upload] 🔘 STEP 2: Finding 'Add Videos' button...")
 
                 button_result = self.find_add_videos_button()
                 if not button_result:
@@ -2383,30 +2402,9 @@ class VideoUploadHelper:
                         continue
                     raise Exception("Add Videos button not found")
 
-                logger.info("✓ Button found, clicking...")
+                logger.info("[Upload] ✓ Button found, clicking...")
 
-                # === CRITICAL: Save existing windows BEFORE clicking button ===
-                existing_window_handles = set()
-                if platform.system() == "Windows":
-                    import ctypes
-                    from ctypes import wintypes
-
-                    try:
-                        # Get all current window handles
-                        def save_windows_callback(hwnd, lParam):
-                            if user32.IsWindowVisible(hwnd):
-                                existing_window_handles.add(hwnd)
-                            return True
-
-                        WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-                        save_callback = WNDENUMPROC(save_windows_callback)
-                        user32.EnumWindows(save_callback, 0)
-
-                        logger.info("[Upload] 📋 Saved %d existing window handles before button click", len(existing_window_handles))
-                    except Exception as e:
-                        logger.warning("[Upload] ⚠ Could not save window list: %s", str(e))
-
-                # Now click the button
+                # Click the button
                 if isinstance(button_result, tuple):
                     # Image recognition result - use PyAutoGUI
                     button_x, button_y = button_result
@@ -2415,126 +2413,83 @@ class VideoUploadHelper:
                     # Text-based result - use Selenium click
                     button_result.click()
 
-                logger.info("✓ Button clicked successfully")
+                logger.info("[Upload] ✓ Button clicked successfully")
 
-                # CRITICAL: Monitor for file dialog and close it INSTANTLY if it appears
-                # Use FAST POLLING with Windows API - 30 checks over 3 seconds (every 100ms)
-                logger.info("[Upload] 🔍 Monitoring for unwanted file dialog (fast polling 30x)...")
+                # ═══════════════════════════════════════════════════════════════
+                # STEP 3 (USER APPROACH): Check for extra windows and close them
+                # Simple approach: Close ONLY NEW file dialog windows
+                # ═══════════════════════════════════════════════════════════════
+                logger.info("[Upload] 🔍 STEP 3: Checking for extra windows (file dialogs)...")
 
-                import platform
                 if platform.system() == "Windows":
-                    import ctypes
-                    from ctypes import wintypes
-
-                    # Load Windows API functions
-                    user32 = ctypes.windll.user32
-
-                    # Define Windows API constants and functions
                     WM_CLOSE = 0x0010
+                    dialog_found = False
 
-                    # Fast polling: 30 checks over 3 seconds (every 100ms)
-                    dialog_found_and_closed = False
-                    max_polls = 30
-                    poll_interval = 0.1  # 100ms - MUCH faster than old 500ms
-
-                    # Common file dialog class names and title patterns
-                    dialog_class_names = [
-                        b"#32770",  # Standard dialog box
-                        b"OpenFileDialog",
-                        b"SaveFileDialog"
-                    ]
-
-                    dialog_title_keywords = [
-                        "Open", "Browse", "Choose", "Select", "File",
-                        "Pick", "Find"
-                        # REMOVED "Upload" - too broad, was closing upload progress windows!
-                    ]
-
-                    for poll_attempt in range(max_polls):
+                    # Poll for 3 seconds to catch file dialog
+                    for poll_attempt in range(30):  # 30 x 100ms = 3 seconds
                         try:
-                            # EnumWindows callback to find dialog windows
                             found_dialogs = []
 
-                            def enum_window_callback(hwnd, lParam):
+                            def check_new_windows(hwnd, lParam):
                                 if user32.IsWindowVisible(hwnd):
-                                    # === CRITICAL: Only check NEW windows (not in saved list) ===
+                                    # Check if this is a NEW window (not in our queue)
                                     if hwnd in existing_window_handles:
-                                        # This window existed before button click - SAFE, ignore it
-                                        return True
+                                        return True  # Skip - this window was already there
+
+                                    # Get window class name
+                                    class_buffer = ctypes.create_string_buffer(256)
+                                    user32.GetClassNameA(hwnd, class_buffer, 256)
+                                    class_name = class_buffer.value
 
                                     # Get window title
                                     length = user32.GetWindowTextLengthW(hwnd)
+                                    title = ""
                                     if length > 0:
                                         buffer = ctypes.create_unicode_buffer(length + 1)
                                         user32.GetWindowTextW(hwnd, buffer, length + 1)
                                         title = buffer.value
 
-                                        # Get window class name
-                                        class_buffer = ctypes.create_string_buffer(256)
-                                        user32.GetClassNameA(hwnd, class_buffer, 256)
-                                        class_name = class_buffer.value
+                                    # ONLY close Windows file dialogs (class #32770)
+                                    # Don't check title - only class name to avoid mistakes
+                                    if class_name == b"#32770":
+                                        found_dialogs.append((hwnd, title))
 
-                                        # Check if it's a file dialog
-                                        is_dialog = False
+                                return True
 
-                                        # Check by class name
-                                        if class_name in dialog_class_names:
-                                            is_dialog = True
-
-                                        # Check by title keywords
-                                        if title and any(keyword.lower() in title.lower() for keyword in dialog_title_keywords):
-                                            is_dialog = True
-
-                                        if is_dialog:
-                                            # This is a NEW window AND matches dialog patterns
-                                            found_dialogs.append((hwnd, title, class_name))
-                                            logger.debug("[Upload] 🆕 NEW dialog detected: '%s' (handle: %d)", title, hwnd)
-
-                                return True  # Continue enumeration
-
-                            # Create callback function type
                             WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-                            callback = WNDENUMPROC(enum_window_callback)
-
-                            # Enumerate all windows
+                            callback = WNDENUMPROC(check_new_windows)
                             user32.EnumWindows(callback, 0)
 
+                            # Close any new file dialogs found
                             if found_dialogs:
-                                for hwnd, title, class_name in found_dialogs:
-                                    logger.warning("[Upload] ⚠ NEW FILE DIALOG DETECTED! Title: '%s' | Class: %s",
-                                                 title, class_name.decode('utf-8', errors='ignore'))
-                                    logger.info("[Upload] 📝 This window is NEW (wasn't in saved list)")
-                                    logger.warning("[Upload] 🔨 Closing NEW dialog INSTANTLY with WM_CLOSE...")
-
-                                    # Close window immediately using Windows API (faster than ESC key)
+                                for hwnd, title in found_dialogs:
+                                    logger.warning("[Upload] ⚠ NEW file dialog found: '%s'", title)
+                                    logger.info("[Upload] 🔨 Closing extra window...")
                                     user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+                                    dialog_found = True
 
-                                    logger.info("[Upload] ✅ Dialog closed in ~%dms!", int((poll_attempt + 1) * poll_interval * 1000))
-                                    dialog_found_and_closed = True
+                                # Exit polling after closing dialog
+                                time.sleep(0.2)
+                                break
 
-                                if dialog_found_and_closed:
-                                    time.sleep(0.2)  # Brief pause after closing
-                                    break  # Exit polling loop
-                            else:
-                                # No dialog found in this check
-                                if poll_attempt == 0:
-                                    logger.debug("[Upload] Poll %d/%d: No dialog (checking every %dms...)",
-                                               poll_attempt + 1, max_polls, int(poll_interval * 1000))
-
-                                time.sleep(poll_interval)  # Wait 100ms before next poll
+                            # Wait 100ms before next poll
+                            time.sleep(0.1)
 
                         except Exception as e:
-                            logger.debug("[Upload] Poll %d/%d check failed: %s", poll_attempt + 1, max_polls, str(e))
-                            time.sleep(poll_interval)
+                            logger.debug("[Upload] Window check failed: %s", str(e))
+                            time.sleep(0.1)
 
-                    # Final status
-                    if not dialog_found_and_closed:
-                        logger.info("[Upload] ✅ No file dialog detected after %d fast polls (GOOD!)", max_polls)
+                    # Log result
+                    if dialog_found:
+                        logger.info("[Upload] ✓ Extra window closed")
                     else:
-                        logger.info("[Upload] ✅ Dialog was closed instantly, no visible flash!")
+                        logger.info("[Upload] ✓ No extra windows (GOOD!)")
 
-                logger.info("[Upload] Waiting for page response (with star animation)...")
-                self.idle_mouse_activity(duration=2.0, base_radius=90)  # Wait for page response
+                # ═══════════════════════════════════════════════════════════════
+                # STEP 4 (USER APPROACH): Wait for upload interface to clear
+                # ═══════════════════════════════════════════════════════════════
+                logger.info("[Upload] ⏳ STEP 4: Waiting for upload interface to clear...")
+                time.sleep(2)
 
                 if file_preloaded:
                     logger.info("[Upload] ═══════════════════════════════════════════")
@@ -2558,49 +2513,33 @@ class VideoUploadHelper:
                 # Don't wait for 100% - title field appears as soon as upload starts
                 logger.info("✏️  Step 6: Setting video title...")
 
-                # Short wait for upload interface to fully appear
-                time.sleep(1)
-
-                # Set title NOW (upload running in background)
+                # Set title (upload running in background)
                 title_set = self.set_video_title(video_name)
                 if title_set:
                     logger.info("✓ Title set successfully")
                 else:
                     logger.warning("⚠ Could not set title (continuing anyway)")
 
-                # Step 7: Monitor progress (upload continues in background)
-                logger.info("📊 Step 7: Monitoring upload progress...")
+                # ═══════════════════════════════════════════════════════════════
+                # STEP 5 (USER APPROACH): Track video upload progress 0 to 100%
+                # ═══════════════════════════════════════════════════════════════
+                logger.info("[Upload] 📊 STEP 5: Tracking upload progress (0% to 100%)...")
 
-                # CRITICAL FIX: Don't retry page navigation if upload already started
-                # Video is already selected and uploading - page reload would lose progress!
                 try:
                     upload_completed = self.monitor_upload_progress()
                 except Exception as monitor_error:
-                    logger.error("[Upload] ⚠ Monitor failed with exception: %s", str(monitor_error))
-                    logger.warning("[Upload] Video upload may still be in progress...")
-                    logger.warning("[Upload] Attempting to continue with publish detection...")
-                    upload_completed = False  # Continue to publish step anyway
+                    logger.error("[Upload] ⚠ Monitor error: %s", str(monitor_error))
+                    upload_completed = False
 
-                if not upload_completed:
-                    logger.warning("[Upload] ═══════════════════════════════════════════")
-                    logger.warning("[Upload] ⚠ Upload monitoring did not confirm 100%")
-                    logger.warning("[Upload] This could mean:")
-                    logger.warning("[Upload]   1. Upload is still in progress")
-                    logger.warning("[Upload]   2. Upload interface changed")
-                    logger.warning("[Upload]   3. Network issue")
-                    logger.warning("[Upload] Proceeding to publish step (upload may be done)...")
-                    logger.warning("[Upload] ═══════════════════════════════════════════")
-                    # DON'T retry here - video already selected, just continue to publish
+                if upload_completed:
+                    logger.info("[Upload] ✅ Upload completed (100%)")
+                else:
+                    logger.warning("[Upload] ⚠ Could not confirm 100%, proceeding anyway...")
 
-                # Success!
-                logger.info("═══════════════════════════════════════════")
-                logger.info("✅ VIDEO UPLOADED SUCCESSFULLY!")
-                logger.info("   Bookmark: %s", bookmark_title)
-                logger.info("   Video: %s", video_name)
-                logger.info("═══════════════════════════════════════════")
-
-                # Detect, hover, and CLICK publish button
-                logger.info("🚀 Step 8: Publishing video...")
+                # ═══════════════════════════════════════════════════════════════
+                # STEP 6 (USER APPROACH): Detect and click publish button
+                # ═══════════════════════════════════════════════════════════════
+                logger.info("[Upload] 🚀 STEP 6: Detecting publish button...")
                 publish_success = self.detect_and_hover_publish_button()
 
                 # CRITICAL: Only move/delete video if publish was successful!

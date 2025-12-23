@@ -345,14 +345,18 @@ class BulkProcessingDialog(QDialog):
                 font-size: 14px;
                 border: 1px solid #3a3a3a;
                 border-radius: 8px;
-                margin-top: 12px;
+                margin-top: 20px;
                 padding: 15px;
+                padding-top: 25px;
                 background-color: #242424;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 subcontrol-position: top left;
-                padding: 0 10px;
+                padding: 5px 10px;
+                margin-top: 0px;
+                background-color: #1a1a1a;
+                border-radius: 4px;
                 color: #00bcd4;
             }
             QLabel {
@@ -654,25 +658,10 @@ class BulkProcessingDialog(QDialog):
             # Source subfolder
             self.mapping_table.setItem(row, 1, QTableWidgetItem(sm.source_subfolder))
 
-            # Destination dropdown
-            dest_combo = QComboBox()
-            dest_combo.addItems(dest_subs + [sm.destination_subfolder])
-            dest_combo.addItem("-- Create New --")
-
-            # Remove duplicates
-            items = []
-            for i in range(dest_combo.count()):
-                text = dest_combo.itemText(i)
-                if text not in items:
-                    items.append(text)
-            dest_combo.clear()
-            dest_combo.addItems(items)
-
-            dest_combo.setCurrentText(sm.destination_subfolder)
-            dest_combo.currentTextChanged.connect(
-                lambda text, r=row: self.on_dest_subfolder_changed(r, text)
-            )
-            self.mapping_table.setCellWidget(row, 2, dest_combo)
+            # Destination - Use plain text item instead of combo for better display
+            dest_item = QTableWidgetItem(sm.destination_subfolder)
+            dest_item.setToolTip(sm.destination_subfolder)  # Full path on hover
+            self.mapping_table.setItem(row, 2, dest_item)
 
             # Video count (recursive - includes all nested subfolders)
             source_path = os.path.join(

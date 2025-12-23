@@ -128,7 +128,8 @@ class EditorBatchWorker(QThread):
             # Emit progress
             self.progress.emit(idx + 1, total)
             self.video_started.emit(source_path, idx + 1, total)
-            self.log_message.emit(f"Processing: {os.path.basename(source_path)}", "info")
+            # Show full path for better tracking
+            self.log_message.emit(f"Processing [{idx + 1}/{total}]: {source_path}", "info")
 
             # Process video
             start_time = time.time()
@@ -151,15 +152,15 @@ class EditorBatchWorker(QThread):
                 'deleted': result.source_deleted
             })
 
-            # Log result
+            # Log result with full path
             if result.status == ProcessingStatus.SUCCESS:
                 self.log_message.emit(
-                    f"Completed: {os.path.basename(source_path)} ({result.processing_time:.1f}s)",
+                    f"✅ SUCCESS: {source_path}\n   → Saved to: {dest_path} ({result.processing_time:.1f}s)",
                     "success"
                 )
             else:
                 self.log_message.emit(
-                    f"Failed: {os.path.basename(source_path)} - {result.error_message}",
+                    f"❌ FAILED: {source_path}\n   → Error: {result.error_message}",
                     "error"
                 )
 
@@ -217,17 +218,19 @@ class EditorBatchWorker(QThread):
                     try:
                         os.remove(source_path)
                         result.source_deleted = True
-                        self.log_message.emit(f"Deleted source: {os.path.basename(source_path)}", "info")
+                        self.log_message.emit(f"🗑️  Deleted original: {source_path}", "info")
                     except Exception as e:
-                        self.log_message.emit(f"Failed to delete source: {e}", "warning")
+                        self.log_message.emit(f"⚠️  Failed to delete: {source_path}\n   → {e}", "warning")
             else:
                 result.status = ProcessingStatus.FAILED
-                result.error_message = "Processing failed"
+                if not result.error_message:
+                    result.error_message = "Video processing failed - no detailed error available"
 
         except Exception as e:
             result.status = ProcessingStatus.FAILED
-            result.error_message = str(e)
-            logger.error(f"Error processing {source_path}: {e}")
+            result.error_message = f"{type(e).__name__}: {str(e)}"
+            logger.error(f"Error processing {source_path}: {e}", exc_info=True)
+            self.log_message.emit(f"💥 Exception: {type(e).__name__}: {str(e)}", "error")
 
         return result
 
@@ -281,6 +284,11 @@ class EditorBatchWorker(QThread):
             True if successful
         """
         try:
+            # Validate source exists
+            if not os.path.exists(source_path):
+                self.log_message.emit(f"⚠️  Source file not found: {source_path}", "warning")
+                return False
+
             source_ext = Path(source_path).suffix.lower()
             dest_ext = Path(dest_path).suffix.lower()
 
@@ -293,16 +301,21 @@ class EditorBatchWorker(QThread):
             if dest_ext != f'.{output_format}':
                 dest_path = str(Path(dest_path).with_suffix(f'.{output_format}'))
 
+            self.log_message.emit(f"📋 Copy/Convert: {source_ext} → .{output_format}", "info")
+
             # If same format and no processing needed, just copy
             if source_ext == f'.{output_format}':
                 shutil.copy2(source_path, dest_path)
+                self.log_message.emit(f"📄 Direct copy (same format)", "info")
                 return True
 
             # Convert using FFmpeg
+            self.log_message.emit(f"🔄 Converting using FFmpeg...", "info")
             return self._convert_video(source_path, dest_path, output_format)
 
         except Exception as e:
-            logger.error(f"Error processing without preset: {e}")
+            logger.error(f"Error processing without preset: {e}", exc_info=True)
+            self.log_message.emit(f"💥 Processing error: {type(e).__name__}: {str(e)}", "error")
             return False
 
     def _convert_video(self, source_path: str, dest_path: str, output_format: str) -> bool:
@@ -345,6 +358,8 @@ class EditorBatchWorker(QThread):
                 dest_path
             ]
 
+            self.log_message.emit(f"🎬 Running FFmpeg (quality: {quality})...", "info")
+
             # Run FFmpeg
             result = subprocess.run(
                 cmd,
@@ -354,7 +369,9 @@ class EditorBatchWorker(QThread):
             )
 
             if result.returncode != 0:
-                logger.error(f"FFmpeg error: {result.stderr}")
+                error_msg = result.stderr[-500:] if result.stderr else "Unknown FFmpeg error"
+                logger.error(f"FFmpeg error: {error_msg}")
+                self.log_message.emit(f"⚠️  FFmpeg failed, falling back to direct copy", "warning")
                 # Try simple copy as fallback
                 shutil.copy2(source_path, dest_path)
 
@@ -362,14 +379,21 @@ class EditorBatchWorker(QThread):
 
         except subprocess.TimeoutExpired:
             logger.error("FFmpeg timeout")
+            self.log_message.emit(f"⏱️  FFmpeg timeout (>10 min), skipping conversion", "error")
             return False
         except FileNotFoundError:
             # FFmpeg not found, fall back to copy
             logger.warning("FFmpeg not found, copying file instead")
-            shutil.copy2(source_path, dest_path)
-            return True
+            self.log_message.emit(f"ℹ️  FFmpeg not installed - using direct copy", "info")
+            try:
+                shutil.copy2(source_path, dest_path)
+                return True
+            except Exception as copy_err:
+                self.log_message.emit(f"❌ Copy failed: {copy_err}", "error")
+                return False
         except Exception as e:
-            logger.error(f"Error converting video: {e}")
+            logger.error(f"Error converting video: {e}", exc_info=True)
+            self.log_message.emit(f"💥 Conversion error: {type(e).__name__}: {str(e)}", "error")
             return False
 
     def _load_preset(self, preset_name: str):

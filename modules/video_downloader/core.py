@@ -429,13 +429,12 @@ class VideoDownloaderThread(QThread):
             # Apply rate limiting
             self._apply_rate_limit('tiktok.com')
 
-            # IMPROVED: Prioritize watermark-free formats
+            # UPDATED: Modern TikTok formats (2025) - old format IDs removed
+            # Old 'http-264-hd-1' and 'http-264-hd-0' no longer work with new TikTok API
             tiktok_formats = [
-                ('http-264-hd-1', '🎉 HD No Watermark'),
-                ('http-264-hd-0', '⚠️ HD With Watermark'),
-                ('best[ext=mp4][height<=1080]', 'Best MP4 1080p'),
-                ('bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best', 'Best Video+Audio'),
-                ('best', 'Best Available'),
+                ('best[ext=mp4]/best', '🎥 Best MP4'),
+                ('bestvideo+bestaudio/best', '🎬 Best Quality'),
+                ('best', '✨ Best Available'),
             ]
 
             # Collect all available cookies

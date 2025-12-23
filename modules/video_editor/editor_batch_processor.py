@@ -289,6 +289,16 @@ class EditorBatchWorker(QThread):
                 self.log_message.emit(f"⚠️  Source file not found: {source_path}", "warning")
                 return False
 
+            # Create destination directory if it doesn't exist
+            dest_dir = os.path.dirname(dest_path)
+            if dest_dir and not os.path.exists(dest_dir):
+                try:
+                    os.makedirs(dest_dir, exist_ok=True)
+                    self.log_message.emit(f"📁 Created destination directory: {dest_dir}", "info")
+                except Exception as e:
+                    self.log_message.emit(f"❌ Failed to create directory: {dest_dir}\n   → {e}", "error")
+                    return False
+
             source_ext = Path(source_path).suffix.lower()
             dest_ext = Path(dest_path).suffix.lower()
 
@@ -302,12 +312,27 @@ class EditorBatchWorker(QThread):
                 dest_path = str(Path(dest_path).with_suffix(f'.{output_format}'))
 
             self.log_message.emit(f"📋 Copy/Convert: {source_ext} → .{output_format}", "info")
+            self.log_message.emit(f"📤 Source: {source_path}", "info")
+            self.log_message.emit(f"📥 Destination: {dest_path}", "info")
 
             # If same format and no processing needed, just copy
             if source_ext == f'.{output_format}':
-                shutil.copy2(source_path, dest_path)
-                self.log_message.emit(f"📄 Direct copy (same format)", "info")
-                return True
+                try:
+                    shutil.copy2(source_path, dest_path)
+                    self.log_message.emit(f"📄 Direct copy completed successfully", "info")
+
+                    # Verify destination file exists
+                    if os.path.exists(dest_path):
+                        file_size = os.path.getsize(dest_path)
+                        self.log_message.emit(f"✅ Verified: Destination file created ({file_size} bytes)", "success")
+                        return True
+                    else:
+                        self.log_message.emit(f"❌ Copy failed: Destination file not created", "error")
+                        return False
+
+                except Exception as copy_err:
+                    self.log_message.emit(f"❌ Copy error: {type(copy_err).__name__}: {str(copy_err)}", "error")
+                    return False
 
             # Convert using FFmpeg
             self.log_message.emit(f"🔄 Converting using FFmpeg...", "info")
@@ -332,6 +357,12 @@ class EditorBatchWorker(QThread):
         """
         try:
             import subprocess
+
+            # Ensure destination directory exists
+            dest_dir = os.path.dirname(dest_path)
+            if dest_dir and not os.path.exists(dest_dir):
+                os.makedirs(dest_dir, exist_ok=True)
+                self.log_message.emit(f"📁 Created destination directory: {dest_dir}", "info")
 
             # Get quality settings
             quality = 'high'
@@ -371,11 +402,23 @@ class EditorBatchWorker(QThread):
             if result.returncode != 0:
                 error_msg = result.stderr[-500:] if result.stderr else "Unknown FFmpeg error"
                 logger.error(f"FFmpeg error: {error_msg}")
-                self.log_message.emit(f"⚠️  FFmpeg failed, falling back to direct copy", "warning")
+                self.log_message.emit(f"⚠️  FFmpeg failed (return code: {result.returncode}), falling back to direct copy", "warning")
                 # Try simple copy as fallback
-                shutil.copy2(source_path, dest_path)
+                try:
+                    shutil.copy2(source_path, dest_path)
+                    self.log_message.emit(f"📄 Fallback copy completed", "info")
+                except Exception as copy_err:
+                    self.log_message.emit(f"❌ Fallback copy also failed: {copy_err}", "error")
+                    return False
 
-            return True
+            # Verify output file exists
+            if os.path.exists(dest_path):
+                file_size = os.path.getsize(dest_path)
+                self.log_message.emit(f"✅ Conversion successful ({file_size} bytes)", "success")
+                return True
+            else:
+                self.log_message.emit(f"❌ Output file not created after conversion", "error")
+                return False
 
         except subprocess.TimeoutExpired:
             logger.error("FFmpeg timeout")
@@ -387,7 +430,13 @@ class EditorBatchWorker(QThread):
             self.log_message.emit(f"ℹ️  FFmpeg not installed - using direct copy", "info")
             try:
                 shutil.copy2(source_path, dest_path)
-                return True
+                if os.path.exists(dest_path):
+                    file_size = os.path.getsize(dest_path)
+                    self.log_message.emit(f"✅ Direct copy completed ({file_size} bytes)", "success")
+                    return True
+                else:
+                    self.log_message.emit(f"❌ Copy failed: File not created", "error")
+                    return False
             except Exception as copy_err:
                 self.log_message.emit(f"❌ Copy failed: {copy_err}", "error")
                 return False

@@ -330,9 +330,14 @@ class PresetManager:
                     progress_callback(f"Applying {op_name}... ({i+1}/{len(preset.operations)})")
 
                 # Fix parameter names for specific operations
-                if op_name == 'crop' and 'aspect_ratio' in params:
-                    # Rename aspect_ratio to preset for crop method
-                    params['preset'] = params.pop('aspect_ratio')
+                if op_name == 'crop':
+                    # VideoEditor.crop() only accepts: x1, y1, x2, y2, preset
+                    # Remove width, height parameters and rename aspect_ratio to preset
+                    if 'aspect_ratio' in params:
+                        params['preset'] = params.pop('aspect_ratio')
+                    # Remove unsupported parameters
+                    params.pop('width', None)
+                    params.pop('height', None)
 
                 # Execute operation
                 if hasattr(editor, op_name):

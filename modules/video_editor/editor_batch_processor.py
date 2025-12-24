@@ -293,12 +293,32 @@ class EditorBatchWorker(QThread):
         Returns:
             True if successful
         """
+        temp_file = None
         try:
             logger.info(f"   🎨 _process_with_preset() starting")
             from modules.video_editor.preset_manager import PresetManager
 
             preset_manager = PresetManager()
             logger.info(f"      PresetManager created")
+
+            # Check if in-place editing
+            is_inplace = os.path.normpath(source_path) == os.path.normpath(dest_path)
+            logger.info(f"      In-place editing: {is_inplace}")
+
+            # For in-place editing, use temporary file
+            if is_inplace:
+                import tempfile
+                dest_dir = os.path.dirname(dest_path)
+                output_format = 'mp4'
+                if self.settings and self.settings.output_format:
+                    output_format = self.settings.output_format
+                temp_fd, temp_file = tempfile.mkstemp(suffix=f'.{output_format}', dir=dest_dir)
+                os.close(temp_fd)
+                actual_output = temp_file
+                logger.info(f"      Using temporary file: {temp_file}")
+                self.log_message.emit(f"📝 In-place editing - using temporary file", "info")
+            else:
+                actual_output = dest_path
 
             # Get quality setting
             quality = 'high'
@@ -311,18 +331,41 @@ class EditorBatchWorker(QThread):
             success = preset_manager.apply_preset_to_video(
                 preset=preset,
                 video_path=source_path,
-                output_path=dest_path,
+                output_path=actual_output,
                 quality=quality,
                 progress_callback=lambda msg: self.log_message.emit(msg, "info")
             )
 
             logger.info(f"      Preset apply result: {success}")
+
+            # If successful and in-place editing, replace original
+            if success and is_inplace:
+                logger.info(f"      Replacing original file with processed version...")
+                self.log_message.emit(f"🔄 Replacing original file...", "info")
+                try:
+                    os.remove(source_path)
+                    shutil.move(temp_file, dest_path)
+                    temp_file = None  # Mark as moved
+                    logger.info(f"      ✅ Original file replaced successfully")
+                except Exception as replace_err:
+                    logger.error(f"      ❌ Failed to replace original: {replace_err}")
+                    self.log_message.emit(f"❌ Failed to replace original: {replace_err}", "error")
+                    return False
+
             return success
 
         except Exception as e:
             logger.error(f"   ❌ Error applying preset: {e}", exc_info=True)
             self.log_message.emit(f"💥 Preset error: {type(e).__name__}: {str(e)}", "error")
             return False
+        finally:
+            # Clean up temp file if it still exists
+            if temp_file and os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                    logger.info(f"      Cleaned up temporary file")
+                except:
+                    pass
 
     def _process_without_preset(self, source_path: str, dest_path: str) -> bool:
         """
@@ -522,8 +565,14 @@ class EditorBatchWorker(QThread):
             import subprocess
 
             logger.info(f"   🎬 _process_with_simple_edit() starting")
+            logger.info(f"      Source: {source_path}")
+            logger.info(f"      Dest: {dest_path}")
             logger.info(f"      Applying: 110% zoom + metadata removal")
             self.log_message.emit(f"🎨 Applying default edits: 110% zoom + metadata removal", "info")
+
+            # Check if in-place editing (source == destination)
+            is_inplace = os.path.normpath(source_path) == os.path.normpath(dest_path)
+            logger.info(f"      In-place editing: {is_inplace}")
 
             # Ensure destination directory exists
             dest_dir = os.path.dirname(dest_path)
@@ -550,10 +599,20 @@ class EditorBatchWorker(QThread):
             if self.settings and self.settings.output_format:
                 output_format = self.settings.output_format
 
-            # Update destination extension if needed
-            dest_ext = Path(dest_path).suffix.lower()
-            if dest_ext != f'.{output_format}':
-                dest_path = str(Path(dest_path).with_suffix(f'.{output_format}'))
+            # For in-place editing, use temporary file
+            if is_inplace:
+                import tempfile
+                temp_fd, temp_path = tempfile.mkstemp(suffix=f'.{output_format}', dir=dest_dir)
+                os.close(temp_fd)  # Close file descriptor
+                actual_output = temp_path
+                logger.info(f"      Using temporary file: {temp_path}")
+                self.log_message.emit(f"📝 In-place editing - using temporary file", "info")
+            else:
+                # Update destination extension if needed
+                dest_ext = Path(dest_path).suffix.lower()
+                if dest_ext != f'.{output_format}':
+                    dest_path = str(Path(dest_path).with_suffix(f'.{output_format}'))
+                actual_output = dest_path
 
             # Build FFmpeg command with:
             # 1. Scale filter for 110% zoom (scale by 1.1)
@@ -567,7 +626,7 @@ class EditorBatchWorker(QThread):
                 *crf_preset,
                 '-map_metadata', '-1',  # Remove all metadata
                 '-y',  # Overwrite output
-                dest_path
+                actual_output
             ]
 
             self.log_message.emit(f"🎬 Running FFmpeg with 110% zoom and metadata removal (quality: {quality})...", "info")
@@ -584,13 +643,36 @@ class EditorBatchWorker(QThread):
                 error_msg = result.stderr[-500:] if result.stderr else "Unknown FFmpeg error"
                 logger.error(f"FFmpeg error: {error_msg}")
                 self.log_message.emit(f"❌ FFmpeg failed: {error_msg[:200]}", "error")
+                # Clean up temp file if it exists
+                if is_inplace and os.path.exists(actual_output):
+                    os.remove(actual_output)
                 return False
 
             # Verify output file exists
-            if os.path.exists(dest_path):
-                file_size = os.path.getsize(dest_path)
-                self.log_message.emit(f"✅ Simple edit completed ({file_size} bytes)", "success")
-                logger.info(f"      ✅ Simple edit successful")
+            if os.path.exists(actual_output):
+                file_size = os.path.getsize(actual_output)
+
+                # If in-place editing, replace original with temp file
+                if is_inplace:
+                    logger.info(f"      Replacing original file with processed version...")
+                    self.log_message.emit(f"🔄 Replacing original file...", "info")
+                    try:
+                        # Remove original and rename temp file
+                        os.remove(source_path)
+                        shutil.move(actual_output, dest_path)
+                        logger.info(f"      ✅ Original file replaced successfully")
+                        self.log_message.emit(f"✅ Simple edit completed ({file_size} bytes)", "success")
+                    except Exception as replace_err:
+                        logger.error(f"      ❌ Failed to replace original: {replace_err}")
+                        self.log_message.emit(f"❌ Failed to replace original: {replace_err}", "error")
+                        # Clean up temp file
+                        if os.path.exists(actual_output):
+                            os.remove(actual_output)
+                        return False
+                else:
+                    self.log_message.emit(f"✅ Simple edit completed ({file_size} bytes)", "success")
+                    logger.info(f"      ✅ Simple edit successful")
+
                 return True
             else:
                 self.log_message.emit(f"❌ Output file not created", "error")
@@ -600,14 +682,23 @@ class EditorBatchWorker(QThread):
         except subprocess.TimeoutExpired:
             logger.error("FFmpeg timeout")
             self.log_message.emit(f"⏱️  FFmpeg timeout (>10 min)", "error")
+            # Clean up temp file if it exists
+            if 'is_inplace' in locals() and is_inplace and 'actual_output' in locals() and os.path.exists(actual_output):
+                os.remove(actual_output)
             return False
         except FileNotFoundError:
             logger.error("FFmpeg not found")
             self.log_message.emit(f"❌ FFmpeg not installed", "error")
+            # Clean up temp file if it exists
+            if 'is_inplace' in locals() and is_inplace and 'actual_output' in locals() and os.path.exists(actual_output):
+                os.remove(actual_output)
             return False
         except Exception as e:
             logger.error(f"Error in simple edit: {e}", exc_info=True)
             self.log_message.emit(f"💥 Simple edit error: {type(e).__name__}: {str(e)}", "error")
+            # Clean up temp file if it exists
+            if 'is_inplace' in locals() and is_inplace and 'actual_output' in locals() and os.path.exists(actual_output):
+                os.remove(actual_output)
             return False
 
     def _load_preset(self, preset_name: str):

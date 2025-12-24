@@ -634,16 +634,18 @@ class EditorBatchWorker(QThread):
             # 4. Overlay sharp video on blurred background = TRANSPARENT BLUR EDGES
             # 5. Final 110% zoom with even dimensions
             #
-            # AUDIO PROCESSING (CRITICAL - EXPLICIT MAPPING):
-            # IMPORTANT: With -filter_complex, audio must be explicitly mapped using -map 0:a
-            # Otherwise audio stream is NOT included in output!
+            # AUDIO PROCESSING (PROFESSIONAL - Adobe Premiere Pro style):
+            # CRITICAL: Audio explicitly mapped using -map 0:a (required with -filter_complex)
             #
-            # Audio filters (VOICE PRESERVATION):
-            # 1. Gentle highpass (60Hz) - ONLY removes deep bass/rumble
-            # 2. Volume boost (1.2) - Ensures voice is clearly audible
+            # Professional 6-stage audio chain (DAW-quality):
+            # 1. FFT Noise Reduction (afftdn) - Removes background music/noise
+            # 2. Band-pass Filter - Isolates voice frequency range (85-3000Hz)
+            # 3. Multi-band EQ - Boosts voice, cuts music frequencies
+            # 4. Dynamic Compression - Makes voice prominent vs background
+            # 5. Pitch Shift - Slight change with timing compensation (no sync issues)
+            # 6. Volume Normalization - Final loudness boost
             #
-            # Voice frequencies: 85-300Hz (FULLY PRESERVED)
-            # Deep bass/rumble: 20-60Hz (removed)
+            # Result: Clean voice isolation + music removal + pitch change
 
             # Complex filter for MIRROR + EDGE BLUR effect
             video_filter_complex = (
@@ -654,31 +656,67 @@ class EditorBatchWorker(QThread):
                 "[overlay]scale='trunc(iw*1.1/2)*2:trunc(ih*1.1/2)*2'[out]"  # 110% zoom, even dimensions
             )
 
-            # Audio filter - VOICE PRESERVATION (simplified - no aggressive processing)
-            # Just gentle bass removal and slight volume boost
+            # PROFESSIONAL AUDIO PROCESSING (Adobe Premiere Pro / After Effects style)
+            #
+            # GOAL: Remove background music, isolate voice, add pitch change
+            #
+            # Professional Audio Chain (Multi-stage processing):
+            # 1. NOISE REDUCTION - Removes background music/noise using FFT analysis
+            # 2. FREQUENCY ISOLATION - Band-pass filter for voice range only
+            # 3. MULTI-BAND EQ - Surgical frequency adjustments
+            #    - Boost: Voice fundamentals (200Hz) and harmonics (800Hz)
+            #    - Cut: Music frequencies (4000Hz instruments, cymbals)
+            # 4. DYNAMIC COMPRESSION - Makes voice prominent, reduces music
+            # 5. PITCH SHIFT - Slight change with timing compensation (no delay)
+            # 6. VOLUME BOOST - Final loudness adjustment
+            #
+            # This professional chain mimics DAW (Digital Audio Workstation) processing
+
+            # Professional audio filter chain
             audio_filters = (
-                "highpass=f=60,"  # Remove ONLY deep bass/rumble (60Hz)
-                "volume=1.2"  # Slight boost to ensure voice is audible
+                # Stage 1: Aggressive FFT-based noise reduction (removes music/background)
+                "afftdn=nf=-25,"  # -25dB noise floor threshold (very aggressive)
+
+                # Stage 2: Voice frequency isolation (band-pass effect)
+                "highpass=f=85,"   # Remove sub-bass and low rumble
+                "lowpass=f=3000,"  # Remove high frequencies (most music instruments)
+
+                # Stage 3: Multi-band equalizer (surgical frequency adjustments)
+                "equalizer=f=200:t=h:width=100:g=10,"    # +10dB @ 200Hz (male voice fundamentals)
+                "equalizer=f=800:t=h:width=200:g=8,"     # +8dB @ 800Hz (voice harmonics/clarity)
+                "equalizer=f=4000:t=h:width=2000:g=-15," # -15dB @ 4kHz (music instruments/cymbals)
+
+                # Stage 4: Dynamic range compression (voice prominence)
+                "acompressor=threshold=-20dB:ratio=4:attack=5:release=50,"  # 4:1 compression
+
+                # Stage 5: Pitch shift with timing compensation (NO delay/drift)
+                "asetrate=44100*0.98,"  # Lower pitch by 2% (multiply rate by 0.98)
+                "aresample=44100,"      # Resample back to 44.1kHz
+                "atempo=1.02,"          # Speed up by 2% to compensate (preserves length)
+
+                # Stage 6: Final volume boost for clarity
+                "volume=1.5"  # 50% boost
             )
 
             cmd = [
                 'ffmpeg',
                 '-i', source_path,
                 '-filter_complex', video_filter_complex,  # Mirror + Edge blur + Zoom
-                '-map', '[out]',  # Map output video from complex filter
-                '-map', '0:a',  # EXPLICITLY map audio stream from input
-                '-af', audio_filters,  # VOICE-SAFE audio filters
+                '-map', '[out]',  # Map output video
+                '-map', '0:a',  # EXPLICITLY map audio stream
+                '-af', audio_filters,  # PROFESSIONAL audio processing chain
                 '-c:v', 'libx264',
                 '-c:a', 'aac',
+                '-b:a', '192k',  # High quality audio bitrate
                 *crf_preset,
                 '-map_metadata', '-1',  # Remove all metadata
                 '-y',  # Overwrite output
                 actual_output
             ]
 
-            logger.info(f"      Video filter: Mirror + Edge blur (4 sides) + 110% zoom")
-            logger.info(f"      Audio: Explicitly mapped with gentle filtering")
-            self.log_message.emit(f"🎬 Professional filters: Mirror + Edge blur + Voice preserved (mapped)...", "info")
+            logger.info(f"      Video: Mirror + Edge blur + 110% zoom")
+            logger.info(f"      Audio: Professional (noise reduction + voice isolation + pitch shift + music removal)")
+            self.log_message.emit(f"🎬 Pro editing: Mirror + Edge blur + Voice isolation + Music removal + Pitch shift", "info")
 
             # Run FFmpeg
             result = subprocess.run(

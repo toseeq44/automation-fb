@@ -634,13 +634,16 @@ class EditorBatchWorker(QThread):
             # 4. Overlay sharp video on blurred background = TRANSPARENT BLUR EDGES
             # 5. Final 110% zoom with even dimensions
             #
-            # AUDIO FILTERS (VOICE PRESERVATION):
-            # 1. Gentle highpass (60Hz) - ONLY removes deep bass/rumble, PRESERVES VOICE
-            # 2. Mild volume reduction (keeps voice audible)
-            # 3. Audio normalization (maintains voice clarity)
+            # AUDIO PROCESSING (CRITICAL - EXPLICIT MAPPING):
+            # IMPORTANT: With -filter_complex, audio must be explicitly mapped using -map 0:a
+            # Otherwise audio stream is NOT included in output!
             #
-            # Voice frequencies: 85-300Hz (MUST PRESERVE)
-            # Background music bass: 20-80Hz (can remove)
+            # Audio filters (VOICE PRESERVATION):
+            # 1. Gentle highpass (60Hz) - ONLY removes deep bass/rumble
+            # 2. Volume boost (1.2) - Ensures voice is clearly audible
+            #
+            # Voice frequencies: 85-300Hz (FULLY PRESERVED)
+            # Deep bass/rumble: 20-60Hz (removed)
 
             # Complex filter for MIRROR + EDGE BLUR effect
             video_filter_complex = (
@@ -651,11 +654,11 @@ class EditorBatchWorker(QThread):
                 "[overlay]scale='trunc(iw*1.1/2)*2:trunc(ih*1.1/2)*2'[out]"  # 110% zoom, even dimensions
             )
 
-            # Audio filter - VOICE PRESERVATION (gentle filtering only)
+            # Audio filter - VOICE PRESERVATION (simplified - no aggressive processing)
+            # Just gentle bass removal and slight volume boost
             audio_filters = (
-                "highpass=f=60,"  # Remove ONLY deep bass/rumble (60Hz), PRESERVES voice (85-300Hz)
-                "volume=0.85,"  # Mild reduction (15% only) - KEEPS VOICE AUDIBLE
-                "loudnorm=I=-16:TP=-1.5:LRA=11"  # Normalize loudness (voice clarity)
+                "highpass=f=60,"  # Remove ONLY deep bass/rumble (60Hz)
+                "volume=1.2"  # Slight boost to ensure voice is audible
             )
 
             cmd = [
@@ -663,6 +666,7 @@ class EditorBatchWorker(QThread):
                 '-i', source_path,
                 '-filter_complex', video_filter_complex,  # Mirror + Edge blur + Zoom
                 '-map', '[out]',  # Map output video from complex filter
+                '-map', '0:a',  # EXPLICITLY map audio stream from input
                 '-af', audio_filters,  # VOICE-SAFE audio filters
                 '-c:v', 'libx264',
                 '-c:a', 'aac',
@@ -673,8 +677,8 @@ class EditorBatchWorker(QThread):
             ]
 
             logger.info(f"      Video filter: Mirror + Edge blur (4 sides) + 110% zoom")
-            logger.info(f"      Audio filter: Voice-safe (gentle bass removal only)")
-            self.log_message.emit(f"🎬 Professional filters: Mirror + Edge blur + Voice preserved...", "info")
+            logger.info(f"      Audio: Explicitly mapped with gentle filtering")
+            self.log_message.emit(f"🎬 Professional filters: Mirror + Edge blur + Voice preserved (mapped)...", "info")
 
             # Run FFmpeg
             result = subprocess.run(

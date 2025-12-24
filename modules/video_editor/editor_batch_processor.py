@@ -578,8 +578,8 @@ class EditorBatchWorker(QThread):
             logger.info(f"   🎬 _process_with_simple_edit() starting")
             logger.info(f"      Source: {source_path}")
             logger.info(f"      Dest: {dest_path}")
-            logger.info(f"      Applying: 110% zoom + metadata removal")
-            self.log_message.emit(f"🎨 Applying default edits: 110% zoom + metadata removal", "info")
+            logger.info(f"      Applying: 110% zoom + 3% blur + audio pitch + metadata removal")
+            self.log_message.emit(f"🎨 Applying default edits: 110% zoom, 3% blur, audio adjustment, metadata removal", "info")
 
             # Check if in-place editing (source == destination)
             is_inplace = os.path.normpath(source_path) == os.path.normpath(dest_path)
@@ -625,13 +625,23 @@ class EditorBatchWorker(QThread):
                     dest_path = str(Path(dest_path).with_suffix(f'.{output_format}'))
                 actual_output = dest_path
 
-            # Build FFmpeg command with:
-            # 1. Scale filter for 110% zoom (scale by 1.1)
-            # 2. Remove all metadata (-map_metadata -1)
+            # Build FFmpeg command with advanced filters:
+            # VIDEO FILTERS:
+            # 1. Scale for 110% zoom with EVEN dimensions (FFmpeg requires even width/height)
+            #    Formula: trunc(dimension*1.1/2)*2 ensures result is divisible by 2
+            # 2. Gaussian blur (sigma=3 ≈ 3% blur effect)
+            # AUDIO FILTERS:
+            # 3. Pitch change (asetrate reduces pitch slightly, then resample to original rate)
+            # 4. Volume reduction (reduces background music/noise)
+
+            video_filters = "scale='trunc(iw*1.1/2)*2:trunc(ih*1.1/2)*2',gblur=sigma=3"
+            audio_filters = "asetrate=44100*0.97,aresample=44100,volume=0.7"
+
             cmd = [
                 'ffmpeg',
                 '-i', source_path,
-                '-vf', 'scale=iw*1.1:ih*1.1',  # 110% zoom
+                '-vf', video_filters,  # Video: 110% zoom + 3% blur
+                '-af', audio_filters,  # Audio: pitch change + volume reduction
                 '-c:v', 'libx264',
                 '-c:a', 'aac',
                 *crf_preset,
@@ -640,7 +650,9 @@ class EditorBatchWorker(QThread):
                 actual_output
             ]
 
-            self.log_message.emit(f"🎬 Running FFmpeg with 110% zoom and metadata removal (quality: {quality})...", "info")
+            logger.info(f"      Video filters: {video_filters}")
+            logger.info(f"      Audio filters: {audio_filters}")
+            self.log_message.emit(f"🎬 Running FFmpeg with advanced filters (quality: {quality})...", "info")
 
             # Run FFmpeg
             result = subprocess.run(

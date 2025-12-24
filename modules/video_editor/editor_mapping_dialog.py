@@ -290,9 +290,19 @@ class BulkProcessingDialog(QDialog):
 
         self.preset_combo = QComboBox()
         self.preset_combo.setEnabled(False)
-        self.preset_combo.setMinimumWidth(200)
+        self.preset_combo.setMinimumWidth(250)
         self.load_presets()
         preset_layout.addWidget(self.preset_combo)
+
+        # Manage Presets button
+        self.manage_presets_btn = QPushButton("📋 Manage Presets")
+        self.manage_presets_btn.clicked.connect(self.open_preset_manager)
+        preset_layout.addWidget(self.manage_presets_btn)
+
+        # New Preset button
+        self.new_preset_btn = QPushButton("➕ New")
+        self.new_preset_btn.clicked.connect(self.create_new_preset)
+        preset_layout.addWidget(self.new_preset_btn)
 
         preset_layout.addStretch()
         layout.addLayout(preset_layout, 1, 1)
@@ -755,16 +765,87 @@ class BulkProcessingDialog(QDialog):
         )
 
     def load_presets(self):
-        """Load presets into combo"""
+        """Load presets into combo organized by folder"""
         self.preset_combo.clear()
-        self.preset_combo.addItem("-- Select Preset --")
+        self.preset_combo.addItem("-- Select Preset --", None)
 
         try:
-            presets = self.preset_manager.list_presets()
-            for preset in presets:
-                self.preset_combo.addItem(preset['name'])
+            # Get presets organized by folder
+            presets_by_folder = self.preset_manager.list_presets_by_folder()
+
+            # Add system presets
+            system_presets = presets_by_folder.get(PresetManager.FOLDER_SYSTEM, [])
+            if system_presets:
+                self.preset_combo.addItem("━━━ System Presets ━━━", None)
+                for preset in system_presets:
+                    display_name = f"📦 {preset['name']}"
+                    self.preset_combo.addItem(display_name, preset)
+
+            # Add user presets
+            user_presets = presets_by_folder.get(PresetManager.FOLDER_USER, [])
+            if user_presets:
+                self.preset_combo.addItem("━━━ User Presets ━━━", None)
+                for preset in user_presets:
+                    display_name = f"👤 {preset['name']}"
+                    self.preset_combo.addItem(display_name, preset)
+
+            # Add imported presets
+            imported_presets = presets_by_folder.get(PresetManager.FOLDER_IMPORTED, [])
+            if imported_presets:
+                self.preset_combo.addItem("━━━ Imported Presets ━━━", None)
+                for preset in imported_presets:
+                    display_name = f"📥 {preset['name']}"
+                    self.preset_combo.addItem(display_name, preset)
+
         except Exception as e:
             logger.error(f"Error loading presets: {e}")
+
+    def open_preset_manager(self):
+        """Open preset manager dialog"""
+        from modules.video_editor.preset_manager_dialog import PresetManagerDialog
+
+        dialog = PresetManagerDialog(parent=self)
+
+        # Connect signal to handle preset selection
+        dialog.preset_selected.connect(self.on_preset_selected_from_manager)
+
+        dialog.exec_()
+
+        # Refresh preset list
+        self.load_presets()
+
+    def create_new_preset(self):
+        """Create new preset"""
+        from modules.video_editor.preset_builder_dialog import PresetBuilderDialog
+
+        dialog = PresetBuilderDialog(preset=None, parent=self)
+
+        if dialog.exec_() == QDialog.Accepted:
+            # Refresh preset list
+            self.load_presets()
+
+            # Auto-select the new preset
+            new_preset_name = dialog.preset.name if dialog.preset else None
+            if new_preset_name:
+                # Find and select the new preset in combo
+                for i in range(self.preset_combo.count()):
+                    preset_data = self.preset_combo.itemData(i)
+                    if preset_data and preset_data.get('name') == new_preset_name:
+                        self.preset_combo.setCurrentIndex(i)
+                        self.use_preset_radio.setChecked(True)
+                        break
+
+            QMessageBox.information(self, "Success", "Preset created successfully!")
+
+    def on_preset_selected_from_manager(self, preset_name: str, folder: str):
+        """Handle preset selection from manager dialog"""
+        # Find and select the preset in combo
+        for i in range(self.preset_combo.count()):
+            preset_data = self.preset_combo.itemData(i)
+            if preset_data and preset_data.get('name') == preset_name:
+                self.preset_combo.setCurrentIndex(i)
+                self.use_preset_radio.setChecked(True)
+                break
 
     def on_preset_toggle(self):
         """Handle preset radio toggle"""
@@ -832,13 +913,26 @@ class BulkProcessingDialog(QDialog):
         if not self.current_mapping:
             return {}
 
+        # Get selected preset data
+        selected_preset_data = None
+        if self.use_preset_radio.isChecked() and self.preset_combo.currentIndex() > 0:
+            preset_data = self.preset_combo.currentData()
+            if preset_data:  # Not a separator
+                selected_preset_data = preset_data
+
         # Update settings
         self.current_mapping.settings = EditorMappingSettings(
             delete_source_after_edit=self.delete_yes_radio.isChecked(),
-            preset_id=self.preset_combo.currentText() if self.use_preset_radio.isChecked() and self.preset_combo.currentIndex() > 0 else None,
+            preset_id=selected_preset_data['name'] if selected_preset_data else None,
             output_format=self.format_combo.currentText(),
             quality=self.quality_combo.currentText()
         )
+
+        # Add preset data to mapping for processor
+        if selected_preset_data:
+            self.current_mapping.preset_data = selected_preset_data
+        else:
+            self.current_mapping.preset_data = None
 
         # Calculate videos to process (recursively)
         total_videos = 0

@@ -421,28 +421,50 @@ class PresetManager:
 
         return organized
 
-    def delete_preset(self, name: str) -> bool:
+    def delete_preset(self, name: str, folder: str = None) -> bool:
         """
         Delete a preset
 
         Args:
             name: Preset name
+            folder: Folder to delete from (None = search all folders)
 
         Returns:
             True if deleted, False if not found
         """
         safe_name = "".join(c for c in name if c.isalnum() or c in (' ', '-', '_')).rstrip()
         filename = f"{safe_name}.preset.json"
-        filepath = os.path.join(self.presets_dir, filename)
 
-        if not os.path.exists(filepath):
+        # If folder specified, delete from that folder
+        if folder and folder in self.folders:
+            filepath = os.path.join(self.folders[folder], filename)
+        else:
+            # Search in all folders to find the preset
+            filepath = None
+            for folder_name, folder_path in self.folders.items():
+                test_path = os.path.join(folder_path, filename)
+                if os.path.exists(test_path):
+                    filepath = test_path
+                    folder = folder_name
+                    break
+
+        if not filepath or not os.path.exists(filepath):
             logger.warning(f"Preset not found for deletion: {name}")
+            return False
+
+        # Don't allow deleting system presets
+        if folder == self.FOLDER_SYSTEM:
+            logger.error(f"Cannot delete system preset: {name}")
             return False
 
         try:
             os.remove(filepath)
 
             # Remove from cache
+            cache_key = f"{folder}/{name}"
+            if cache_key in self.presets_cache:
+                del self.presets_cache[cache_key]
+            # Also try old cache format
             if name in self.presets_cache:
                 del self.presets_cache[name]
 

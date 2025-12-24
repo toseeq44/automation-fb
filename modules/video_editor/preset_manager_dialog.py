@@ -433,8 +433,8 @@ class PresetManagerDialog(QDialog):
         if reply == QMessageBox.No:
             return
 
-        # Delete
-        success = self.preset_manager.delete_preset(preset_name)
+        # Delete (pass folder for proper lookup)
+        success = self.preset_manager.delete_preset(preset_name, folder=self.current_folder)
 
         if success:
             self.refresh_preset_list()

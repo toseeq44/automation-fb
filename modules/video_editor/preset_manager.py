@@ -324,10 +324,15 @@ class PresetManager:
             # Apply all operations
             for i, operation in enumerate(preset.operations):
                 op_name = operation['operation']
-                params = operation['params']
+                params = operation['params'].copy()  # Make a copy to avoid modifying original
 
                 if progress_callback:
                     progress_callback(f"Applying {op_name}... ({i+1}/{len(preset.operations)})")
+
+                # Fix parameter names for specific operations
+                if op_name == 'crop' and 'aspect_ratio' in params:
+                    # Rename aspect_ratio to preset for crop method
+                    params['preset'] = params.pop('aspect_ratio')
 
                 # Execute operation
                 if hasattr(editor, op_name):

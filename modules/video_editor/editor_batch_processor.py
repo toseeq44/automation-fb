@@ -241,13 +241,19 @@ class EditorBatchWorker(QThread):
             result.status = ProcessingStatus.PROCESSING
 
             if preset:
-                # Process with preset using VideoEditor
+                # Try processing with preset using VideoEditor
                 logger.info(f"   Processing WITH preset...")
                 success = self._process_with_preset(source_path, dest_path, preset)
+
+                # If preset fails, fallback to simple processing
+                if not success:
+                    logger.warning(f"   Preset processing failed, falling back to simple processing...")
+                    self.log_message.emit(f"⚠️  Preset failed, using default processing (110% zoom + metadata removal)", "warning")
+                    success = self._process_with_simple_edit(source_path, dest_path)
             else:
-                # Just copy/convert without effects
+                # No preset - use simple processing
                 logger.info(f"   Processing WITHOUT preset...")
-                success = self._process_without_preset(source_path, dest_path)
+                success = self._process_with_simple_edit(source_path, dest_path)
 
             logger.info(f"   Processing result: {'SUCCESS' if success else 'FAILED'}")
 
@@ -497,6 +503,111 @@ class EditorBatchWorker(QThread):
         except Exception as e:
             logger.error(f"Error converting video: {e}", exc_info=True)
             self.log_message.emit(f"💥 Conversion error: {type(e).__name__}: {str(e)}", "error")
+            return False
+
+    def _process_with_simple_edit(self, source_path: str, dest_path: str) -> bool:
+        """
+        Process video with simple default edits using FFmpeg:
+        - 110% zoom (scale)
+        - Remove metadata
+
+        Args:
+            source_path: Source video path
+            dest_path: Destination path
+
+        Returns:
+            True if successful
+        """
+        try:
+            import subprocess
+
+            logger.info(f"   🎬 _process_with_simple_edit() starting")
+            logger.info(f"      Applying: 110% zoom + metadata removal")
+            self.log_message.emit(f"🎨 Applying default edits: 110% zoom + metadata removal", "info")
+
+            # Ensure destination directory exists
+            dest_dir = os.path.dirname(dest_path)
+            if dest_dir and not os.path.exists(dest_dir):
+                os.makedirs(dest_dir, exist_ok=True)
+                self.log_message.emit(f"📁 Created destination directory: {dest_dir}", "info")
+
+            # Get quality settings
+            quality = 'high'
+            if self.settings:
+                quality = self.settings.quality
+
+            # Quality presets for FFmpeg
+            quality_settings = {
+                'high': ['-crf', '18', '-preset', 'slow'],
+                'medium': ['-crf', '23', '-preset', 'medium'],
+                'low': ['-crf', '28', '-preset', 'fast']
+            }
+
+            crf_preset = quality_settings.get(quality, quality_settings['medium'])
+
+            # Get output format
+            output_format = 'mp4'
+            if self.settings and self.settings.output_format:
+                output_format = self.settings.output_format
+
+            # Update destination extension if needed
+            dest_ext = Path(dest_path).suffix.lower()
+            if dest_ext != f'.{output_format}':
+                dest_path = str(Path(dest_path).with_suffix(f'.{output_format}'))
+
+            # Build FFmpeg command with:
+            # 1. Scale filter for 110% zoom (scale by 1.1)
+            # 2. Remove all metadata (-map_metadata -1)
+            cmd = [
+                'ffmpeg',
+                '-i', source_path,
+                '-vf', 'scale=iw*1.1:ih*1.1',  # 110% zoom
+                '-c:v', 'libx264',
+                '-c:a', 'aac',
+                *crf_preset,
+                '-map_metadata', '-1',  # Remove all metadata
+                '-y',  # Overwrite output
+                dest_path
+            ]
+
+            self.log_message.emit(f"🎬 Running FFmpeg with 110% zoom and metadata removal (quality: {quality})...", "info")
+
+            # Run FFmpeg
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=600  # 10 minute timeout
+            )
+
+            if result.returncode != 0:
+                error_msg = result.stderr[-500:] if result.stderr else "Unknown FFmpeg error"
+                logger.error(f"FFmpeg error: {error_msg}")
+                self.log_message.emit(f"❌ FFmpeg failed: {error_msg[:200]}", "error")
+                return False
+
+            # Verify output file exists
+            if os.path.exists(dest_path):
+                file_size = os.path.getsize(dest_path)
+                self.log_message.emit(f"✅ Simple edit completed ({file_size} bytes)", "success")
+                logger.info(f"      ✅ Simple edit successful")
+                return True
+            else:
+                self.log_message.emit(f"❌ Output file not created", "error")
+                logger.error(f"      ❌ Output file not created")
+                return False
+
+        except subprocess.TimeoutExpired:
+            logger.error("FFmpeg timeout")
+            self.log_message.emit(f"⏱️  FFmpeg timeout (>10 min)", "error")
+            return False
+        except FileNotFoundError:
+            logger.error("FFmpeg not found")
+            self.log_message.emit(f"❌ FFmpeg not installed", "error")
+            return False
+        except Exception as e:
+            logger.error(f"Error in simple edit: {e}", exc_info=True)
+            self.log_message.emit(f"💥 Simple edit error: {type(e).__name__}: {str(e)}", "error")
             return False
 
     def _load_preset(self, preset_name: str):

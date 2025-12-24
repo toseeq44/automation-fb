@@ -260,14 +260,25 @@ class EditorBatchWorker(QThread):
             if success:
                 result.status = ProcessingStatus.SUCCESS
 
-                # Delete source if requested
-                if self.settings and self.settings.delete_source_after_edit:
+                # Delete source if requested (but only if NOT in-place editing)
+                # In-place editing means source == destination, so no separate source to delete
+                is_inplace = os.path.normpath(source_path) == os.path.normpath(dest_path)
+
+                if self.settings and self.settings.delete_source_after_edit and not is_inplace:
+                    logger.info(f"   Deleting source file (not in-place editing)...")
                     try:
                         os.remove(source_path)
                         result.source_deleted = True
                         self.log_message.emit(f"🗑️  Deleted original: {source_path}", "info")
+                        logger.info(f"   ✅ Source deleted successfully")
                     except Exception as e:
+                        logger.warning(f"   ⚠️  Failed to delete source: {e}")
                         self.log_message.emit(f"⚠️  Failed to delete: {source_path}\n   → {e}", "warning")
+                elif is_inplace:
+                    logger.info(f"   In-place editing - source already replaced, no separate deletion needed")
+                    # Mark as deleted for statistics since the original was replaced
+                    if self.settings and self.settings.delete_source_after_edit:
+                        result.source_deleted = True
             else:
                 result.status = ProcessingStatus.FAILED
                 if not result.error_message:

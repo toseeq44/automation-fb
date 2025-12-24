@@ -290,21 +290,24 @@ class BulkProcessingDialog(QDialog):
 
         self.preset_combo = QComboBox()
         self.preset_combo.setEnabled(False)
-        self.preset_combo.setMinimumWidth(250)
+        self.preset_combo.setMinimumWidth(300)
         self.load_presets()
         preset_layout.addWidget(self.preset_combo)
 
-        # Manage Presets button
-        self.manage_presets_btn = QPushButton("📋 Manage Presets")
-        self.manage_presets_btn.clicked.connect(self.open_preset_manager)
-        preset_layout.addWidget(self.manage_presets_btn)
-
-        # New Preset button
-        self.new_preset_btn = QPushButton("➕ New")
-        self.new_preset_btn.clicked.connect(self.create_new_preset)
-        preset_layout.addWidget(self.new_preset_btn)
+        # Refresh button
+        self.refresh_presets_btn = QPushButton("🔄")
+        self.refresh_presets_btn.setToolTip("Refresh preset list")
+        self.refresh_presets_btn.setMaximumWidth(35)
+        self.refresh_presets_btn.clicked.connect(self.load_presets)
+        preset_layout.addWidget(self.refresh_presets_btn)
 
         preset_layout.addStretch()
+
+        # Info label
+        preset_info_label = QLabel("(Create presets from Video Editor → Presets button)")
+        preset_info_label.setStyleSheet("color: gray; font-size: 10px; font-style: italic;")
+        preset_layout.addWidget(preset_info_label)
+
         layout.addLayout(preset_layout, 1, 1)
 
         # Output format
@@ -799,53 +802,6 @@ class BulkProcessingDialog(QDialog):
 
         except Exception as e:
             logger.error(f"Error loading presets: {e}")
-
-    def open_preset_manager(self):
-        """Open preset manager dialog"""
-        from modules.video_editor.preset_manager_dialog import PresetManagerDialog
-
-        dialog = PresetManagerDialog(parent=self)
-
-        # Connect signal to handle preset selection
-        dialog.preset_selected.connect(self.on_preset_selected_from_manager)
-
-        dialog.exec_()
-
-        # Refresh preset list
-        self.load_presets()
-
-    def create_new_preset(self):
-        """Create new preset"""
-        from modules.video_editor.preset_builder_dialog import PresetBuilderDialog
-
-        dialog = PresetBuilderDialog(preset=None, parent=self)
-
-        if dialog.exec_() == QDialog.Accepted:
-            # Refresh preset list
-            self.load_presets()
-
-            # Auto-select the new preset
-            new_preset_name = dialog.preset.name if dialog.preset else None
-            if new_preset_name:
-                # Find and select the new preset in combo
-                for i in range(self.preset_combo.count()):
-                    preset_data = self.preset_combo.itemData(i)
-                    if preset_data and preset_data.get('name') == new_preset_name:
-                        self.preset_combo.setCurrentIndex(i)
-                        self.use_preset_radio.setChecked(True)
-                        break
-
-            QMessageBox.information(self, "Success", "Preset created successfully!")
-
-    def on_preset_selected_from_manager(self, preset_name: str, folder: str):
-        """Handle preset selection from manager dialog"""
-        # Find and select the preset in combo
-        for i in range(self.preset_combo.count()):
-            preset_data = self.preset_combo.itemData(i)
-            if preset_data and preset_data.get('name') == preset_name:
-                self.preset_combo.setCurrentIndex(i)
-                self.use_preset_radio.setChecked(True)
-                break
 
     def on_preset_toggle(self):
         """Handle preset radio toggle"""

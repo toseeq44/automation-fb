@@ -578,8 +578,8 @@ class EditorBatchWorker(QThread):
             logger.info(f"   🎬 _process_with_simple_edit() starting")
             logger.info(f"      Source: {source_path}")
             logger.info(f"      Dest: {dest_path}")
-            logger.info(f"      Applying: 110% zoom + 3% blur + audio pitch + metadata removal")
-            self.log_message.emit(f"🎨 Applying default edits: 110% zoom, 3% blur, audio adjustment, metadata removal", "info")
+            logger.info(f"      Applying: 110% zoom + edge blur (4 sides) + music removal + metadata removal")
+            self.log_message.emit(f"🎨 Professional edits: Edge blur, 110% zoom, music removal, metadata removal", "info")
 
             # Check if in-place editing (source == destination)
             is_inplace = os.path.normpath(source_path) == os.path.normpath(dest_path)
@@ -625,23 +625,43 @@ class EditorBatchWorker(QThread):
                     dest_path = str(Path(dest_path).with_suffix(f'.{output_format}'))
                 actual_output = dest_path
 
-            # Build FFmpeg command with advanced filters:
-            # VIDEO FILTERS:
-            # 1. Scale for 110% zoom with EVEN dimensions (FFmpeg requires even width/height)
-            #    Formula: trunc(dimension*1.1/2)*2 ensures result is divisible by 2
-            # 2. Gaussian blur (sigma=3 ≈ 3% blur effect)
+            # Build FFmpeg command with PROFESSIONAL FILTERS:
+            #
+            # VIDEO FILTERS (Complex filter graph):
+            # 1. Create blurred background layer (heavily blurred full video)
+            # 2. Scale main video to 97% (creates 3% border space on all sides)
+            # 3. Overlay sharp video on blurred background = TRANSPARENT BLUR EDGES
+            # 4. Final 110% zoom with even dimensions
+            #
             # AUDIO FILTERS:
-            # 3. Pitch change (asetrate reduces pitch slightly, then resample to original rate)
-            # 4. Volume reduction (reduces background music/noise)
+            # 1. Highpass filter (removes low frequencies = background music bass)
+            # 2. Aggressive volume reduction (removes remaining background noise)
+            # 3. Audio normalization (maintains voice clarity)
+            #
+            # This creates professional Instagram/TikTok style editing with blurred edges
 
-            video_filters = "scale='trunc(iw*1.1/2)*2:trunc(ih*1.1/2)*2',gblur=sigma=3"
-            audio_filters = "asetrate=44100*0.97,aresample=44100,volume=0.7"
+            # Complex filter for EDGE BLUR effect (blur on 4 sides only)
+            video_filter_complex = (
+                "[0:v]split=2[main][bg];"  # Split input into 2 streams
+                "[bg]scale=iw:ih,gblur=sigma=20[blurred];"  # Heavy blur for background
+                "[main]scale=iw*0.97:ih*0.97[scaled];"  # Scale to 97% (creates 3% border)
+                "[blurred][scaled]overlay=(W-w)/2:(H-h)/2[overlay];"  # Overlay centered = transparent edges
+                "[overlay]scale='trunc(iw*1.1/2)*2:trunc(ih*1.1/2)*2'[out]"  # 110% zoom, even dimensions
+            )
+
+            # Audio filter for MUSIC REMOVAL + voice preservation (NO pitch change to avoid delay)
+            audio_filters = (
+                "highpass=f=200,"  # Remove low frequencies (bass/background music)
+                "volume=0.3,"  # Aggressive reduction (70% volume reduction)
+                "loudnorm=I=-16:TP=-1.5:LRA=11"  # Normalize loudness (preserves voice)
+            )
 
             cmd = [
                 'ffmpeg',
                 '-i', source_path,
-                '-vf', video_filters,  # Video: 110% zoom + 3% blur
-                '-af', audio_filters,  # Audio: pitch change + volume reduction
+                '-filter_complex', video_filter_complex,  # Complex video filter
+                '-map', '[out]',  # Map output video from complex filter
+                '-af', audio_filters,  # Audio filters (no pitch change = no delay)
                 '-c:v', 'libx264',
                 '-c:a', 'aac',
                 *crf_preset,
@@ -650,9 +670,9 @@ class EditorBatchWorker(QThread):
                 actual_output
             ]
 
-            logger.info(f"      Video filters: {video_filters}")
-            logger.info(f"      Audio filters: {audio_filters}")
-            self.log_message.emit(f"🎬 Running FFmpeg with advanced filters (quality: {quality})...", "info")
+            logger.info(f"      Video filter: Edge blur (4 sides) + 110% zoom")
+            logger.info(f"      Audio filter: Music removal (highpass + volume reduction)")
+            self.log_message.emit(f"🎬 Professional filters: Edge blur + music removal + no audio delay...", "info")
 
             # Run FFmpeg
             result = subprocess.run(

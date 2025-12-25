@@ -28,6 +28,10 @@ class EditorProgressDialog(QDialog):
 
     def __init__(self, config: Dict[str, Any], parent=None):
         super().__init__(parent)
+        logger.info("🎬 EditorProgressDialog.__init__ called")
+        logger.info(f"   Config received: {list(config.keys()) if config else 'None'}")
+        logger.info(f"   Total videos: {config.get('total_count', 0)}")
+
         self.config = config
         self.worker: Optional[EditorBatchWorker] = None
         self.batch_processor = BatchProcessor()
@@ -35,9 +39,11 @@ class EditorProgressDialog(QDialog):
         self.start_time = None
         self.is_processing = False
 
+        logger.info("   Initializing UI...")
         self.init_ui()
         self.apply_theme()
 
+        logger.info("   Scheduling start_processing in 500ms...")
         # Start processing after dialog shows
         QTimer.singleShot(500, self.start_processing)
 
@@ -126,6 +132,8 @@ class EditorProgressDialog(QDialog):
         """Create progress section"""
         group = QGroupBox("Progress")
         layout = QVBoxLayout()
+        layout.setSpacing(12)
+        layout.setContentsMargins(10, 15, 10, 15)
 
         # Main progress bar
         self.progress_bar = QProgressBar()
@@ -134,15 +142,21 @@ class EditorProgressDialog(QDialog):
         self.progress_bar.setValue(0)
         self.progress_bar.setTextVisible(True)
         self.progress_bar.setFormat("%p% (%v/%m)")
+        self.progress_bar.setMinimumHeight(30)
         layout.addWidget(self.progress_bar)
 
         # Current file label
         self.current_file_label = QLabel("Preparing...")
+        self.current_file_label.setObjectName("current_file_label")
         self.current_file_label.setWordWrap(True)
+        self.current_file_label.setFont(QFont('Segoe UI', 12))
+        self.current_file_label.setMinimumHeight(30)
         layout.addWidget(self.current_file_label)
 
         # Estimated time
         self.eta_label = QLabel("Estimated time remaining: Calculating...")
+        self.eta_label.setObjectName("eta_label")
+        self.eta_label.setFont(QFont('Segoe UI', 11))
         layout.addWidget(self.eta_label)
 
         group.setLayout(layout)
@@ -152,22 +166,24 @@ class EditorProgressDialog(QDialog):
         """Create statistics section"""
         group = QGroupBox("Statistics")
         layout = QHBoxLayout()
+        layout.setSpacing(15)
+        layout.setContentsMargins(10, 20, 10, 20)
 
         # Completed
         completed_frame = self.create_stat_frame("Completed", "0", "completed")
-        layout.addWidget(completed_frame)
+        layout.addWidget(completed_frame, 1)
 
         # Pending
         pending_frame = self.create_stat_frame("Pending", "0", "pending")
-        layout.addWidget(pending_frame)
+        layout.addWidget(pending_frame, 1)
 
         # Failed
         failed_frame = self.create_stat_frame("Failed", "0", "failed")
-        layout.addWidget(failed_frame)
+        layout.addWidget(failed_frame, 1)
 
         # Deleted
         deleted_frame = self.create_stat_frame("Sources Deleted", "0", "deleted")
-        layout.addWidget(deleted_frame)
+        layout.addWidget(deleted_frame, 1)
 
         group.setLayout(layout)
         return group
@@ -176,17 +192,24 @@ class EditorProgressDialog(QDialog):
         """Create a single stat frame"""
         frame = QFrame()
         frame.setObjectName(f"stat_{name}")
+        frame.setMinimumWidth(150)
+        frame.setMaximumHeight(100)
         layout = QVBoxLayout(frame)
-        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setContentsMargins(15, 15, 15, 15)
+        layout.setSpacing(8)
 
         value_label = QLabel(value)
         value_label.setObjectName(f"stat_value_{name}")
         value_label.setAlignment(Qt.AlignCenter)
-        value_label.setFont(QFont('Segoe UI', 24, QFont.Bold))
+        value_label.setFont(QFont('Segoe UI', 28, QFont.Bold))
         layout.addWidget(value_label)
 
         text_label = QLabel(label)
+        text_label.setObjectName(f"stat_text_{name}")
         text_label.setAlignment(Qt.AlignCenter)
+        text_label.setFont(QFont('Segoe UI', 11))
+        text_label.setWordWrap(True)
+        text_label.setMaximumHeight(40)
         layout.addWidget(text_label)
 
         return frame
@@ -232,15 +255,19 @@ class EditorProgressDialog(QDialog):
                 font-size: 13px;
             }
             QProgressBar {
-                border: 1px solid #3a3a3a;
-                border-radius: 6px;
+                border: 2px solid #3a3a3a;
+                border-radius: 8px;
                 text-align: center;
                 background-color: #2a2a2a;
-                height: 25px;
+                height: 30px;
+                font-size: 13px;
+                font-weight: bold;
+                color: #ffffff;
             }
             QProgressBar::chunk {
-                background-color: #00bcd4;
-                border-radius: 5px;
+                background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                                  stop:0 #00bcd4, stop:1 #00d4ea);
+                border-radius: 6px;
             }
             QPushButton {
                 background-color: #2a2a2a;
@@ -278,9 +305,23 @@ class EditorProgressDialog(QDialog):
                 font-weight: bold;
                 font-size: 14px;
             }
+            QLabel#current_file_label {
+                color: #00bcd4;
+                font-weight: 500;
+                padding: 5px;
+            }
+            QLabel#eta_label {
+                color: #b0b0b0;
+                font-style: italic;
+            }
             QFrame[objectName^="stat_"] {
                 background-color: #2a2a2a;
                 border-radius: 8px;
+                border: 1px solid #3a3a3a;
+            }
+            QLabel[objectName^="stat_text_"] {
+                color: #b0b0b0;
+                padding: 0px 5px;
             }
             QLabel[objectName="stat_value_completed"] {
                 color: #4caf50;
@@ -298,6 +339,10 @@ class EditorProgressDialog(QDialog):
 
     def start_processing(self):
         """Start the batch processing"""
+        logger.info("⏱️  start_processing() method called")
+        logger.info(f"   Config available: {self.config is not None}")
+        logger.info(f"   Total videos to process: {self.config.get('total_count', 0) if self.config else 0}")
+
         self.is_processing = True
         self.start_time = datetime.now()
         self.elapsed_timer.start(1000)
@@ -307,9 +352,11 @@ class EditorProgressDialog(QDialog):
 
         # Log start
         self.log_message(f"Starting batch processing of {total} videos", "info")
+        logger.info(f"   Creating batch worker...")
 
         # Create and connect worker
         self.worker = self.batch_processor.start_processing(self.config)
+        logger.info(f"   Worker created: {self.worker is not None}")
 
         # Connect signals
         self.worker.progress.connect(self.on_progress)
@@ -317,6 +364,7 @@ class EditorProgressDialog(QDialog):
         self.worker.video_completed.connect(self.on_video_completed)
         self.worker.log_message.connect(self.log_message)
         self.worker.processing_finished.connect(self.on_processing_finished)
+        logger.info("   All signals connected, worker should be running")
 
     def on_progress(self, current: int, total: int):
         """Handle progress update"""

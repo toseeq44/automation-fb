@@ -162,17 +162,23 @@ class BulkProcessingDialog(QDialog):
         source_btn.clicked.connect(self.browse_source)
         layout.addWidget(source_btn, 0, 2)
 
+        # Same folder checkbox
+        self.same_folder_checkbox = QCheckBox("Save edited videos in same folder as source (In-place editing)")
+        self.same_folder_checkbox.stateChanged.connect(self.on_same_folder_changed)
+        layout.addWidget(self.same_folder_checkbox, 1, 0, 1, 3)
+
         # Destination folder
-        layout.addWidget(QLabel("Destination Folder (Edited Videos):"), 1, 0)
+        self.dest_label = QLabel("Destination Folder (Edited Videos):")
+        layout.addWidget(self.dest_label, 2, 0)
 
         self.dest_input = QLineEdit()
         self.dest_input.setPlaceholderText("Select folder for edited videos...")
         self.dest_input.textChanged.connect(self.on_folder_changed)
-        layout.addWidget(self.dest_input, 1, 1)
+        layout.addWidget(self.dest_input, 2, 1)
 
-        dest_btn = QPushButton("Browse")
-        dest_btn.clicked.connect(self.browse_destination)
-        layout.addWidget(dest_btn, 1, 2)
+        self.dest_btn = QPushButton("Browse")
+        self.dest_btn.clicked.connect(self.browse_destination)
+        layout.addWidget(self.dest_btn, 2, 2)
 
         # Scan button
         scan_layout = QHBoxLayout()
@@ -183,12 +189,12 @@ class BulkProcessingDialog(QDialog):
         self.scan_btn.clicked.connect(self.scan_folders)
         scan_layout.addWidget(self.scan_btn)
 
-        layout.addLayout(scan_layout, 2, 0, 1, 3)
+        layout.addLayout(scan_layout, 3, 0, 1, 3)
 
         # Scan results label
         self.scan_result_label = QLabel("")
         self.scan_result_label.setWordWrap(True)
-        layout.addWidget(self.scan_result_label, 3, 0, 1, 3)
+        layout.addWidget(self.scan_result_label, 4, 0, 1, 3)
 
         group.setLayout(layout)
         return group
@@ -211,11 +217,25 @@ class BulkProcessingDialog(QDialog):
         ])
         self.mapping_table.setMinimumHeight(200)
         self.mapping_table.setMaximumHeight(400)
-        self.mapping_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.mapping_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
-        self.mapping_table.setColumnWidth(0, 60)
-        self.mapping_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Fixed)
+
+        # Set column widths properly to prevent text overlapping
+        header = self.mapping_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Fixed)
+        header.setMinimumSectionSize(80)
+        self.mapping_table.setColumnWidth(0, 80)
+
+        header.setSectionResizeMode(1, QHeaderView.Interactive)
+        self.mapping_table.setColumnWidth(1, 250)
+
+        header.setSectionResizeMode(2, QHeaderView.Interactive)
+        self.mapping_table.setColumnWidth(2, 250)
+
+        header.setSectionResizeMode(3, QHeaderView.Fixed)
         self.mapping_table.setColumnWidth(3, 80)
+
+        # Enable word wrap in cells
+        self.mapping_table.setWordWrap(True)
+
         layout.addWidget(self.mapping_table)
 
         # Mapping actions
@@ -270,11 +290,24 @@ class BulkProcessingDialog(QDialog):
 
         self.preset_combo = QComboBox()
         self.preset_combo.setEnabled(False)
-        self.preset_combo.setMinimumWidth(200)
+        self.preset_combo.setMinimumWidth(300)
         self.load_presets()
         preset_layout.addWidget(self.preset_combo)
 
+        # Refresh button
+        self.refresh_presets_btn = QPushButton("🔄")
+        self.refresh_presets_btn.setToolTip("Refresh preset list")
+        self.refresh_presets_btn.setMaximumWidth(35)
+        self.refresh_presets_btn.clicked.connect(self.load_presets)
+        preset_layout.addWidget(self.refresh_presets_btn)
+
         preset_layout.addStretch()
+
+        # Info label
+        preset_info_label = QLabel("(Create presets from Video Editor → Presets button)")
+        preset_info_label.setStyleSheet("color: gray; font-size: 10px; font-style: italic;")
+        preset_layout.addWidget(preset_info_label)
+
         layout.addLayout(preset_layout, 1, 1)
 
         # Output format
@@ -325,14 +358,18 @@ class BulkProcessingDialog(QDialog):
                 font-size: 14px;
                 border: 1px solid #3a3a3a;
                 border-radius: 8px;
-                margin-top: 12px;
+                margin-top: 20px;
                 padding: 15px;
+                padding-top: 25px;
                 background-color: #242424;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 subcontrol-position: top left;
-                padding: 0 10px;
+                padding: 5px 10px;
+                margin-top: 0px;
+                background-color: #1a1a1a;
+                border-radius: 4px;
                 color: #00bcd4;
             }
             QLabel {
@@ -483,12 +520,44 @@ class BulkProcessingDialog(QDialog):
         if folder:
             self.dest_input.setText(folder)
 
+    def on_same_folder_changed(self, state):
+        """Handle same folder checkbox change"""
+        is_checked = state == Qt.Checked
+
+        # Enable/disable destination folder controls
+        self.dest_label.setEnabled(not is_checked)
+        self.dest_input.setEnabled(not is_checked)
+        self.dest_btn.setEnabled(not is_checked)
+
+        if is_checked:
+            # Auto-fill destination with source folder
+            source = self.source_input.text().strip()
+            if source:
+                self.dest_input.setText(source)
+        else:
+            # Clear destination when unchecked
+            self.dest_input.clear()
+
+        # Update scan button state
+        self.on_folder_changed()
+
     def on_folder_changed(self):
         """Handle folder input change"""
         source = self.source_input.text().strip()
         dest = self.dest_input.text().strip()
 
-        self.scan_btn.setEnabled(bool(source and dest))
+        # Enable scan button if source is provided
+        # For same folder mode, only source is needed
+        # For different folder mode, both source and dest are needed
+        is_same_folder = self.same_folder_checkbox.isChecked()
+
+        if is_same_folder:
+            self.scan_btn.setEnabled(bool(source))
+            # Auto-sync destination with source
+            if source:
+                self.dest_input.setText(source)
+        else:
+            self.scan_btn.setEnabled(bool(source and dest))
 
         # Hide subsequent steps
         self.mapping_group.setVisible(False)
@@ -528,11 +597,12 @@ class BulkProcessingDialog(QDialog):
         # Update scan result
         if self.folder_mode == 'simple':
             video_count = self.folder_info['source_video_count']
+            total_videos = self.folder_info.get('total_video_count', video_count)
             self.scan_result_label.setText(
-                f"Simple Mode: Found {video_count} videos in source folder.\n"
+                f"✅ Simple Mode: Found {total_videos} video(s) in source folder.\n"
                 f"Videos will be processed and saved to destination folder."
             )
-            self.scan_result_label.setStyleSheet("color: #4caf50;")
+            self.scan_result_label.setStyleSheet("color: #4caf50; font-weight: bold;")
 
             # Create simple mapping
             self.current_mapping = EditorFolderMapping(
@@ -547,11 +617,12 @@ class BulkProcessingDialog(QDialog):
 
         else:  # complex mode
             source_subs = self.folder_info['source_subfolders']
+            total_videos = self.folder_info.get('total_video_count', 0)
             self.scan_result_label.setText(
-                f"Complex Mode: Found {len(source_subs)} subfolders in source.\n"
-                f"Please configure mapping for each subfolder."
+                f"✅ Complex Mode: Found {len(source_subs)} subfolder(s) with {total_videos} total video(s).\n"
+                f"All nested subfolders included. Please configure mapping below."
             )
-            self.scan_result_label.setStyleSheet("color: #00bcd4;")
+            self.scan_result_label.setStyleSheet("color: #00bcd4; font-weight: bold;")
 
             # Create mapping with subfolders
             self.current_mapping = EditorFolderMapping(
@@ -600,33 +671,20 @@ class BulkProcessingDialog(QDialog):
             # Source subfolder
             self.mapping_table.setItem(row, 1, QTableWidgetItem(sm.source_subfolder))
 
-            # Destination dropdown
-            dest_combo = QComboBox()
-            dest_combo.addItems(dest_subs + [sm.destination_subfolder])
-            dest_combo.addItem("-- Create New --")
+            # Destination - Use plain text item instead of combo for better display
+            dest_item = QTableWidgetItem(sm.destination_subfolder)
+            dest_item.setToolTip(sm.destination_subfolder)  # Full path on hover
+            self.mapping_table.setItem(row, 2, dest_item)
 
-            # Remove duplicates
-            items = []
-            for i in range(dest_combo.count()):
-                text = dest_combo.itemText(i)
-                if text not in items:
-                    items.append(text)
-            dest_combo.clear()
-            dest_combo.addItems(items)
-
-            dest_combo.setCurrentText(sm.destination_subfolder)
-            dest_combo.currentTextChanged.connect(
-                lambda text, r=row: self.on_dest_subfolder_changed(r, text)
-            )
-            self.mapping_table.setCellWidget(row, 2, dest_combo)
-
-            # Video count
+            # Video count (recursive - includes all nested subfolders)
             source_path = os.path.join(
                 self.current_mapping.source_folder,
                 sm.source_subfolder
             )
-            video_count = FolderScanner.count_videos_in_folder(source_path)
-            self.mapping_table.setItem(row, 3, QTableWidgetItem(str(video_count)))
+            video_count = FolderScanner.count_videos_in_folder(source_path, recursive=True)
+            count_item = QTableWidgetItem(str(video_count))
+            count_item.setTextAlignment(Qt.AlignCenter)
+            self.mapping_table.setItem(row, 3, count_item)
 
     def on_mapping_enabled_changed(self, row: int, state: int):
         """Handle mapping enabled checkbox change"""
@@ -710,14 +768,38 @@ class BulkProcessingDialog(QDialog):
         )
 
     def load_presets(self):
-        """Load presets into combo"""
+        """Load presets into combo organized by folder"""
         self.preset_combo.clear()
-        self.preset_combo.addItem("-- Select Preset --")
+        self.preset_combo.addItem("-- Select Preset --", None)
 
         try:
-            presets = self.preset_manager.list_presets()
-            for preset in presets:
-                self.preset_combo.addItem(preset['name'])
+            # Get presets organized by folder
+            presets_by_folder = self.preset_manager.list_presets_by_folder()
+
+            # Add system presets
+            system_presets = presets_by_folder.get(PresetManager.FOLDER_SYSTEM, [])
+            if system_presets:
+                self.preset_combo.addItem("━━━ System Presets ━━━", None)
+                for preset in system_presets:
+                    display_name = f"📦 {preset['name']}"
+                    self.preset_combo.addItem(display_name, preset)
+
+            # Add user presets
+            user_presets = presets_by_folder.get(PresetManager.FOLDER_USER, [])
+            if user_presets:
+                self.preset_combo.addItem("━━━ User Presets ━━━", None)
+                for preset in user_presets:
+                    display_name = f"👤 {preset['name']}"
+                    self.preset_combo.addItem(display_name, preset)
+
+            # Add imported presets
+            imported_presets = presets_by_folder.get(PresetManager.FOLDER_IMPORTED, [])
+            if imported_presets:
+                self.preset_combo.addItem("━━━ Imported Presets ━━━", None)
+                for preset in imported_presets:
+                    display_name = f"📥 {preset['name']}"
+                    self.preset_combo.addItem(display_name, preset)
+
         except Exception as e:
             logger.error(f"Error loading presets: {e}")
 
@@ -730,11 +812,12 @@ class BulkProcessingDialog(QDialog):
         if not self.current_mapping:
             return
 
-        # Count total videos
+        # Count total videos (recursively - includes all nested subfolders)
         total_videos = 0
         if self.current_mapping.is_simple_mode:
             total_videos = FolderScanner.count_videos_in_folder(
-                self.current_mapping.source_folder
+                self.current_mapping.source_folder,
+                recursive=True
             )
         else:
             for sm in self.current_mapping.subfolder_mappings:
@@ -743,16 +826,19 @@ class BulkProcessingDialog(QDialog):
                         self.current_mapping.source_folder,
                         sm.source_subfolder
                     )
-                    total_videos += FolderScanner.count_videos_in_folder(source_path)
+                    total_videos += FolderScanner.count_videos_in_folder(source_path, recursive=True)
 
         # Check daily limit
         can_process_all, can_process_count = self.plan_checker.can_process_count(total_videos)
         plan_info = self.plan_checker.get_plan_info_display()
 
         # Build summary
+        is_same_folder = self.same_folder_checkbox.isChecked()
+
         summary_lines = [
             f"Videos to process: {total_videos}",
             f"Mode: {'Simple' if self.current_mapping.is_simple_mode else 'Subfolder Mapping'}",
+            f"In-place editing: {'Yes (Same folder)' if is_same_folder else 'No (Different folders)'}",
             f"Source: {self.current_mapping.source_folder}",
             f"Destination: {self.current_mapping.destination_folder}"
         ]
@@ -783,41 +869,81 @@ class BulkProcessingDialog(QDialog):
         if not self.current_mapping:
             return {}
 
+        # Get selected preset data
+        selected_preset_data = None
+        if self.use_preset_radio.isChecked() and self.preset_combo.currentIndex() > 0:
+            preset_data = self.preset_combo.currentData()
+            if preset_data:  # Not a separator
+                selected_preset_data = preset_data
+
         # Update settings
         self.current_mapping.settings = EditorMappingSettings(
             delete_source_after_edit=self.delete_yes_radio.isChecked(),
-            preset_id=self.preset_combo.currentText() if self.use_preset_radio.isChecked() and self.preset_combo.currentIndex() > 0 else None,
+            preset_id=selected_preset_data['name'] if selected_preset_data else None,
             output_format=self.format_combo.currentText(),
             quality=self.quality_combo.currentText()
         )
 
-        # Calculate videos to process
+        # Add preset data to mapping for processor
+        if selected_preset_data:
+            self.current_mapping.preset_data = selected_preset_data
+        else:
+            self.current_mapping.preset_data = None
+
+        # Calculate videos to process (recursively)
         total_videos = 0
         video_list = []
 
         if self.current_mapping.is_simple_mode:
-            source_path = Path(self.current_mapping.source_folder)
-            for f in source_path.iterdir():
-                if f.is_file() and f.suffix.lower() in VIDEO_EXTENSIONS:
-                    video_list.append({
-                        'source': str(f),
-                        'destination': str(Path(self.current_mapping.destination_folder) / f.name)
-                    })
+            # Recursively find all videos in source folder
+            source_base = Path(self.current_mapping.source_folder)
+            dest_base = Path(self.current_mapping.destination_folder)
+
+            for root, dirs, files in os.walk(source_base):
+                # Filter out hidden directories
+                dirs[:] = [d for d in dirs if not d.startswith('.')]
+
+                root_path = Path(root)
+                for f in files:
+                    file_path = root_path / f
+                    if file_path.suffix.lower() in VIDEO_EXTENSIONS:
+                        # Preserve folder structure
+                        rel_path = file_path.relative_to(source_base)
+                        dest_file = dest_base / rel_path
+
+                        video_list.append({
+                            'source': str(file_path),
+                            'destination': str(dest_file)
+                        })
+
             total_videos = len(video_list)
         else:
+            # Complex mode - process each enabled subfolder mapping recursively
             for sm in self.current_mapping.subfolder_mappings:
                 if sm.enabled:
-                    source_path = Path(self.current_mapping.source_folder) / sm.source_subfolder
-                    dest_path = Path(self.current_mapping.destination_folder) / sm.destination_subfolder
+                    source_base = Path(self.current_mapping.source_folder) / sm.source_subfolder
+                    dest_base = Path(self.current_mapping.destination_folder) / sm.destination_subfolder
 
-                    for f in source_path.iterdir():
-                        if f.is_file() and f.suffix.lower() in VIDEO_EXTENSIONS:
-                            video_list.append({
-                                'source': str(f),
-                                'destination': str(dest_path / f.name),
-                                'subfolder': sm.source_subfolder
-                            })
-                    total_videos += len([v for v in video_list if v.get('subfolder') == sm.source_subfolder])
+                    # Recursively walk through this subfolder
+                    for root, dirs, files in os.walk(source_base):
+                        # Filter out hidden directories
+                        dirs[:] = [d for d in dirs if not d.startswith('.')]
+
+                        root_path = Path(root)
+                        for f in files:
+                            file_path = root_path / f
+                            if file_path.suffix.lower() in VIDEO_EXTENSIONS:
+                                # Preserve folder structure within subfolder
+                                rel_path = file_path.relative_to(source_base)
+                                dest_file = dest_base / rel_path
+
+                                video_list.append({
+                                    'source': str(file_path),
+                                    'destination': str(dest_file),
+                                    'subfolder': sm.source_subfolder
+                                })
+
+            total_videos = len(video_list)
 
         # Apply daily limit
         can_process_all, can_process_count = self.plan_checker.can_process_count(len(video_list))
@@ -841,9 +967,12 @@ class BulkProcessingDialog(QDialog):
             return
 
         # Confirm
+        is_same_folder = self.same_folder_checkbox.isChecked()
+
         reply = QMessageBox.question(
             self, "Start Processing",
             f"Are you sure you want to process {config['total_count']} videos?\n\n"
+            f"In-place editing: {'Yes (Same folder)' if is_same_folder else 'No (Different folders)'}\n"
             f"Delete source after edit: {'Yes' if config['settings'].delete_source_after_edit else 'No'}\n"
             f"Preset: {config['settings'].preset_id or 'None'}\n"
             f"Output format: {config['settings'].output_format}\n"
@@ -855,6 +984,12 @@ class BulkProcessingDialog(QDialog):
             # Create destination folders if needed
             self.mapping_manager.create_destination_folders(self.current_mapping)
 
+            # Log before emitting signal
+            logger.info(f"🚀 Emitting start_processing signal with {config['total_count']} videos")
+            logger.info(f"   Config keys: {list(config.keys())}")
+            logger.info(f"   Videos count: {len(config.get('videos', []))}")
+
             # Emit signal and close
             self.start_processing.emit(config)
+            logger.info("✅ Signal emitted, closing dialog")
             self.accept()

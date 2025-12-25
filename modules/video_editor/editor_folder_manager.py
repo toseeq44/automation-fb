@@ -153,18 +153,43 @@ class FolderScanner:
     """Scans folders and detects structure"""
 
     @staticmethod
-    def get_subfolders(folder_path: str) -> List[str]:
-        """Get list of subfolders in a folder"""
+    def get_subfolders(folder_path: str, recursive: bool = False) -> List[str]:
+        """
+        Get list of subfolders in a folder
+
+        Args:
+            folder_path: Path to scan
+            recursive: If True, scan all nested subfolders recursively
+
+        Returns:
+            List of subfolder paths (relative to folder_path)
+        """
         try:
             path = Path(folder_path).expanduser()
             if not path.exists():
                 return []
 
-            subfolders = [
-                f.name for f in path.iterdir()
-                if f.is_dir() and not f.name.startswith('.')
-            ]
-            return sorted(subfolders)
+            if recursive:
+                # Recursively get all nested subfolders
+                subfolders = []
+                for root, dirs, files in os.walk(path):
+                    # Filter out hidden directories
+                    dirs[:] = [d for d in dirs if not d.startswith('.')]
+
+                    for d in dirs:
+                        # Get relative path from base folder
+                        full_path = Path(root) / d
+                        rel_path = full_path.relative_to(path)
+                        subfolders.append(str(rel_path))
+
+                return sorted(subfolders)
+            else:
+                # Only immediate subfolders
+                subfolders = [
+                    f.name for f in path.iterdir()
+                    if f.is_dir() and not f.name.startswith('.')
+                ]
+                return sorted(subfolders)
         except Exception as e:
             logger.error(f"Error scanning folder {folder_path}: {e}")
             return []
@@ -223,21 +248,27 @@ class FolderScanner:
     @staticmethod
     def detect_folder_mode(source_folder: str, dest_folder: str) -> Tuple[str, Dict[str, Any]]:
         """
-        Detect folder mode and return info
+        Detect folder mode and return info (with recursive scanning)
 
         Returns:
             Tuple of (mode, info_dict)
             mode: 'simple' or 'complex'
         """
-        source_subfolders = FolderScanner.get_subfolders(source_folder)
-        dest_subfolders = FolderScanner.get_subfolders(dest_folder)
+        # Scan recursively for all nested subfolders
+        source_subfolders = FolderScanner.get_subfolders(source_folder, recursive=True)
+        dest_subfolders = FolderScanner.get_subfolders(dest_folder, recursive=True)
 
+        # Check videos in root folder
         source_videos = FolderScanner.get_video_files(source_folder)
+
+        # Count total videos recursively
+        total_video_count = FolderScanner.count_videos_in_folder(source_folder, recursive=True)
 
         info = {
             'source_subfolders': source_subfolders,
             'dest_subfolders': dest_subfolders,
-            'source_video_count': len(source_videos),
+            'source_video_count': len(source_videos),  # Videos in root only
+            'total_video_count': total_video_count,     # All videos (recursive)
             'source_has_subfolders': len(source_subfolders) > 0,
             'dest_has_subfolders': len(dest_subfolders) > 0
         }
@@ -246,7 +277,7 @@ class FolderScanner:
         if not source_subfolders and source_videos:
             return 'simple', info
 
-        # Complex mode: Source has subfolders
+        # Complex mode: Source has subfolders (including nested ones)
         if source_subfolders:
             return 'complex', info
 

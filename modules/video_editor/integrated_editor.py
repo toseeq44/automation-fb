@@ -1192,11 +1192,18 @@ class IntegratedVideoEditor(QWidget):
 
             # Connect signal for when processing should start
             def on_start_processing(config):
+                logger.info("📨 Signal handler called - on_start_processing")
+                logger.info(f"   Received config with {len(config.get('videos', []))} videos")
+                logger.info("   Creating EditorProgressDialog...")
+
                 # Open progress dialog
                 progress_dialog = EditorProgressDialog(config, self)
+                logger.info("   EditorProgressDialog created, showing...")
                 progress_dialog.exec_()
+                logger.info("   EditorProgressDialog closed")
 
             config_dialog.start_processing.connect(on_start_processing)
+            logger.info("✅ Signal handler connected")
 
             # Show dialog
             config_dialog.exec_()

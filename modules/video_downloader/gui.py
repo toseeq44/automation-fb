@@ -299,6 +299,25 @@ class VideoDownloaderPage(QWidget):
         info_layout.addStretch()
         layout.addLayout(info_layout)
 
+        # Output console controls (Maximize button)
+        console_controls = QHBoxLayout()
+        console_label = QLabel("📋 Download Console:")
+        console_label.setStyleSheet("color: #1ABC9C; font-size: 14px; font-weight: bold;")
+        console_controls.addWidget(console_label)
+        console_controls.addStretch()
+
+        maximize_btn = QPushButton("🔍 Maximize Output")
+        maximize_btn.setStyleSheet("""
+            QPushButton { background-color: #3498DB; color: #F5F6F5; border: none;
+                         padding: 6px 12px; border-radius: 4px; font-size: 12px; font-weight: bold; }
+            QPushButton:hover { background-color: #2980B9; }
+            QPushButton:pressed { background-color: #1F618D; }
+        """)
+        maximize_btn.clicked.connect(self.show_maximized_output)
+        console_controls.addWidget(maximize_btn)
+
+        layout.addLayout(console_controls)
+
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setStyleSheet("""
@@ -893,4 +912,99 @@ class VideoDownloaderPage(QWidget):
                 "Error",
                 f"Failed to move videos:\n{str(e)}"
             )
-            self.log_message(f"❌ Error moving videos: {str(e)}")
+
+    def show_maximized_output(self):
+        """Show download console in maximized window with close button"""
+        # Create maximized dialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle("📋 Download Console - Full Output")
+        dialog.setWindowFlags(Qt.Window | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint)
+
+        # Set dialog size to 90% of screen
+        from PyQt5.QtWidgets import QApplication
+        screen = QApplication.desktop().screenGeometry()
+        dialog.resize(int(screen.width() * 0.9), int(screen.height() * 0.9))
+
+        # Center dialog on screen
+        dialog.move((screen.width() - dialog.width()) // 2,
+                    (screen.height() - dialog.height()) // 2)
+
+        # Dark theme
+        dialog.setStyleSheet("""
+            QDialog {
+                background-color: #23272A;
+                color: #F5F6F5;
+            }
+        """)
+
+        # Layout
+        layout = QVBoxLayout()
+        layout.setContentsMargins(15, 15, 15, 15)
+        layout.setSpacing(10)
+
+        # Title
+        title = QLabel("📋 Download Console Output")
+        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #1ABC9C; margin-bottom: 10px;")
+        layout.addWidget(title)
+
+        # Full output text
+        output_text = QTextEdit()
+        output_text.setReadOnly(True)
+        output_text.setPlainText(self.log_text.toPlainText())  # Copy current log
+        output_text.setStyleSheet("""
+            QTextEdit {
+                background-color: #2C2F33;
+                color: #F5F6F5;
+                border: 2px solid #4B5057;
+                border-radius: 8px;
+                padding: 15px;
+                font-size: 14px;
+                font-family: 'Consolas', 'Courier New', monospace;
+            }
+        """)
+        layout.addWidget(output_text)
+
+        # Button bar
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+
+        # Copy All button
+        copy_btn = QPushButton("📋 Copy All")
+        copy_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3498DB;
+                color: #F5F6F5;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 6px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #2980B9; }
+            QPushButton:pressed { background-color: #1F618D; }
+        """)
+        copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(output_text.toPlainText()))
+        button_layout.addWidget(copy_btn)
+
+        # Close button
+        close_btn = QPushButton("✖️ Close")
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #E74C3C;
+                color: #F5F6F5;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 6px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #C0392B; }
+            QPushButton:pressed { background-color: #A93226; }
+        """)
+        close_btn.clicked.connect(dialog.close)
+        button_layout.addWidget(close_btn)
+
+        layout.addLayout(button_layout)
+
+        dialog.setLayout(layout)
+        dialog.exec_()  # Show as modal dialog

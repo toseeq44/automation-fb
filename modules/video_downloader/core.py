@@ -1193,7 +1193,8 @@ class VideoDownloaderThread(QThread):
 
                             # Now comparison will work correctly
                             if url_normalized in creator_links_normalized:
-                                if url in self.downloaded_links:
+                                # FIX: Check using NORMALIZED url (downloaded_links contains normalized URLs)
+                                if url_normalized in self.downloaded_links:
                                     success += 1
                                 else:
                                     failed += 1

@@ -530,6 +530,89 @@ class VideoUploadHelper:
         logger.warning("[Upload] ✗ Text-based detection failed after %d retries", retries)
         return None
 
+    def find_add_reels_button_text(self, retries: int = 3) -> Optional[Any]:
+        """
+        Find 'Add Reels' button using text-based detection (fallback for Reels pages).
+        Checks buttons, divs, spans, and all clickable elements.
+
+        Args:
+            retries: Number of retry attempts
+
+        Returns:
+            WebElement or None
+        """
+        logger.info("[Upload] Looking for 'Add Reels' button (text-based detection)...")
+
+        for attempt in range(1, retries + 1):
+            try:
+                if attempt > 1:
+                    logger.info("[Upload] Retry %d/%d (searching with star animation...)", attempt, retries)
+                    self.idle_mouse_activity(duration=2.0, base_radius=90)
+
+                # Method 1: ANY element containing "Add Reels" text
+                try:
+                    elements = self.driver.find_elements(By.XPATH,
+                        "//*[contains(text(), 'Add Reels') or contains(text(), 'Add reels')]")
+                    if elements:
+                        logger.info("[Upload] ✓ Found 'Add Reels' button (broad text search) - %d match(es)", len(elements))
+                        for elem in elements:
+                            if elem.is_displayed():
+                                logger.info("[Upload]   Using element: tag=%s", elem.tag_name)
+                                return elem
+                except Exception as e:
+                    logger.debug("[Upload] Broad text search failed: %s", str(e))
+
+                # Method 2: Divs with role=button
+                try:
+                    elements = self.driver.find_elements(By.XPATH,
+                        "//div[@role='button' and contains(., 'Add Reels')]")
+                    if elements:
+                        logger.info("[Upload] ✓ Found 'Add Reels' button (div role=button)")
+                        return elements[0]
+                except Exception as e:
+                    logger.debug("[Upload] Div role=button search failed: %s", str(e))
+
+                # Method 3: Spans containing text
+                try:
+                    elements = self.driver.find_elements(By.XPATH,
+                        "//span[contains(text(), 'Add Reels')]")
+                    if elements:
+                        parent = elements[0].find_element(By.XPATH, "..")
+                        logger.info("[Upload] ✓ Found 'Add Reels' button (span parent)")
+                        return parent
+                except Exception as e:
+                    logger.debug("[Upload] Span search failed: %s", str(e))
+
+                # Method 4: Case-insensitive search
+                try:
+                    elements = self.driver.find_elements(By.XPATH,
+                        "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'add reels')]")
+                    if elements:
+                        logger.info("[Upload] ✓ Found 'Add Reels' button (case-insensitive)")
+                        for elem in elements:
+                            if elem.is_displayed():
+                                return elem
+                except Exception as e:
+                    logger.debug("[Upload] Case-insensitive search failed: %s", str(e))
+
+                # Method 5: Aria-label search
+                try:
+                    elements = self.driver.find_elements(By.XPATH,
+                        "//*[contains(@aria-label, 'Add Reels') or contains(@aria-label, 'Add reels')]")
+                    if elements:
+                        logger.info("[Upload] ✓ Found 'Add Reels' button (aria-label)")
+                        return elements[0]
+                except Exception as e:
+                    logger.debug("[Upload] Aria-label search failed: %s", str(e))
+
+                logger.warning("[Upload] 'Add Reels' button not found in attempt %d", attempt)
+
+            except Exception as e:
+                logger.debug("[Upload] Search error: %s", str(e))
+
+        logger.warning("[Upload] ✗ 'Add Reels' text detection failed after %d retries", retries)
+        return None
+
     def find_add_videos_button_image(self, retries: int = 3) -> Optional[Tuple[int, int]]:
         """
         Find 'Add Videos' button using image recognition.
@@ -634,7 +717,14 @@ class VideoUploadHelper:
             logger.info("[Upload] ✓ Image recognition successful")
             return image_result
 
-        logger.error("[Upload] ✗ All detection methods failed")
+        # NEW FALLBACK: Try "Add Reels" button (for Reels pages)
+        logger.info("[Upload] 'Add Videos' not found, trying 'Add Reels' button...")
+        reels_result = self.find_add_reels_button_text(retries=2)
+        if reels_result:
+            logger.info("[Upload] ✓ 'Add Reels' button found (Reels page detected)")
+            return reels_result
+
+        logger.error("[Upload] ✗ All detection methods failed (tried Add Videos and Add Reels)")
         return None
 
     def get_first_video_from_folder(self, folder_path: str) -> Optional[str]:
@@ -1040,19 +1130,26 @@ class VideoUploadHelper:
                     ("//input[contains(@placeholder, 'Add a title')]", "Reel title (contains)"),
                     ("//input[contains(@placeholder, 'title to your reel')]", "Reel title (partial)"),
 
-                    # Method 3: Generic title placeholder
+                    # Method 3: NEW - Reels description/caption field (when title not available)
+                    # Screenshot shows: "Describe your reel so people know what it's about"
+                    ("//textarea[contains(@placeholder, 'Describe your reel')]", "Reels description (textarea)"),
+                    ("//div[contains(@aria-label, 'Describe your reel')]", "Reels description (div aria-label)"),
+                    ("//textarea[contains(@placeholder, 'describe')]", "Description field (contains)"),
+                    ("//*[contains(@placeholder, 'Describe your reel so people know')]", "Reels description (full text)"),
+
+                    # Method 4: Generic title placeholder
                     ("//input[@placeholder='Title']", "Generic title placeholder"),
 
-                    # Method 4: Contains 'title' in placeholder (case-insensitive)
+                    # Method 5: Contains 'title' in placeholder (case-insensitive)
                     ("//input[contains(translate(@placeholder, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'title')]", "Title (case-insensitive)"),
 
-                    # Method 5: Title aria-label
+                    # Method 6: Title aria-label
                     ("//input[contains(@aria-label, 'Title') or contains(@aria-label, 'title')]", "Title aria-label"),
 
-                    # Method 6: Input with name='title'
+                    # Method 7: Input with name='title'
                     ("//input[@name='title']", "Title name attribute"),
 
-                    # Method 7: Any text input in upload form
+                    # Method 8: Any text input in upload form
                     ("//input[@type='text']", "Any text input"),
                 ]
 
@@ -1895,10 +1992,27 @@ class VideoUploadHelper:
         Randomly selects from 10 different movement patterns with imperfect,
         human-like behavior. Patterns may be incomplete based on duration.
 
+        INTELLIGENT DETECTION: Detects if user is actively using mouse and pauses bot movement.
+
         Args:
             duration: How long to animate (seconds) - patterns adapt to available time
             base_radius: Base size for patterns in pixels (randomized per pattern)
         """
+        # SMART FEATURE: Check if user is actively using mouse
+        try:
+            initial_mouse_pos = pyautogui.position()
+            time.sleep(0.2)  # Brief delay to detect movement
+            current_mouse_pos = pyautogui.position()
+
+            # If mouse moved, user is active - don't interfere!
+            if initial_mouse_pos != current_mouse_pos:
+                logger.info("[Mouse] 👤 User is using mouse - pausing bot movement")
+                logger.debug("[Mouse] Position changed: %s → %s", initial_mouse_pos, current_mouse_pos)
+                return  # Exit early, let user work
+        except Exception as e:
+            logger.debug("[Mouse] User detection check failed: %s", str(e))
+            # Continue with bot movement if detection fails
+
         # Get screen dimensions
         screen_width, screen_height = pyautogui.size()
         center_x = screen_width // 2

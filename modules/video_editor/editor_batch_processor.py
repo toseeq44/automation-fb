@@ -18,6 +18,7 @@ from modules.logging.logger import get_logger
 from modules.video_editor.editor_folder_manager import (
     EditorFolderMapping, EditorMappingSettings, PlanLimitChecker, VIDEO_EXTENSIONS
 )
+from modules.video_editor.utils import get_ffmpeg_path
 
 logger = get_logger(__name__)
 
@@ -492,9 +493,13 @@ class EditorBatchWorker(QThread):
 
             crf_preset = quality_settings.get(quality, quality_settings['medium'])
 
+            # Get FFmpeg path (handles bundled exe mode)
+            ffmpeg_path = get_ffmpeg_path()
+            logger.info(f"      Using FFmpeg: {ffmpeg_path}")
+
             # Build FFmpeg command
             cmd = [
-                'ffmpeg',
+                ffmpeg_path,
                 '-i', source_path,
                 '-c:v', 'libx264',
                 '-c:a', 'aac',
@@ -698,8 +703,12 @@ class EditorBatchWorker(QThread):
                 "volume=1.5"  # 50% boost
             )
 
+            # Get FFmpeg path (handles bundled exe mode)
+            ffmpeg_path = get_ffmpeg_path()
+            logger.info(f"      Using FFmpeg: {ffmpeg_path}")
+
             cmd = [
-                'ffmpeg',
+                ffmpeg_path,
                 '-i', source_path,
                 '-filter_complex', video_filter_complex,  # Mirror + Edge blur + Zoom
                 '-map', '[out]',  # Map output video

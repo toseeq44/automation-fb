@@ -372,12 +372,12 @@ class VideoEditor:
                 size=self.video.size if method == 'caption' else None
             )
 
-            # Set position and duration
-            txt_clip = txt_clip.set_position(position).set_duration(duration)
+            # Set position and duration - MoviePy 2.x
+            txt_clip = txt_clip.with_position(position).with_duration(duration)
 
             # Set start time if specified
             if start_time > 0:
-                txt_clip = txt_clip.set_start(start_time)
+                txt_clip = txt_clip.with_start(start_time)
 
             # Compose with video
             self.video = CompositeVideoClip([self.video, txt_clip])
@@ -426,9 +426,9 @@ class VideoEditor:
                 audio = concatenate_audioclips([audio] * repeats).subclipped(0, self.video.duration)
 
             if start_time > 0:
-                audio = audio.set_start(start_time)
+                audio = audio.with_start(start_time)
 
-            self.video = self.video.set_audio(audio)
+            self.video = self.video.with_audio(audio)
 
             self.project.add_to_history({
                 'operation': 'replace_audio',
@@ -469,7 +469,7 @@ class VideoEditor:
                 new_audio = new_audio.subclipped(0, self.video.duration)
 
             if start_time > 0:
-                new_audio = new_audio.set_start(start_time)
+                new_audio = new_audio.with_start(start_time)
 
             # Mix with existing audio
             if self.video.audio:
@@ -477,7 +477,7 @@ class VideoEditor:
             else:
                 mixed_audio = new_audio
 
-            self.video = self.video.set_audio(mixed_audio)
+            self.video = self.video.with_audio(mixed_audio)
 
             self.project.add_to_history({
                 'operation': 'mix_audio',
@@ -507,7 +507,7 @@ class VideoEditor:
 
         # MoviePy 2.x: Use with_effects() for audio effects
         adjusted_audio = self.video.audio.with_effects([afx.MultiplyVolume(volume)])
-        self.video = self.video.set_audio(adjusted_audio)
+        self.video = self.video.with_audio(adjusted_audio)
 
         self.project.add_to_history({
             'operation': 'adjust_volume',
@@ -551,16 +551,16 @@ class VideoEditor:
             raise FileNotFoundError(f"Watermark image not found: {image_path}")
 
         try:
-            # Load watermark
-            watermark = ImageClip(image_path).set_duration(self.video.duration)
+            # Load watermark - MoviePy 2.x
+            watermark = ImageClip(image_path).with_duration(self.video.duration)
 
             # Resize if specified
             if size:
-                watermark = watermark.resize(newsize=size)
+                watermark = watermark.resized(newsize=size)
 
-            # Set opacity
+            # Set opacity - MoviePy 2.x
             if opacity < 1.0:
-                watermark = watermark.set_opacity(opacity)
+                watermark = watermark.with_opacity(opacity)
 
             # Calculate position with margin
             w, h = self.video.size
@@ -587,7 +587,8 @@ class VideoEditor:
             else:
                 y = int(y_pos)
 
-            watermark = watermark.set_position((x, y))
+            # Position watermark - MoviePy 2.x
+            watermark = watermark.with_position((x, y))
 
             # Compose with video
             self.video = CompositeVideoClip([self.video, watermark])
@@ -619,7 +620,7 @@ class VideoEditor:
 
         # Fade in audio too if present
         if self.video.audio:
-            self.video = self.video.set_audio(self.video.audio.with_effects([afx.AudioFadeIn(duration)]))
+            self.video = self.video.with_audio(self.video.audio.with_effects([afx.AudioFadeIn(duration)]))
 
         self.project.add_to_history({
             'operation': 'fade_in',
@@ -638,7 +639,7 @@ class VideoEditor:
 
         # Fade out audio too if present
         if self.video.audio:
-            self.video = self.video.set_audio(self.video.audio.with_effects([afx.AudioFadeOut(duration)]))
+            self.video = self.video.with_audio(self.video.audio.with_effects([afx.AudioFadeOut(duration)]))
 
         self.project.add_to_history({
             'operation': 'fade_out',
@@ -823,26 +824,27 @@ class VideoEditor:
                 divider = ImageClip(divider_img, duration=primary_duration)
 
             # ========== POSITION VIDEOS SIDE-BY-SIDE ==========
+            # MoviePy 2.x: Use with_position() instead of set_position()
 
             if primary_position == 'left':
                 # Primary on left, secondary on right
-                primary = primary.set_position((0, 0))
+                primary = primary.with_position((0, 0))
 
                 if divider_width > 0:
-                    divider = divider.set_position((primary_width, 0))
-                    secondary = secondary.set_position((primary_width + divider_width, 0))
+                    divider = divider.with_position((primary_width, 0))
+                    secondary = secondary.with_position((primary_width + divider_width, 0))
                 else:
-                    secondary = secondary.set_position((primary_width, 0))
+                    secondary = secondary.with_position((primary_width, 0))
 
             else:  # primary_position == 'right'
                 # Secondary on left, primary on right
-                secondary = secondary.set_position((0, 0))
+                secondary = secondary.with_position((0, 0))
 
                 if divider_width > 0:
-                    divider = divider.set_position((secondary_width, 0))
-                    primary = primary.set_position((secondary_width + divider_width, 0))
+                    divider = divider.with_position((secondary_width, 0))
+                    primary = primary.with_position((secondary_width + divider_width, 0))
                 else:
-                    primary = primary.set_position((secondary_width, 0))
+                    primary = primary.with_position((secondary_width, 0))
 
             # ========== AUDIO HANDLING ==========
 

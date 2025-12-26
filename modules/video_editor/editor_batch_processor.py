@@ -197,13 +197,32 @@ class EditorBatchWorker(QThread):
             if is_dual_video and secondary_path and result.status == ProcessingStatus.SUCCESS:
                 if self.settings and self.settings.delete_source_after_edit:
                     logger.info(f"      Deleting secondary video: {secondary_path}")
+
+                    # Wait and force GC for file handle release
+                    import time
+                    import gc
+                    gc.collect()
+                    time.sleep(0.5)
+
                     try:
-                        os.remove(secondary_path)
-                        logger.info(f"      ✅ Secondary video deleted successfully")
-                        self.log_message.emit(f"🗑️  Deleted secondary: {secondary_path}", "info")
+                        # Try with retry logic
+                        max_retries = 3
+                        for attempt in range(max_retries):
+                            try:
+                                if os.path.exists(secondary_path):
+                                    os.remove(secondary_path)
+                                    logger.info(f"      ✅ Secondary video deleted successfully")
+                                    self.log_message.emit(f"🗑️  Deleted secondary: {os.path.basename(secondary_path)}", "info")
+                                    break
+                            except PermissionError:
+                                if attempt < max_retries - 1:
+                                    logger.warning(f"      Retry {attempt + 1}/{max_retries}: Secondary file locked, waiting...")
+                                    time.sleep(1.0)
+                                else:
+                                    raise
                     except Exception as e:
-                        logger.warning(f"      ⚠️  Failed to delete secondary video: {e}")
-                        self.log_message.emit(f"⚠️  Failed to delete secondary: {secondary_path}\n   → {e}", "warning")
+                        logger.warning(f"      ⚠️  Failed to delete secondary video after {max_retries} attempts: {e}")
+                        self.log_message.emit(f"⚠️  Could not delete secondary (file in use): {os.path.basename(secondary_path)}", "warning")
 
             self.results.append(result)
 
@@ -315,17 +334,38 @@ class EditorBatchWorker(QThread):
 
                 if self.settings and self.settings.delete_source_after_edit and not is_inplace:
                     logger.info(f"   ✅ CONDITIONS MET - Attempting to delete source file...")
+
+                    # Important: Wait a moment for OS to release file handles
+                    # MoviePy may still have clips open
+                    import time
+                    import gc
+
+                    # Force garbage collection to release file handles
+                    gc.collect()
+                    time.sleep(0.5)  # Wait 500ms for OS to release locks
+
                     try:
                         if os.path.exists(source_path):
-                            os.remove(source_path)
-                            result.source_deleted = True
-                            self.log_message.emit(f"🗑️  Deleted primary: {os.path.basename(source_path)}", "info")
-                            logger.info(f"   ✅ Primary video deleted successfully: {source_path}")
+                            # Try deletion with retry logic for locked files
+                            max_retries = 3
+                            for attempt in range(max_retries):
+                                try:
+                                    os.remove(source_path)
+                                    result.source_deleted = True
+                                    self.log_message.emit(f"🗑️  Deleted primary: {os.path.basename(source_path)}", "info")
+                                    logger.info(f"   ✅ Primary video deleted successfully: {source_path}")
+                                    break
+                                except PermissionError as pe:
+                                    if attempt < max_retries - 1:
+                                        logger.warning(f"   Retry {attempt + 1}/{max_retries}: File locked, waiting...")
+                                        time.sleep(1.0)  # Wait 1 second before retry
+                                    else:
+                                        raise pe  # Final attempt failed, raise error
                         else:
                             logger.warning(f"   ⚠️  Source file already gone: {source_path}")
                     except Exception as e:
-                        logger.error(f"   ❌ Failed to delete source: {e}", exc_info=True)
-                        self.log_message.emit(f"⚠️  Failed to delete: {source_path}\n   → {e}", "warning")
+                        logger.error(f"   ❌ Failed to delete source after {max_retries} attempts: {e}", exc_info=True)
+                        self.log_message.emit(f"⚠️  Could not delete (file in use): {os.path.basename(source_path)}", "warning")
                 elif is_inplace:
                     logger.info(f"   In-place editing - source already replaced, no separate deletion needed")
                     # Mark as deleted for statistics since the original was replaced

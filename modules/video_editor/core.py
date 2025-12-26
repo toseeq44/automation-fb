@@ -803,33 +803,10 @@ class VideoEditor:
                 secondary = secondary.resized(height=target_height)
                 video_height = target_height
 
-            # ========== CREATE DIVIDER LINE ==========
-
-            if divider_width > 0:
-                # Create a seamless gradient divider using ImageClip
-                import numpy as np
-
-                # Create gradient instead of solid line for seamless blend
-                # Use soft gradient from dark to light to dark for natural blend
-                divider_img = np.zeros((video_height, divider_width, 3), dtype=np.uint8)
-
-                # For very thin dividers (1-2px), use semi-transparent dark
-                if divider_width <= 2:
-                    # Single dark line with slight gradient
-                    for x in range(divider_width):
-                        alpha = 0.3  # Subtle, not solid black
-                        divider_img[:, x] = int(20 * alpha)  # Very dark gray
-                else:
-                    # Wider dividers: create smooth gradient
-                    for x in range(divider_width):
-                        # Gradient from edges (darker) to center (lighter)
-                        progress = abs(x - divider_width/2) / (divider_width/2)
-                        # Smooth curve for natural falloff
-                        intensity = int(15 + (25 * (1 - progress)))  # 15-40 range (very subtle)
-                        divider_img[:, x] = intensity
-
-                divider = ImageClip(divider_img, duration=primary_duration)
-                logger.info(f"   Created seamless gradient divider ({divider_width}px)")
+            # ========== CREATE SEAMLESS BLEND ==========
+            # Instead of visible divider, we'll overlap videos slightly
+            # This is handled in the composite section below
+            # No separate divider clip needed for seamless look
 
             # ========== POSITION VIDEOS SIDE-BY-SIDE ==========
             # MoviePy 2.x: Use with_position() instead of set_position()
@@ -872,12 +849,35 @@ class VideoEditor:
 
             # ========== COMPOSITE FINAL VIDEO ==========
 
+            # For seamless blend, don't use divider - instead overlap videos slightly
+            # This creates a natural blend without visible line
             if divider_width > 0:
-                clips = [secondary, divider, primary] if primary_position == 'right' else [primary, divider, secondary]
+                # Overlap by divider_width instead of creating a separator
+                # This makes videos blend seamlessly
+                if primary_position == 'left':
+                    primary = primary.with_position((0, 0))
+                    secondary = secondary.with_position((primary_width - divider_width, 0))
+                else:  # primary on right
+                    secondary = secondary.with_position((0, 0))
+                    primary = primary.with_position((secondary_width - divider_width, 0))
+
+                # Total width is reduced by overlap
+                final_width = primary_width + secondary_width - divider_width
+                clips = [secondary, primary] if primary_position == 'right' else [primary, secondary]
+                logger.info(f"   Videos overlapped by {divider_width}px for seamless blend")
             else:
+                # No overlap - direct side-by-side
+                if primary_position == 'left':
+                    primary = primary.with_position((0, 0))
+                    secondary = secondary.with_position((primary_width, 0))
+                else:
+                    secondary = secondary.with_position((0, 0))
+                    primary = primary.with_position((secondary_width, 0))
+
+                final_width = primary_width + secondary_width
                 clips = [secondary, primary] if primary_position == 'right' else [primary, secondary]
 
-            self.video = CompositeVideoClip(clips, size=(total_width, video_height))
+            self.video = CompositeVideoClip(clips, size=(final_width, video_height))
 
             # Add to project history
             self.project.add_to_history({

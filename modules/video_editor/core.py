@@ -836,17 +836,19 @@ class VideoEditor:
 
             # ========== AUDIO HANDLING ==========
 
-            # Remove audio from secondary by default
-            secondary = secondary.without_audio()
-
             if audio_source == 'secondary':
                 # Use secondary audio only
                 primary = primary.without_audio()
-                secondary = VideoFileClip(secondary_video_path).subclip(0, primary_duration)
+                # Keep secondary's audio (already trimmed to match primary duration)
+                # Don't remove it
             elif audio_source == 'both':
                 # Mix both audios (not removing any)
-                pass  # Both keep their audio
-            # else: audio_source == 'primary' (default, already set)
+                # Both keep their audio
+                pass
+            else:
+                # Default: audio_source == 'primary'
+                # Remove audio from secondary
+                secondary = secondary.without_audio()
 
             # ========== COMPOSITE FINAL VIDEO ==========
 

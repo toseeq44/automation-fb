@@ -827,7 +827,7 @@ class EditorBatchWorker(QThread):
             return False
 
     def _load_preset(self, preset_name: str):
-        """Load preset by name"""
+        """Load preset by name - searches all folders (system, user, imported)"""
         try:
             logger.info(f"      _load_preset() called for: {preset_name}")
             from modules.video_editor.preset_manager import PresetManager
@@ -835,8 +835,29 @@ class EditorBatchWorker(QThread):
             preset_manager = PresetManager()
             logger.info(f"      PresetManager created")
 
-            preset = preset_manager.load_preset(preset_name)
+            # Try loading from all folders (system, user, imported)
+            preset = None
+
+            # Try system folder first (most common for built-in presets)
+            logger.info(f"      Trying to load from system folder...")
+            preset = preset_manager.load_preset_from_folder(preset_name, PresetManager.FOLDER_SYSTEM)
+
+            if not preset:
+                # Try user folder
+                logger.info(f"      Not in system folder, trying user folder...")
+                preset = preset_manager.load_preset_from_folder(preset_name, PresetManager.FOLDER_USER)
+
+            if not preset:
+                # Try imported folder
+                logger.info(f"      Not in user folder, trying imported folder...")
+                preset = preset_manager.load_preset_from_folder(preset_name, PresetManager.FOLDER_IMPORTED)
+
             logger.info(f"      Preset loaded: {preset is not None}")
+            if preset:
+                logger.info(f"      ✅ Preset '{preset_name}' loaded successfully")
+            else:
+                logger.warning(f"      ❌ Preset '{preset_name}' not found in any folder")
+
             return preset
         except Exception as e:
             logger.error(f"      ❌ Error loading preset {preset_name}: {e}", exc_info=True)

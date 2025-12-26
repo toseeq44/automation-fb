@@ -150,20 +150,49 @@ class EditorBatchWorker(QThread):
 
             source_path = video_info['source']
             dest_path = video_info['destination']
+            is_dual_video = video_info.get('is_dual_video', False)
+            secondary_path = video_info.get('secondary', None)
 
             logger.info(f"      Source path: {source_path}")
             logger.info(f"      Dest path: {dest_path}")
+            if is_dual_video:
+                logger.info(f"      Secondary path: {secondary_path}")
+                logger.info(f"      Dual video mode: ENABLED")
 
             # Emit progress
             self.progress.emit(idx + 1, total)
             self.video_started.emit(source_path, idx + 1, total)
             # Show full path for better tracking
-            self.log_message.emit(f"Processing [{idx + 1}/{total}]: {source_path}", "info")
+            if is_dual_video:
+                self.log_message.emit(f"Processing [{idx + 1}/{total}] DUAL VIDEO: {source_path} + {os.path.basename(secondary_path)}", "info")
+            else:
+                self.log_message.emit(f"Processing [{idx + 1}/{total}]: {source_path}", "info")
+
+            # Update preset with secondary video path if dual video mode
+            if is_dual_video and secondary_path and preset:
+                logger.info(f"      Updating preset with secondary video path")
+                for operation in preset.operations:
+                    if operation['operation'] == 'dual_video_merge':
+                        operation['params']['secondary_video_path'] = secondary_path
+                        logger.info(f"      ✅ Secondary video path updated in preset")
+                        break
 
             # Process video
             start_time = time.time()
             result = self._process_single_video(source_path, dest_path, preset)
             result.processing_time = time.time() - start_time
+
+            # Delete secondary video if dual video mode and processing succeeded
+            if is_dual_video and secondary_path and result.status == ProcessingStatus.SUCCESS:
+                if self.settings and self.settings.delete_source_after_edit:
+                    logger.info(f"      Deleting secondary video: {secondary_path}")
+                    try:
+                        os.remove(secondary_path)
+                        logger.info(f"      ✅ Secondary video deleted successfully")
+                        self.log_message.emit(f"🗑️  Deleted secondary: {secondary_path}", "info")
+                    except Exception as e:
+                        logger.warning(f"      ⚠️  Failed to delete secondary video: {e}")
+                        self.log_message.emit(f"⚠️  Failed to delete secondary: {secondary_path}\n   → {e}", "warning")
 
             self.results.append(result)
 

@@ -369,6 +369,56 @@ class PresetManager:
             logger.error(f"Failed to load preset from '{filepath}': {e}")
             return None
 
+    def load_preset_from_folder(self, name: str, folder: str) -> Optional[EditingPreset]:
+        """
+        Load preset from specific folder
+
+        Args:
+            name: Preset name
+            folder: Folder name (system/user/imported)
+
+        Returns:
+            EditingPreset or None if not found
+        """
+        # Check cache first with folder-specific key
+        cache_key = f"{folder}/{name}"
+        if cache_key in self.presets_cache:
+            logger.info(f"Loaded preset from cache: {cache_key}")
+            return self.presets_cache[cache_key]
+
+        # Get folder path
+        if folder not in self.folders:
+            logger.warning(f"Unknown folder: {folder}")
+            return None
+
+        folder_path = self.folders[folder]
+
+        # Find preset file
+        safe_name = "".join(c for c in name if c.isalnum() or c in (' ', '-', '_')).rstrip()
+        filename = f"{safe_name}.preset.json"
+        filepath = os.path.join(folder_path, filename)
+
+        if not os.path.exists(filepath):
+            logger.warning(f"Preset not found: {name} in folder {folder}")
+            return None
+
+        # Load from file
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            preset = EditingPreset.from_dict(data)
+
+            # Cache it with folder-specific key
+            self.presets_cache[cache_key] = preset
+
+            logger.info(f"Preset loaded: {filepath}")
+            return preset
+
+        except Exception as e:
+            logger.error(f"Failed to load preset '{name}' from folder '{folder}': {e}")
+            return None
+
     def list_presets(self, folder: str = None) -> List[Dict[str, Any]]:
         """
         List available presets

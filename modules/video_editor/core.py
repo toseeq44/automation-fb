@@ -217,7 +217,8 @@ class VideoEditor:
         if x1 < 0 or y1 < 0 or x2 > w or y2 > h or x1 >= x2 or y1 >= y2:
             raise ValueError(f"Invalid crop coordinates: ({x1},{y1}) to ({x2},{y2})")
 
-        self.video = self.video.fx(vfx.crop, x1=x1, y1=y1, x2=x2, y2=y2)
+        # MoviePy 2.x: Use cropped() instead of fx(vfx.crop)
+        self.video = self.video.cropped(x1=x1, y1=y1, x2=x2, y2=y2)
         self.project.add_to_history({
             'operation': 'crop',
             'params': {'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2, 'preset': preset}
@@ -235,7 +236,8 @@ class VideoEditor:
         if not self.video:
             raise ValueError("No video loaded")
 
-        self.video = self.video.fx(vfx.rotate, angle)
+        # MoviePy 2.x: Use rotated() instead of fx(vfx.rotate)
+        self.video = self.video.rotated(angle)
         self.project.add_to_history({
             'operation': 'rotate',
             'params': {'angle': angle}
@@ -248,7 +250,8 @@ class VideoEditor:
         if not self.video:
             raise ValueError("No video loaded")
 
-        self.video = self.video.fx(vfx.mirror_x)
+        # MoviePy 2.x: Use mirrored_x() instead of fx(vfx.mirror_x)
+        self.video = self.video.mirrored_x()
         self.project.add_to_history({
             'operation': 'flip_horizontal',
             'params': {}
@@ -261,7 +264,8 @@ class VideoEditor:
         if not self.video:
             raise ValueError("No video loaded")
 
-        self.video = self.video.fx(vfx.mirror_y)
+        # MoviePy 2.x: Use mirrored_y() instead of fx(vfx.mirror_y)
+        self.video = self.video.mirrored_y()
         self.project.add_to_history({
             'operation': 'flip_vertical',
             'params': {}
@@ -281,18 +285,19 @@ class VideoEditor:
         if not self.video:
             raise ValueError("No video loaded")
 
+        # MoviePy 2.x: Use resized() instead of fx(vfx.resize)
         if scale:
-            self.video = self.video.fx(vfx.resize, scale)
+            self.video = self.video.resized(scale)
             logger.info(f"Video resized by scale: {scale}")
         elif width or height:
             if width and height:
-                self.video = self.video.fx(vfx.resize, newsize=(width, height))
+                self.video = self.video.resized(newsize=(width, height))
                 logger.info(f"Video resized: {width}x{height}")
             elif width:
-                self.video = self.video.fx(vfx.resize, width=width)
+                self.video = self.video.resized(width=width)
                 logger.info(f"Video resized: width={width}")
             elif height:
-                self.video = self.video.fx(vfx.resize, height=height)
+                self.video = self.video.resized(height=height)
                 logger.info(f"Video resized: height={height}")
         else:
             raise ValueError("Must specify width, height, or scale")
@@ -455,8 +460,9 @@ class VideoEditor:
         try:
             new_audio = AudioFileClip(audio_path)
 
-            # Adjust volume
-            new_audio = new_audio.fx(afx.volumex, volume)
+            # Adjust volume - MoviePy 2.x: Use with_effects() or audio_normalize()
+            # Simple volume multiplication doesn't need effects framework
+            new_audio = new_audio.with_effects([afx.MultiplyVolume(volume)])
 
             # Match duration
             if new_audio.duration > self.video.duration:
@@ -499,7 +505,8 @@ class VideoEditor:
             logger.warning("Video has no audio to adjust")
             return self
 
-        adjusted_audio = self.video.audio.fx(afx.volumex, volume)
+        # MoviePy 2.x: Use with_effects() for audio effects
+        adjusted_audio = self.video.audio.with_effects([afx.MultiplyVolume(volume)])
         self.video = self.video.set_audio(adjusted_audio)
 
         self.project.add_to_history({
@@ -607,11 +614,12 @@ class VideoEditor:
         if not self.video:
             raise ValueError("No video loaded")
 
-        self.video = self.video.fx(vfx.fadein, duration)
+        # MoviePy 2.x: Use with_effects() for fade effects
+        self.video = self.video.with_effects([vfx.FadeIn(duration)])
 
         # Fade in audio too if present
         if self.video.audio:
-            self.video = self.video.set_audio(self.video.audio.fx(afx.audio_fadein, duration))
+            self.video = self.video.set_audio(self.video.audio.with_effects([afx.AudioFadeIn(duration)]))
 
         self.project.add_to_history({
             'operation': 'fade_in',
@@ -625,11 +633,12 @@ class VideoEditor:
         if not self.video:
             raise ValueError("No video loaded")
 
-        self.video = self.video.fx(vfx.fadeout, duration)
+        # MoviePy 2.x: Use with_effects() for fade effects
+        self.video = self.video.with_effects([vfx.FadeOut(duration)])
 
         # Fade out audio too if present
         if self.video.audio:
-            self.video = self.video.set_audio(self.video.audio.fx(afx.audio_fadeout, duration))
+            self.video = self.video.set_audio(self.video.audio.with_effects([afx.AudioFadeOut(duration)]))
 
         self.project.add_to_history({
             'operation': 'fade_out',
@@ -745,25 +754,25 @@ class VideoEditor:
             if zoom_factor != 1.0:
                 logger.info(f"   Applying {zoom_factor:.0%} zoom to both videos")
 
-                # Zoom and center crop to maintain original size
-                primary = primary.fx(vfx.resize, zoom_factor)
-                secondary = secondary.fx(vfx.resize, zoom_factor)
+                # Zoom and center crop to maintain original size - MoviePy 2.x
+                primary = primary.resized(zoom_factor)
+                secondary = secondary.resized(zoom_factor)
 
                 # Get original size for crop
                 target_w, target_h = self.video.size
 
-                # Center crop back to original size
+                # Center crop back to original size - MoviePy 2.x: use cropped()
                 primary_w, primary_h = primary.size
                 crop_x = (primary_w - target_w) // 2
                 crop_y = (primary_h - target_h) // 2
-                primary = primary.crop(x1=crop_x, y1=crop_y,
-                                      x2=crop_x + target_w, y2=crop_y + target_h)
+                primary = primary.cropped(x1=crop_x, y1=crop_y,
+                                         x2=crop_x + target_w, y2=crop_y + target_h)
 
                 secondary_w, secondary_h = secondary.size
                 crop_x = (secondary_w - target_w) // 2
                 crop_y = (secondary_h - target_h) // 2
-                secondary = secondary.crop(x1=crop_x, y1=crop_y,
-                                          x2=crop_x + target_w, y2=crop_y + target_h)
+                secondary = secondary.cropped(x1=crop_x, y1=crop_y,
+                                             x2=crop_x + target_w, y2=crop_y + target_h)
 
             # ========== CALCULATE DIMENSIONS ==========
 
@@ -781,15 +790,16 @@ class VideoEditor:
             logger.info(f"   Primary: {primary_width}px, Secondary: {secondary_width}px, Divider: {divider_width}px")
 
             # ========== RESIZE VIDEOS TO FIT SPLIT ==========
+            # MoviePy 2.x: Use resized() instead of fx(vfx.resize)
 
-            primary = primary.fx(vfx.resize, width=primary_width)
-            secondary = secondary.fx(vfx.resize, width=secondary_width)
+            primary = primary.resized(width=primary_width)
+            secondary = secondary.resized(width=secondary_width)
 
             # Ensure both have same height
             if primary.size[1] != secondary.size[1]:
                 target_height = min(primary.size[1], secondary.size[1])
-                primary = primary.fx(vfx.resize, height=target_height)
-                secondary = secondary.fx(vfx.resize, height=target_height)
+                primary = primary.resized(height=target_height)
+                secondary = secondary.resized(height=target_height)
                 video_height = target_height
 
             # ========== CREATE DIVIDER LINE ==========

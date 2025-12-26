@@ -170,12 +170,23 @@ class EditorBatchWorker(QThread):
 
             # Update preset with secondary video path if dual video mode
             if is_dual_video and secondary_path and preset:
-                logger.info(f"      Updating preset with secondary video path")
+                logger.info(f"      🎬 Dual Video Mode - Updating secondary video path")
+                logger.info(f"      Secondary video: {secondary_path}")
+                updated = False
                 for operation in preset.operations:
                     if operation['operation'] == 'dual_video_merge':
+                        logger.info(f"      Before update: {operation['params'].get('secondary_video_path')}")
                         operation['params']['secondary_video_path'] = secondary_path
+                        logger.info(f"      After update: {operation['params'].get('secondary_video_path')}")
                         logger.info(f"      ✅ Secondary video path updated in preset")
+                        updated = True
                         break
+                if not updated:
+                    logger.warning(f"      ⚠️  No dual_video_merge operation found in preset!")
+            elif is_dual_video and not secondary_path:
+                logger.warning(f"      ⚠️  Dual video mode but no secondary path provided!")
+            elif is_dual_video and not preset:
+                logger.warning(f"      ⚠️  Dual video mode but no preset loaded!")
 
             # Process video
             start_time = time.time()

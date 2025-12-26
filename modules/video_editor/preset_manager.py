@@ -567,6 +567,9 @@ class PresetManager:
                 if progress_callback:
                     progress_callback(f"Applying {op_name}... ({i+1}/{len(preset.operations)})")
 
+                logger.info(f"   Applying operation: {op_name}")
+                logger.info(f"   Operation params: {params}")
+
                 # Fix parameter names for specific operations
                 if op_name == 'crop':
                     # VideoEditor.crop() only accepts: x1, y1, x2, y2, preset
@@ -578,11 +581,22 @@ class PresetManager:
                     params.pop('height', None)
 
                 # Execute operation
-                if hasattr(editor, op_name):
-                    method = getattr(editor, op_name)
-                    method(**params)
-                else:
-                    logger.warning(f"Unknown operation: {op_name}")
+                try:
+                    if hasattr(editor, op_name):
+                        method = getattr(editor, op_name)
+                        logger.info(f"   Calling {op_name} with params...")
+                        method(**params)
+                        logger.info(f"   ✅ {op_name} completed successfully")
+                    else:
+                        logger.warning(f"Unknown operation: {op_name}")
+                        if progress_callback:
+                            progress_callback(f"⚠️  Unknown operation: {op_name}")
+                except Exception as op_error:
+                    logger.error(f"   ❌ Operation '{op_name}' failed: {op_error}", exc_info=True)
+                    if progress_callback:
+                        progress_callback(f"❌ Operation '{op_name}' failed: {op_error}")
+                    # Re-raise to trigger fallback
+                    raise
 
             # Export
             if progress_callback:

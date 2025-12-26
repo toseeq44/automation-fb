@@ -305,15 +305,26 @@ class EditorBatchWorker(QThread):
                 # In-place editing means source == destination, so no separate source to delete
                 is_inplace = os.path.normpath(source_path) == os.path.normpath(dest_path)
 
+                logger.info(f"   === DELETION CHECK ===")
+                logger.info(f"   Source: {source_path}")
+                logger.info(f"   Destination: {dest_path}")
+                logger.info(f"   In-place editing: {is_inplace}")
+                logger.info(f"   Settings exists: {self.settings is not None}")
+                if self.settings:
+                    logger.info(f"   Delete setting enabled: {self.settings.delete_source_after_edit}")
+
                 if self.settings and self.settings.delete_source_after_edit and not is_inplace:
-                    logger.info(f"   Deleting source file (not in-place editing)...")
+                    logger.info(f"   ✅ CONDITIONS MET - Attempting to delete source file...")
                     try:
-                        os.remove(source_path)
-                        result.source_deleted = True
-                        self.log_message.emit(f"🗑️  Deleted original: {source_path}", "info")
-                        logger.info(f"   ✅ Source deleted successfully")
+                        if os.path.exists(source_path):
+                            os.remove(source_path)
+                            result.source_deleted = True
+                            self.log_message.emit(f"🗑️  Deleted primary: {os.path.basename(source_path)}", "info")
+                            logger.info(f"   ✅ Primary video deleted successfully: {source_path}")
+                        else:
+                            logger.warning(f"   ⚠️  Source file already gone: {source_path}")
                     except Exception as e:
-                        logger.warning(f"   ⚠️  Failed to delete source: {e}")
+                        logger.error(f"   ❌ Failed to delete source: {e}", exc_info=True)
                         self.log_message.emit(f"⚠️  Failed to delete: {source_path}\n   → {e}", "warning")
                 elif is_inplace:
                     logger.info(f"   In-place editing - source already replaced, no separate deletion needed")

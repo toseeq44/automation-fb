@@ -806,22 +806,30 @@ class VideoEditor:
             # ========== CREATE DIVIDER LINE ==========
 
             if divider_width > 0:
-                # Create a simple colored divider using ImageClip
+                # Create a seamless gradient divider using ImageClip
                 import numpy as np
 
-                # Map color names to RGB
-                color_map = {
-                    'black': (0, 0, 0),
-                    'white': (255, 255, 255),
-                    'gray': (128, 128, 128),
-                    'grey': (128, 128, 128)
-                }
+                # Create gradient instead of solid line for seamless blend
+                # Use soft gradient from dark to light to dark for natural blend
+                divider_img = np.zeros((video_height, divider_width, 3), dtype=np.uint8)
 
-                color_rgb = color_map.get(divider_color.lower(), (0, 0, 0))
+                # For very thin dividers (1-2px), use semi-transparent dark
+                if divider_width <= 2:
+                    # Single dark line with slight gradient
+                    for x in range(divider_width):
+                        alpha = 0.3  # Subtle, not solid black
+                        divider_img[:, x] = int(20 * alpha)  # Very dark gray
+                else:
+                    # Wider dividers: create smooth gradient
+                    for x in range(divider_width):
+                        # Gradient from edges (darker) to center (lighter)
+                        progress = abs(x - divider_width/2) / (divider_width/2)
+                        # Smooth curve for natural falloff
+                        intensity = int(15 + (25 * (1 - progress)))  # 15-40 range (very subtle)
+                        divider_img[:, x] = intensity
 
-                # Create divider image
-                divider_img = np.full((video_height, divider_width, 3), color_rgb, dtype=np.uint8)
                 divider = ImageClip(divider_img, duration=primary_duration)
+                logger.info(f"   Created seamless gradient divider ({divider_width}px)")
 
             # ========== POSITION VIDEOS SIDE-BY-SIDE ==========
             # MoviePy 2.x: Use with_position() instead of set_position()

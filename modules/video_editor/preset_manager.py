@@ -210,17 +210,26 @@ class PresetManager:
         """Initialize built-in system presets if they don't exist"""
         system_folder = self.folders[self.FOLDER_SYSTEM]
 
-        # Check if system presets already exist
-        existing_presets = [f for f in os.listdir(system_folder) if f.endswith('.preset.json')]
+        # Get existing preset files
+        existing_files = [f for f in os.listdir(system_folder) if f.endswith('.preset.json')]
+        existing_names = set()
+        for filename in existing_files:
+            # Extract preset name from filename (remove .preset.json extension)
+            name = filename.replace('.preset.json', '')
+            existing_names.add(name)
 
-        if len(existing_presets) == 0:
-            # Create default system presets
-            from modules.video_editor.preset_manager import PresetTemplates
+        # Get all template presets
+        from modules.video_editor.preset_manager import PresetTemplates
+        templates = PresetTemplates.get_all_templates()
 
-            templates = PresetTemplates.get_all_templates()
-            for template in templates:
+        # Create missing presets
+        for template in templates:
+            safe_name = "".join(c for c in template.name if c.isalnum() or c in (' ', '-', '_')).rstrip()
+
+            if safe_name not in existing_names:
+                # Preset doesn't exist, create it
                 try:
-                    filepath = os.path.join(system_folder, f"{template.name}.preset.json")
+                    filepath = os.path.join(system_folder, f"{safe_name}.preset.json")
                     with open(filepath, 'w', encoding='utf-8') as f:
                         json.dump(template.to_dict(), f, indent=2, ensure_ascii=False)
                     logger.info(f"Created system preset: {template.name}")

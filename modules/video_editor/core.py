@@ -151,7 +151,7 @@ class VideoEditor:
         if start_time < 0 or end_time > self.video.duration or start_time >= end_time:
             raise ValueError(f"Invalid time range: {start_time}s - {end_time}s (Duration: {self.video.duration}s)")
 
-        self.video = self.video.subclip(start_time, end_time)
+        self.video = self.video.subclipped(start_time, end_time)
         self.project.add_to_history({
             'operation': 'trim',
             'params': {'start': start_time, 'end': end_time}
@@ -414,11 +414,11 @@ class VideoEditor:
 
             # Trim or loop audio to match video duration
             if audio.duration > self.video.duration:
-                audio = audio.subclip(0, self.video.duration)
+                audio = audio.subclipped(0, self.video.duration)
             elif audio.duration < self.video.duration:
                 # Loop audio if shorter
                 repeats = int(self.video.duration / audio.duration) + 1
-                audio = concatenate_audioclips([audio] * repeats).subclip(0, self.video.duration)
+                audio = concatenate_audioclips([audio] * repeats).subclipped(0, self.video.duration)
 
             if start_time > 0:
                 audio = audio.set_start(start_time)
@@ -460,7 +460,7 @@ class VideoEditor:
 
             # Match duration
             if new_audio.duration > self.video.duration:
-                new_audio = new_audio.subclip(0, self.video.duration)
+                new_audio = new_audio.subclipped(0, self.video.duration)
 
             if start_time > 0:
                 new_audio = new_audio.set_start(start_time)
@@ -728,13 +728,13 @@ class VideoEditor:
                 secondary_looped = concatenate_videoclips(looped_clips)
 
                 # Trim to exact primary duration
-                secondary = secondary_looped.subclip(0, primary_duration)
+                secondary = secondary_looped.subclipped(0, primary_duration)
                 logger.info(f"   Secondary trimmed to {primary_duration:.2f}s")
 
             elif secondary_duration > primary_duration:
                 # Secondary is longer - trim it
                 logger.info(f"   Secondary is longer - trimming to match primary")
-                secondary = secondary.subclip(0, primary_duration)
+                secondary = secondary.subclipped(0, primary_duration)
                 logger.info(f"   Secondary trimmed to {primary_duration:.2f}s")
 
             else:

@@ -18,6 +18,7 @@ import os
 from modules.logging.logger import get_logger
 from modules.video_editor.preset_manager import EditingPreset, PresetManager
 from modules.video_editor.preset_builder_dialog import PresetBuilderDialog
+from modules.video_editor.apply_preset_dialog import ApplyPresetDialog
 
 logger = get_logger(__name__)
 
@@ -445,15 +446,16 @@ class PresetManagerDialog(QDialog):
             QMessageBox.critical(self, "Error", "Failed to delete preset")
 
     def apply_preset(self):
-        """Apply selected preset (emit signal)"""
+        """Apply selected preset - Open single mode dialog"""
         if not self.current_preset_data:
             return
 
         preset_name = self.current_preset_data['name']
         folder = self.current_folder
 
-        self.preset_selected.emit(preset_name, folder)
-        self.accept()
+        # Open Apply Preset Dialog for single mode
+        dialog = ApplyPresetDialog(preset_name, folder, self)
+        dialog.exec_()
 
     def show_context_menu(self, position):
         """Show context menu for preset table"""

@@ -180,6 +180,29 @@ class BulkProcessingDialog(QDialog):
         self.dest_btn.clicked.connect(self.browse_destination)
         layout.addWidget(self.dest_btn, 2, 2)
 
+        # Secondary folder (for Dual Video preset only)
+        self.secondary_label = QLabel("Secondary Videos Folder (Dual Video):")
+        self.secondary_label.setVisible(False)
+        layout.addWidget(self.secondary_label, 3, 0)
+
+        self.secondary_input = QLineEdit()
+        self.secondary_input.setPlaceholderText("Select folder containing secondary videos...")
+        self.secondary_input.setVisible(False)
+        self.secondary_input.textChanged.connect(self.on_folder_changed)
+        layout.addWidget(self.secondary_input, 3, 1)
+
+        self.secondary_btn = QPushButton("Browse")
+        self.secondary_btn.setVisible(False)
+        self.secondary_btn.clicked.connect(self.browse_secondary)
+        layout.addWidget(self.secondary_btn, 3, 2)
+
+        # Info label for dual video
+        self.dual_video_info = QLabel("ℹ️ Dual Video mode: Videos will be paired by index (1st+1st, 2nd+2nd...)")
+        self.dual_video_info.setStyleSheet("color: #2196F3; font-size: 11px; font-style: italic; padding: 5px;")
+        self.dual_video_info.setWordWrap(True)
+        self.dual_video_info.setVisible(False)
+        layout.addWidget(self.dual_video_info, 4, 0, 1, 3)
+
         # Scan button
         scan_layout = QHBoxLayout()
         scan_layout.addStretch()
@@ -189,12 +212,12 @@ class BulkProcessingDialog(QDialog):
         self.scan_btn.clicked.connect(self.scan_folders)
         scan_layout.addWidget(self.scan_btn)
 
-        layout.addLayout(scan_layout, 3, 0, 1, 3)
+        layout.addLayout(scan_layout, 5, 0, 1, 3)
 
         # Scan results label
         self.scan_result_label = QLabel("")
         self.scan_result_label.setWordWrap(True)
-        layout.addWidget(self.scan_result_label, 4, 0, 1, 3)
+        layout.addWidget(self.scan_result_label, 6, 0, 1, 3)
 
         group.setLayout(layout)
         return group
@@ -291,6 +314,7 @@ class BulkProcessingDialog(QDialog):
         self.preset_combo = QComboBox()
         self.preset_combo.setEnabled(False)
         self.preset_combo.setMinimumWidth(300)
+        self.preset_combo.currentIndexChanged.connect(self.check_dual_video_preset)
         self.load_presets()
         preset_layout.addWidget(self.preset_combo)
 
@@ -519,6 +543,15 @@ class BulkProcessingDialog(QDialog):
         )
         if folder:
             self.dest_input.setText(folder)
+
+    def browse_secondary(self):
+        """Browse for secondary videos folder (Dual Video preset)"""
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select Secondary Videos Folder",
+            os.path.expanduser("~/Desktop")
+        )
+        if folder:
+            self.secondary_input.setText(folder)
 
     def on_same_folder_changed(self, state):
         """Handle same folder checkbox change"""
@@ -806,6 +839,22 @@ class BulkProcessingDialog(QDialog):
     def on_preset_toggle(self):
         """Handle preset radio toggle"""
         self.preset_combo.setEnabled(self.use_preset_radio.isChecked())
+        self.check_dual_video_preset()
+
+    def check_dual_video_preset(self):
+        """Check if Dual Video preset is selected and show/hide secondary folder"""
+        is_dual_video = False
+
+        if self.use_preset_radio.isChecked() and self.preset_combo.currentIndex() > 0:
+            preset_data = self.preset_combo.currentData()
+            if preset_data and preset_data.get('name') == 'Dual Video':
+                is_dual_video = True
+
+        # Show/hide secondary folder inputs
+        self.secondary_label.setVisible(is_dual_video)
+        self.secondary_input.setVisible(is_dual_video)
+        self.secondary_btn.setVisible(is_dual_video)
+        self.dual_video_info.setVisible(is_dual_video)
 
     def update_summary(self):
         """Update summary display"""
@@ -890,11 +939,67 @@ class BulkProcessingDialog(QDialog):
         else:
             self.current_mapping.preset_data = None
 
+        # Check if this is Dual Video preset
+        is_dual_video = selected_preset_data and selected_preset_data.get('name') == 'Dual Video'
+
         # Calculate videos to process (recursively)
         total_videos = 0
         video_list = []
 
-        if self.current_mapping.is_simple_mode:
+        # ========== DUAL VIDEO MODE ==========
+        if is_dual_video and self.secondary_input.text():
+            # Special handling for Dual Video preset
+            primary_folder = Path(self.current_mapping.source_folder)
+            secondary_folder = Path(self.secondary_input.text())
+
+            # Collect primary videos
+            primary_videos = []
+            for root, dirs, files in os.walk(primary_folder):
+                dirs[:] = [d for d in dirs if not d.startswith('.')]
+                for f in files:
+                    file_path = Path(root) / f
+                    if file_path.suffix.lower() in VIDEO_EXTENSIONS:
+                        primary_videos.append(str(file_path))
+
+            # Collect secondary videos
+            secondary_videos = []
+            for root, dirs, files in os.walk(secondary_folder):
+                dirs[:] = [d for d in dirs if not d.startswith('.')]
+                for f in files:
+                    file_path = Path(root) / f
+                    if file_path.suffix.lower() in VIDEO_EXTENSIONS:
+                        secondary_videos.append(str(file_path))
+
+            # Sort both lists for consistent pairing
+            primary_videos.sort()
+            secondary_videos.sort()
+
+            # Create output folder: "dual video final" in parent of destination
+            dest_parent = Path(self.current_mapping.destination_folder).parent
+            dual_output_folder = dest_parent / "dual video final"
+
+            # Pair videos by index (minimum count)
+            pair_count = min(len(primary_videos), len(secondary_videos))
+
+            for i in range(pair_count):
+                primary_path = Path(primary_videos[i])
+                secondary_path = secondary_videos[i]
+
+                # Use primary video's filename for output
+                output_filename = primary_path.name
+                output_path = dual_output_folder / output_filename
+
+                video_list.append({
+                    'source': str(primary_path),  # Primary video
+                    'secondary': secondary_path,  # Secondary video
+                    'destination': str(output_path),
+                    'is_dual_video': True
+                })
+
+            total_videos = len(video_list)
+
+        # ========== NORMAL MODE ==========
+        elif self.current_mapping.is_simple_mode:
             # Recursively find all videos in source folder
             source_base = Path(self.current_mapping.source_folder)
             dest_base = Path(self.current_mapping.destination_folder)
@@ -983,6 +1088,15 @@ class BulkProcessingDialog(QDialog):
         if reply == QMessageBox.Yes:
             # Create destination folders if needed
             self.mapping_manager.create_destination_folders(self.current_mapping)
+
+            # Create "dual video final" folder if using Dual Video preset
+            if config.get('settings') and config['settings'].preset_id == 'Dual Video':
+                if config['videos'] and config['videos'][0].get('is_dual_video'):
+                    # Get the dual video output folder from first video's destination
+                    first_dest = Path(config['videos'][0]['destination'])
+                    dual_output_folder = first_dest.parent
+                    os.makedirs(dual_output_folder, exist_ok=True)
+                    logger.info(f"Created dual video output folder: {dual_output_folder}")
 
             # Log before emitting signal
             logger.info(f"🚀 Emitting start_processing signal with {config['total_count']} videos")

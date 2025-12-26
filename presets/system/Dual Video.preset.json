@@ -1,0 +1,44 @@
+{
+  "schema_version": "2.0",
+  "name": "Dual Video",
+  "description": "Merge two videos side-by-side with intelligent length matching. Primary video (60%) with audio, secondary video (40%) muted. Both videos zoomed 110% with seamless divider.",
+  "created_at": "2025-12-26T19:39:09.785869",
+  "modified_at": "2025-12-26T19:39:09.785871",
+  "operations": [
+    {
+      "operation": "dual_video_merge",
+      "params": {
+        "secondary_video_path": "",
+        "primary_position": "right",
+        "zoom_factor": 1.1,
+        "primary_width_ratio": 0.6,
+        "divider_width": 2,
+        "divider_color": "black",
+        "audio_source": "primary"
+      }
+    }
+  ],
+  "thumbnail": null,
+  "tags": [
+    "dual",
+    "split-screen",
+    "merge",
+    "side-by-side"
+  ],
+  "author": "System",
+  "category": "Video",
+  "preset_version": "1.0",
+  "compatibility": [
+    "1.0"
+  ],
+  "export_settings": {
+    "quality": "high",
+    "format": "mp4",
+    "resolution": null,
+    "fps": null,
+    "codec_video": "libx264",
+    "codec_audio": "aac",
+    "bitrate_video": null,
+    "bitrate_audio": "192k"
+  }
+}

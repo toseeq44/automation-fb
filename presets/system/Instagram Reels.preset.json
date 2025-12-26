@@ -1,0 +1,65 @@
+{
+  "schema_version": "2.0",
+  "name": "Instagram Reels",
+  "description": "Optimized for Instagram Reels",
+  "created_at": "2025-12-26T19:39:09.785834",
+  "modified_at": "2025-12-26T19:39:09.785848",
+  "operations": [
+    {
+      "operation": "crop",
+      "params": {
+        "preset": "9:16"
+      }
+    },
+    {
+      "operation": "resize_video",
+      "params": {
+        "width": 1080,
+        "height": 1920
+      }
+    },
+    {
+      "operation": "apply_filter",
+      "params": {
+        "filter_name": "instagram_valencia"
+      }
+    },
+    {
+      "operation": "fade_in",
+      "params": {
+        "duration": 0.5
+      }
+    },
+    {
+      "operation": "fade_out",
+      "params": {
+        "duration": 0.5
+      }
+    }
+  ],
+  "thumbnail": null,
+  "tags": [
+    "instagram",
+    "reels",
+    "vertical"
+  ],
+  "author": "System",
+  "category": "Social Media",
+  "preset_version": "1.0",
+  "compatibility": [
+    "1.0"
+  ],
+  "export_settings": {
+    "quality": "high",
+    "format": "mp4",
+    "resolution": [
+      1080,
+      1920
+    ],
+    "fps": null,
+    "codec_video": "libx264",
+    "codec_audio": "aac",
+    "bitrate_video": null,
+    "bitrate_audio": "192k"
+  }
+}

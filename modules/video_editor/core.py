@@ -663,6 +663,222 @@ class VideoEditor:
         logger.info(f"Filter applied: {filter_name}")
         return self
 
+    # ==================== DUAL VIDEO MERGE ====================
+
+    def dual_video_merge(self, secondary_video_path: str,
+                        primary_position: str = 'right',
+                        zoom_factor: float = 1.1,
+                        primary_width_ratio: float = 0.6,
+                        divider_width: int = 2,
+                        divider_color: str = 'black',
+                        audio_source: str = 'primary'):
+        """
+        Merge two videos side-by-side with intelligent length matching
+
+        Features:
+        - 110% zoom on both videos (default)
+        - 60-40 split ratio (configurable)
+        - Intelligent length matching (loop/trim secondary to match primary)
+        - Seamless divider line
+        - Audio from primary only (default)
+
+        Args:
+            secondary_video_path: Path to secondary video file
+            primary_position: 'left' or 'right' - where to place primary video
+            zoom_factor: Zoom factor for both videos (1.1 = 110%)
+            primary_width_ratio: Width ratio for primary video (0.6 = 60%)
+            divider_width: Width of divider line in pixels
+            divider_color: Color of divider line
+            audio_source: 'primary', 'secondary', or 'both'
+        """
+        if not self.video:
+            raise ValueError("No video loaded")
+
+        if not os.path.exists(secondary_video_path):
+            raise ValueError(f"Secondary video not found: {secondary_video_path}")
+
+        try:
+            logger.info(f"🎬 Starting Dual Video Merge...")
+            logger.info(f"   Primary position: {primary_position}")
+            logger.info(f"   Zoom factor: {zoom_factor}")
+            logger.info(f"   Split ratio: {primary_width_ratio:.0%}/{(1-primary_width_ratio):.0%}")
+
+            # Load secondary video
+            secondary = VideoFileClip(secondary_video_path)
+            primary = self.video
+
+            primary_duration = primary.duration
+            secondary_duration = secondary.duration
+
+            logger.info(f"   Primary duration: {primary_duration:.2f}s")
+            logger.info(f"   Secondary duration: {secondary_duration:.2f}s")
+
+            # ========== INTELLIGENT LENGTH MATCHING ==========
+
+            if secondary_duration < primary_duration:
+                # Secondary is shorter - loop it to match primary
+                logger.info(f"   Secondary is shorter - looping to match primary")
+
+                # Calculate how many times to loop
+                num_loops = int(primary_duration / secondary_duration) + 1
+                logger.info(f"   Looping secondary {num_loops} times")
+
+                # Create looped secondary
+                looped_clips = [secondary] * num_loops
+                secondary_looped = concatenate_videoclips(looped_clips)
+
+                # Trim to exact primary duration
+                secondary = secondary_looped.subclip(0, primary_duration)
+                logger.info(f"   Secondary trimmed to {primary_duration:.2f}s")
+
+            elif secondary_duration > primary_duration:
+                # Secondary is longer - trim it
+                logger.info(f"   Secondary is longer - trimming to match primary")
+                secondary = secondary.subclip(0, primary_duration)
+                logger.info(f"   Secondary trimmed to {primary_duration:.2f}s")
+
+            else:
+                logger.info(f"   Both videos have same duration - no adjustment needed")
+
+            # ========== APPLY ZOOM TO BOTH VIDEOS ==========
+
+            if zoom_factor != 1.0:
+                logger.info(f"   Applying {zoom_factor:.0%} zoom to both videos")
+
+                # Zoom and center crop to maintain original size
+                primary = primary.fx(vfx.resize, zoom_factor)
+                secondary = secondary.fx(vfx.resize, zoom_factor)
+
+                # Get original size for crop
+                target_w, target_h = self.video.size
+
+                # Center crop back to original size
+                primary_w, primary_h = primary.size
+                crop_x = (primary_w - target_w) // 2
+                crop_y = (primary_h - target_h) // 2
+                primary = primary.crop(x1=crop_x, y1=crop_y,
+                                      x2=crop_x + target_w, y2=crop_y + target_h)
+
+                secondary_w, secondary_h = secondary.size
+                crop_x = (secondary_w - target_w) // 2
+                crop_y = (secondary_h - target_h) // 2
+                secondary = secondary.crop(x1=crop_x, y1=crop_y,
+                                          x2=crop_x + target_w, y2=crop_y + target_h)
+
+            # ========== CALCULATE DIMENSIONS ==========
+
+            # Get video dimensions
+            video_width, video_height = primary.size
+
+            # Calculate split widths
+            primary_width = int(video_width * primary_width_ratio)
+            secondary_width = int(video_width * (1 - primary_width_ratio))
+
+            # Total width includes divider
+            total_width = primary_width + secondary_width + divider_width
+
+            logger.info(f"   Output dimensions: {total_width}x{video_height}")
+            logger.info(f"   Primary: {primary_width}px, Secondary: {secondary_width}px, Divider: {divider_width}px")
+
+            # ========== RESIZE VIDEOS TO FIT SPLIT ==========
+
+            primary = primary.fx(vfx.resize, width=primary_width)
+            secondary = secondary.fx(vfx.resize, width=secondary_width)
+
+            # Ensure both have same height
+            if primary.size[1] != secondary.size[1]:
+                target_height = min(primary.size[1], secondary.size[1])
+                primary = primary.fx(vfx.resize, height=target_height)
+                secondary = secondary.fx(vfx.resize, height=target_height)
+                video_height = target_height
+
+            # ========== CREATE DIVIDER LINE ==========
+
+            if divider_width > 0:
+                # Create a simple colored divider using ImageClip
+                import numpy as np
+
+                # Map color names to RGB
+                color_map = {
+                    'black': (0, 0, 0),
+                    'white': (255, 255, 255),
+                    'gray': (128, 128, 128),
+                    'grey': (128, 128, 128)
+                }
+
+                color_rgb = color_map.get(divider_color.lower(), (0, 0, 0))
+
+                # Create divider image
+                divider_img = np.full((video_height, divider_width, 3), color_rgb, dtype=np.uint8)
+                divider = ImageClip(divider_img, duration=primary_duration)
+
+            # ========== POSITION VIDEOS SIDE-BY-SIDE ==========
+
+            if primary_position == 'left':
+                # Primary on left, secondary on right
+                primary = primary.set_position((0, 0))
+
+                if divider_width > 0:
+                    divider = divider.set_position((primary_width, 0))
+                    secondary = secondary.set_position((primary_width + divider_width, 0))
+                else:
+                    secondary = secondary.set_position((primary_width, 0))
+
+            else:  # primary_position == 'right'
+                # Secondary on left, primary on right
+                secondary = secondary.set_position((0, 0))
+
+                if divider_width > 0:
+                    divider = divider.set_position((secondary_width, 0))
+                    primary = primary.set_position((secondary_width + divider_width, 0))
+                else:
+                    primary = primary.set_position((secondary_width, 0))
+
+            # ========== AUDIO HANDLING ==========
+
+            # Remove audio from secondary by default
+            secondary = secondary.without_audio()
+
+            if audio_source == 'secondary':
+                # Use secondary audio only
+                primary = primary.without_audio()
+                secondary = VideoFileClip(secondary_video_path).subclip(0, primary_duration)
+            elif audio_source == 'both':
+                # Mix both audios (not removing any)
+                pass  # Both keep their audio
+            # else: audio_source == 'primary' (default, already set)
+
+            # ========== COMPOSITE FINAL VIDEO ==========
+
+            if divider_width > 0:
+                clips = [secondary, divider, primary] if primary_position == 'right' else [primary, divider, secondary]
+            else:
+                clips = [secondary, primary] if primary_position == 'right' else [primary, secondary]
+
+            self.video = CompositeVideoClip(clips, size=(total_width, video_height))
+
+            # Add to project history
+            self.project.add_to_history({
+                'operation': 'dual_video_merge',
+                'params': {
+                    'secondary_video_path': secondary_video_path,
+                    'primary_position': primary_position,
+                    'zoom_factor': zoom_factor,
+                    'primary_width_ratio': primary_width_ratio,
+                    'divider_width': divider_width,
+                    'divider_color': divider_color,
+                    'audio_source': audio_source
+                }
+            })
+
+            logger.info(f"✅ Dual video merge completed successfully")
+
+        except Exception as e:
+            logger.error(f"Failed to merge dual video: {e}", exc_info=True)
+            raise
+
+        return self
+
     # ==================== EXPORT ====================
 
     def export(self, output_path: str, quality: str = 'high',

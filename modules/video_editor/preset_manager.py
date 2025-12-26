@@ -834,6 +834,31 @@ class PresetTemplates:
         preset.tags = ['vintage', 'retro', 'artistic']
         return preset
 
+    @staticmethod
+    def dual_video():
+        """Dual Video preset - merge two videos side-by-side"""
+        preset = EditingPreset(
+            "Dual Video",
+            "Merge two videos side-by-side with intelligent length matching. "
+            "Primary video (60%) with audio, secondary video (40%) muted. "
+            "Both videos zoomed 110% with seamless divider.",
+            author="System",
+            category=EditingPreset.CATEGORY_VIDEO
+        )
+        # Note: secondary_video_path will be provided by user at runtime
+        preset.add_operation('dual_video_merge', {
+            'secondary_video_path': '',  # User will specify this
+            'primary_position': 'right',  # Primary on right, secondary on left
+            'zoom_factor': 1.1,  # 110% zoom
+            'primary_width_ratio': 0.6,  # 60-40 split
+            'divider_width': 2,  # 2px divider line
+            'divider_color': 'black',  # Seamless black divider
+            'audio_source': 'primary'  # Only primary audio
+        })
+        preset.tags = ['dual', 'split-screen', 'merge', 'side-by-side']
+        preset.export_settings['quality'] = 'high'
+        return preset
+
     @classmethod
     def get_all_templates(cls) -> List[EditingPreset]:
         """Get all available templates"""
@@ -842,5 +867,6 @@ class PresetTemplates:
             cls.instagram_reels(),
             cls.youtube_shorts(),
             cls.cinematic(),
-            cls.vintage()
+            cls.vintage(),
+            cls.dual_video()
         ]

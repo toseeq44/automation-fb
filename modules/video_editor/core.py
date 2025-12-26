@@ -807,29 +807,7 @@ class VideoEditor:
             # Instead of visible divider, we'll overlap videos slightly
             # This is handled in the composite section below
             # No separate divider clip needed for seamless look
-
-            # ========== POSITION VIDEOS SIDE-BY-SIDE ==========
-            # MoviePy 2.x: Use with_position() instead of set_position()
-
-            if primary_position == 'left':
-                # Primary on left, secondary on right
-                primary = primary.with_position((0, 0))
-
-                if divider_width > 0:
-                    divider = divider.with_position((primary_width, 0))
-                    secondary = secondary.with_position((primary_width + divider_width, 0))
-                else:
-                    secondary = secondary.with_position((primary_width, 0))
-
-            else:  # primary_position == 'right'
-                # Secondary on left, primary on right
-                secondary = secondary.with_position((0, 0))
-
-                if divider_width > 0:
-                    divider = divider.with_position((secondary_width, 0))
-                    primary = primary.with_position((secondary_width + divider_width, 0))
-                else:
-                    primary = primary.with_position((secondary_width, 0))
+            # (Positioning is done in composite section below)
 
             # ========== AUDIO HANDLING ==========
 

@@ -199,7 +199,6 @@ class EditorBatchWorker(QThread):
                     logger.info(f"      Deleting secondary video: {secondary_path}")
 
                     # Wait and force GC for file handle release
-                    import time
                     import gc
                     gc.collect()
                     time.sleep(0.5)
@@ -337,7 +336,6 @@ class EditorBatchWorker(QThread):
 
                     # Important: Wait a moment for OS to release file handles
                     # MoviePy may still have clips open
-                    import time
                     import gc
 
                     # Force garbage collection to release file handles

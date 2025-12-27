@@ -1292,7 +1292,7 @@ class IntegratedVideoEditor(QWidget):
                 progress.setValue(30)
                 QApplication.processEvents()
 
-            # Apply blur effect (if active) using fl_image
+            # Apply blur effect (if active) using image_transform
             if blur_effect and blur_effect.is_active():
                 logger.info(f"Applying blur: {blur_effect.state.intensity}%")
 
@@ -1342,8 +1342,8 @@ class IntegratedVideoEditor(QWidget):
 
                     return overlay
 
-                # Apply to video using fl_image
-                editor.video = editor.video.fl_image(apply_blur_to_frame)
+                # MoviePy 2.x: Use image_transform() instead of fl_image()
+                editor.video = editor.video.image_transform(apply_blur_to_frame)
                 progress.setValue(40)
                 QApplication.processEvents()
 

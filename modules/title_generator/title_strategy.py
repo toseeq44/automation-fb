@@ -39,59 +39,82 @@ class TitleStrategy:
 
     def extract_content_elements(self, frame_analysis: Dict, metadata: Dict) -> Dict:
         """
-        Extract 5 core elements from video content
+        Extract 5 core elements from video content using advanced analysis
 
         Args:
-            frame_analysis: Frame analysis with extracted text
+            frame_analysis: Frame analysis with extracted text, keywords, actions, entities
             metadata: Video metadata
 
         Returns:
             Dict with WHO, WHAT, TIME, DIFFICULTY/SPEED, RESULT
         """
         text_found = frame_analysis.get('text_found', [])
+        keywords = frame_analysis.get('keywords', [])
+        actions = frame_analysis.get('actions', [])
+        entities = frame_analysis.get('entities', [])
         duration = metadata.get('duration', 0)
 
         elements = {
-            'who': self._extract_who(text_found),
-            'what': self._extract_what(text_found),
+            'who': self._extract_who(entities, text_found),
+            'what': self._extract_what(actions, keywords, text_found),
             'time': self._extract_time(duration),
-            'difficulty': self._extract_difficulty(text_found, duration),
-            'result': self._extract_result(text_found)
+            'difficulty': self._extract_difficulty(keywords, text_found, duration),
+            'result': self._extract_result(keywords, text_found)
         }
 
         logger.debug(f"Content elements: {elements}")
         return elements
 
-    def _extract_who(self, text_found: List[str]) -> str:
-        """Extract WHO from text (name / she / he / player / etc)"""
-        # Look for names (capitalized words)
+    def _extract_who(self, entities: List[str], text_found: List[str]) -> str:
+        """
+        Extract WHO from entities (names detected by frame analyzer)
+
+        Args:
+            entities: List of detected entities (names, brands)
+            text_found: Fallback text list
+
+        Returns:
+            WHO string (name or pronoun)
+        """
+        # Use first entity if available
+        if entities:
+            return entities[0]
+
+        # Fallback: Look for capitalized words in text
         for text in text_found:
             words = text.split()
             for word in words:
                 if word and word[0].isupper() and len(word) > 2:
-                    # Likely a name
-                    return word
+                    # Skip common words
+                    if word.lower() not in ['the', 'this', 'that', 'video', 'part']:
+                        return word
 
-        # Default to generic pronouns
+        # Default to generic pronoun
         return "This"
 
-    def _extract_what(self, text_found: List[str]) -> str:
-        """Extract WHAT action from text"""
-        # Look for action verbs in text
-        action_keywords = [
-            'find', 'make', 'create', 'build', 'solve', 'complete',
-            'finish', 'win', 'beat', 'challenge', 'cook', 'play',
-            'tutorial', 'guide', 'learn', 'teach', 'show', 'demo'
-        ]
+    def _extract_what(self, actions: List[str], keywords: List[str], text_found: List[str]) -> str:
+        """
+        Extract WHAT action using detected actions and keywords
 
-        for text in text_found:
-            text_lower = text.lower()
-            for keyword in action_keywords:
-                if keyword in text_lower:
-                    return keyword.title()
+        Args:
+            actions: List of action verbs detected
+            keywords: List of important keywords
+            text_found: Fallback text list
 
-        # Default to generic action
-        return "Amazing Moment"
+        Returns:
+            WHAT action string
+        """
+        # Use first detected action if available
+        if actions:
+            return actions[0]
+
+        # Check keywords for action hints
+        for keyword in keywords:
+            if keyword.lower() in ['tutorial', 'guide', 'review', 'challenge', 'test']:
+                return keyword.title()
+
+        # Fallback: Generic action based on common patterns
+        return "Amazing Content"
 
     def _extract_time(self, duration: float) -> str:
         """Extract TIME from duration"""
@@ -108,9 +131,19 @@ class TitleStrategy:
         else:
             return f"{minutes} Minutes"
 
-    def _extract_difficulty(self, text_found: List[str], duration: float) -> str:
-        """Extract DIFFICULTY/SPEED indicator"""
-        # Check for difficulty keywords in text
+    def _extract_difficulty(self, keywords: List[str], text_found: List[str], duration: float) -> str:
+        """
+        Extract DIFFICULTY/SPEED indicator using keywords
+
+        Args:
+            keywords: Important keywords from video
+            text_found: Fallback text list
+            duration: Video duration
+
+        Returns:
+            Difficulty/speed string
+        """
+        # Check keywords first (more reliable)
         difficulty_keywords = {
             'fast': 'Fast',
             'quick': 'Quick',
@@ -123,6 +156,12 @@ class TitleStrategy:
             'extreme': 'Extreme'
         }
 
+        for keyword in keywords:
+            keyword_lower = keyword.lower()
+            if keyword_lower in difficulty_keywords:
+                return difficulty_keywords[keyword_lower]
+
+        # Fallback: Check all text
         for text in text_found:
             text_lower = text.lower()
             for keyword, label in difficulty_keywords.items():
@@ -137,9 +176,18 @@ class TitleStrategy:
 
         return ""
 
-    def _extract_result(self, text_found: List[str]) -> str:
-        """Extract RESULT (most important)"""
-        # Look for result indicators
+    def _extract_result(self, keywords: List[str], text_found: List[str]) -> str:
+        """
+        Extract RESULT (most important) using keywords
+
+        Args:
+            keywords: Important keywords from video
+            text_found: Fallback text list
+
+        Returns:
+            Result string
+        """
+        # Look for result indicators in keywords first
         result_keywords = {
             'success': 'Success',
             'win': 'Win',
@@ -154,6 +202,12 @@ class TitleStrategy:
             'amazing': 'Amazing'
         }
 
+        for keyword in keywords:
+            keyword_lower = keyword.lower()
+            if keyword_lower in result_keywords:
+                return result_keywords[keyword_lower]
+
+        # Fallback: Check all text
         for text in text_found:
             text_lower = text.lower()
             for keyword, label in result_keywords.items():
@@ -315,79 +369,104 @@ class TitleStrategy:
     # ═══════════════════════════════════════════════════════════════════
 
     def _generate_speed_variants(self, who: str, what: str, time: str, result: str) -> List[str]:
-        """Formula A – Speed: [WHO] + [WHAT] + in + [TIME] + [POWER/EMOTION]"""
+        """
+        Formula A – Speed: [WHO] + [WHAT] + in + [TIME] + [POWER/EMOTION]
+        Professional approach: Minimal emoji usage (only 1 variant with emoji)
+        """
         variants = []
 
         if time:
-            # Variant 1: Just + time + emoji
-            variants.append(f"{who} {what} in Just {time} 😱")
+            # Variant 1: Just + time (NO emoji - clean professional)
+            variants.append(f"{who} {what} in Just {time}")
 
-            # Variant 2: Power word at end
-            variants.append(f"{who} {what} in {time}... Insane")
+            # Variant 2: Power word at end (NO emoji)
+            variants.append(f"{who} {what} in {time}... Insane!")
 
-            # Variant 3: Challenge format
-            variants.append(f"{time} Challenge: {what.title()}!")
+            # Variant 3: Challenge format (NO emoji)
+            variants.append(f"{time} Challenge: {what.title()}")
 
-            # Variant 4: Speed emphasis
-            variants.append(f"Fastest {what}: {time} 🔥")
+            # Variant 4: Speed emphasis (NO emoji)
+            variants.append(f"Fastest {what} in {time}")
+
+            # Variant 5: ONLY ONE with emoji (if really needed)
+            if int(time.split()[0]) <= 15:  # Only for very short times
+                variants.append(f"{who} {what} in {time} 🔥")
 
         return variants
 
     def _generate_shock_variants(self, who: str, what: str, time: str, result: str) -> List[str]:
-        """Formula B – Shock: Power word + [WHO] + [WHAT] + [RESULT]"""
+        """
+        Formula B – Shock: Power word + [WHO] + [WHAT] + [RESULT]
+        Professional approach: Minimal emoji usage
+        """
         variants = []
 
-        # Variant 1: Unbelievable start
-        variants.append(f"Unbelievable: {who} {what}... 😱")
+        # Variant 1: Unbelievable start (NO emoji)
+        variants.append(f"Unbelievable: {who} {what}")
 
-        # Variant 2: You won't believe
+        # Variant 2: You won't believe (NO emoji)
         variants.append(f"You Won't Believe This {what}!")
 
-        # Variant 3: Shocking result
-        variants.append(f"Shocking {what} {result} 🔥")
+        # Variant 3: Shocking result (NO emoji)
+        variants.append(f"Shocking {what} {result}")
 
-        # Variant 4: Question format
+        # Variant 4: Question format (NO emoji)
         variants.append(f"Can {who} {what}? The Answer Will Shock You")
+
+        # Variant 5: Clean power word
+        variants.append(f"Incredible {what}: {result}")
 
         return variants
 
     def _generate_challenge_variants(self, who: str, what: str, time: str, result: str) -> List[str]:
-        """Formula C – Challenge: [TIME/DIFFICULTY] Challenge + [RESULT]"""
+        """
+        Formula C – Challenge: [TIME/DIFFICULTY] Challenge + [RESULT]
+        Professional approach: Minimal emoji usage
+        """
         variants = []
 
-        # Variant 1: Challenge accepted
+        # Variant 1: Challenge accepted (NO emoji)
         if time:
-            variants.append(f"{time} {what} Challenge: {result}!")
+            variants.append(f"{time} {what} Challenge: {result}")
         else:
-            variants.append(f"{what} Challenge: {result}!")
+            variants.append(f"{what} Challenge: {result}")
 
-        # Variant 2: Can she/he format
+        # Variant 2: Can she/he format (NO emoji)
         pronoun = "She" if who != "This" else "They"
-        variants.append(f"Can {pronoun} Complete This {what}? 💯")
+        variants.append(f"Can {pronoun} Complete This {what}?")
 
-        # Variant 3: Ultimate challenge
-        variants.append(f"Ultimate {what} Challenge 🔥")
+        # Variant 3: Ultimate challenge (NO emoji)
+        variants.append(f"Ultimate {what} Challenge")
 
-        # Variant 4: Impossible format
+        # Variant 4: Impossible format (NO emoji)
         variants.append(f"Impossible {what}: {result}")
+
+        # Variant 5: Achievement format (NO emoji)
+        variants.append(f"{what} Mastery: {result}")
 
         return variants
 
     def _generate_story_variants(self, who: str, what: str, time: str, result: str) -> List[str]:
-        """Formula D – Story: Curiosity + [WHAT] + [RESULT]"""
+        """
+        Formula D – Story: Curiosity + [WHAT] + [RESULT]
+        Professional approach: Minimal emoji usage
+        """
         variants = []
 
-        # Variant 1: What happened
-        variants.append(f"What Happened When {who} {what}...")
+        # Variant 1: What happened (NO emoji)
+        variants.append(f"What Happened When {who} {what}")
 
-        # Variant 2: Amazing result
-        variants.append(f"Amazing {what} {result} 😱")
+        # Variant 2: Amazing result (NO emoji)
+        variants.append(f"Amazing {what} {result}")
 
-        # Variant 3: Story format
+        # Variant 3: Story format (NO emoji)
         variants.append(f"{who} {what}: The {result} Story")
 
-        # Variant 4: Curiosity hook
-        variants.append(f"This {what} Will Surprise You 🔥")
+        # Variant 4: Curiosity hook (NO emoji)
+        variants.append(f"This {what} Will Surprise You")
+
+        # Variant 5: Direct format (NO emoji)
+        variants.append(f"{who}'s {what}: {result}")
 
         return variants
 

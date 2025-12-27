@@ -334,6 +334,30 @@ class IntegratedVideoEditor(QWidget):
 
         layout.addSpacing(10)
 
+        # Title Generator button
+        title_gen_btn = QPushButton("🪄 Title Generator")
+        title_gen_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #9c27b0;
+                color: #ffffff;
+                border: none;
+                border-radius: 10px;
+                padding: 12px 24px;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #ab47bc;
+            }
+            QPushButton:pressed {
+                background-color: #8e24aa;
+            }
+        """)
+        title_gen_btn.clicked.connect(self.open_title_generator)
+        layout.addWidget(title_gen_btn)
+
+        layout.addSpacing(10)
+
         # Back button
         back_btn = QPushButton("⬅️ Back")
         back_btn.setStyleSheet(button_style)
@@ -1222,17 +1246,44 @@ class IntegratedVideoEditor(QWidget):
 
     def open_title_generator(self):
         """Open title generator"""
-        QMessageBox.information(
-            self,
-            "Title Generator",
-            "🪄 Auto Title Generator\n\n"
-            "Generate video titles automatically based on:\n"
-            "• Filename analysis\n"
-            "• Content detection\n"
-            "• Template system\n\n"
-            "This feature will auto-generate engaging titles!"
-        )
-        logger.info("Title generator clicked")
+        from modules.title_generator import TitleGeneratorDialog, APIKeyManager
+        from modules.title_generator.api_key_dialog import APIKeyDialog
+
+        # Check if API key is set
+        api_manager = APIKeyManager()
+
+        if not api_manager.has_api_key():
+            # Show API key setup dialog
+            QMessageBox.information(
+                self,
+                "API Key Required",
+                "🔑 Title Generator requires a FREE Groq API key.\n\n"
+                "You'll be guided through the setup process."
+            )
+
+            # Open API key dialog
+            api_dialog = APIKeyDialog(self)
+            result = api_dialog.exec_()
+
+            if result != QDialog.Accepted:
+                # User cancelled
+                logger.info("User cancelled API key setup")
+                return
+
+        # Open title generator dialog
+        try:
+            logger.info("Opening title generator dialog")
+            dialog = TitleGeneratorDialog(self)
+            dialog.exec_()
+        except Exception as e:
+            logger.error(f"Failed to open title generator: {e}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to open Title Generator:\n\n{str(e)}"
+            )
 
     def export_video(self):
         """Export edited video with all applied effects"""

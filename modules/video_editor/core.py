@@ -321,7 +321,8 @@ class VideoEditor:
         if factor <= 0:
             raise ValueError("Speed factor must be positive")
 
-        self.video = self.video.speedx(factor)
+        # MoviePy 2.x: Use with_speed_scaled() instead of speedx()
+        self.video = self.video.with_speed_scaled(factor=factor)
         self.project.add_to_history({
             'operation': 'speed',
             'params': {'factor': factor}

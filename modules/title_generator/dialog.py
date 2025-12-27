@@ -274,13 +274,6 @@ class TitleGeneratorDialog(QDialog):
         self.progress_bar.setValue(100)
         self.status_label.setText("✅ Processing complete!")
 
-        # Save log
-        folder = self.folder_label.text()
-        if folder and folder != "No folder selected":
-            log_path = self.renamer.save_log(folder)
-            if log_path:
-                self.log_text.append(f"\n📝 Log saved: {log_path}")
-
         # Show summary
         self.log_text.append(f"\n{'='*50}")
         self.log_text.append("Summary:")
@@ -300,7 +293,7 @@ class TitleGeneratorDialog(QDialog):
             f"✅ Title generation complete!\n\n"
             f"Successful: {stats['successful']}/{stats['total']}\n"
             f"Failed: {stats['failed']}/{stats['total']}\n\n"
-            f"Check the log for details."
+            f"Videos renamed based on content analysis."
         )
 
     def closeEvent(self, event):

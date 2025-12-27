@@ -7,6 +7,7 @@ import re
 from typing import Dict, Optional
 from modules.logging.logger import get_logger
 from .api_manager import APIKeyManager
+from .frame_analyzer import FrameAnalyzer
 
 logger = get_logger(__name__)
 
@@ -17,6 +18,7 @@ class TitleGenerator:
     def __init__(self):
         """Initialize title generator"""
         self.api_manager = APIKeyManager()
+        self.frame_analyzer = FrameAnalyzer()
         self.groq_client = None
         self._init_groq()
 
@@ -52,6 +54,17 @@ class TitleGenerator:
             return self._extract_title_from_filename(video_info['filename'])
 
         try:
+            # Analyze video frames and extract content
+            logger.info(f"Analyzing video: {video_info['filename']}")
+            frame_analysis = self.frame_analyzer.analyze_video(video_info['path'])
+
+            # Get video metadata
+            metadata = self.frame_analyzer.get_video_metadata(video_info['path'])
+
+            # Merge analysis results into video_info
+            video_info['frame_analysis'] = frame_analysis
+            video_info['metadata'] = metadata
+
             # Build intelligent prompt
             prompt = self._build_prompt(video_info)
 
@@ -81,44 +94,76 @@ class TitleGenerator:
 
     def _build_prompt(self, video_info: Dict) -> str:
         """
-        Build intelligent prompt for Groq API
+        Build intelligent prompt for Groq API based on video content analysis
 
         Args:
-            video_info: Video metadata
+            video_info: Video metadata with frame analysis
 
         Returns:
             Prompt string
         """
-        # Extract keywords from filename
-        filename = video_info['name_without_ext']
-        keywords = self._extract_keywords(filename)
+        # Get frame analysis results
+        frame_analysis = video_info.get('frame_analysis', {})
+        text_from_frames = frame_analysis.get('text_found', [])
+        has_text = frame_analysis.get('has_text', False)
 
-        # Get category hint from folder name
-        category = video_info.get('folder', '')
+        # Get video metadata
+        metadata = video_info.get('metadata', {})
+        duration = metadata.get('duration', video_info.get('duration', 0))
+        width = metadata.get('width', 0)
+        height = metadata.get('height', 0)
+        has_audio = metadata.get('has_audio', False)
 
-        # Duration context
-        duration = video_info.get('duration', 0)
+        # Format duration
         duration_text = ""
         if duration > 0:
             minutes = int(duration // 60)
+            seconds = int(duration % 60)
             if minutes > 0:
-                duration_text = f"{minutes} minute{'s' if minutes > 1 else ''}"
+                duration_text = f"{minutes}:{seconds:02d}"
             else:
-                duration_text = f"{int(duration)} second{'s' if duration != 1 else ''}"
+                duration_text = f"{seconds} seconds"
 
-        # Build comprehensive prompt
-        prompt = f"""Generate an engaging, SEO-optimized YouTube video title based on this information:
+        # Format resolution
+        resolution_text = ""
+        if width > 0 and height > 0:
+            if height >= 2160:
+                resolution_text = "4K"
+            elif height >= 1080:
+                resolution_text = "1080p HD"
+            elif height >= 720:
+                resolution_text = "720p HD"
+            else:
+                resolution_text = f"{width}x{height}"
 
-Video Details:
-- Original Filename: {filename}
-- Keywords Detected: {', '.join(keywords)}
-- Category/Folder: {category}
-{f'- Duration: {duration_text}' if duration_text else ''}
+        # Build content-based prompt
+        prompt = f"""Generate an engaging, SEO-optimized YouTube video title based on video content analysis:
+
+Video Content Analysis:"""
+
+        # Add extracted text from frames
+        if has_text and text_from_frames:
+            # Limit to most relevant text (first 5 unique items)
+            unique_text = list(dict.fromkeys(text_from_frames))[:5]
+            prompt += f"\n- Text Found in Video: {', '.join(unique_text)}"
+        else:
+            prompt += "\n- No readable text detected in video frames"
+
+        # Add metadata
+        if duration_text:
+            prompt += f"\n- Duration: {duration_text}"
+        if resolution_text:
+            prompt += f"\n- Quality: {resolution_text}"
+        if has_audio:
+            prompt += "\n- Has Audio: Yes"
+
+        # Add requirements
+        prompt += """
 
 Requirements:
 1. Length: 50-60 characters (STRICT)
 2. Style: Engaging, clickable, informative
-3. Include relevant keywords from filename
+3. Based on video CONTENT (text detected, visual analysis)
 4. Use title case (capitalize major words)
 5. Make it SEO-friendly and attention-grabbing
 6. NO emojis or special file characters (/ \\ : * ? " < > |)

@@ -131,36 +131,18 @@ class VideoRenamer:
 
     def save_log(self, output_dir: str) -> str:
         """
-        Save rename log to CSV file
+        Save rename log to CSV file (Disabled - not needed)
 
         Args:
             output_dir: Directory to save log file
 
         Returns:
-            Path to log file
+            Empty string (logging disabled)
         """
-        try:
-            # Create log filename
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            log_filename = f"title_generator_log_{timestamp}.csv"
-            log_path = Path(output_dir) / log_filename
-
-            # Write log to CSV
-            with open(log_path, 'w', newline='', encoding='utf-8') as f:
-                if self.rename_log:
-                    fieldnames = ['timestamp', 'original_path', 'new_path', 'status', 'error']
-                    writer = csv.DictWriter(f, fieldnames=fieldnames)
-
-                    writer.writeheader()
-                    for entry in self.rename_log:
-                        writer.writerow(entry)
-
-            logger.info(f"Log saved: {log_path}")
-            return str(log_path)
-
-        except Exception as e:
-            logger.error(f"Failed to save log: {e}")
-            return ""
+        # CSV logging disabled per user request
+        # Statistics are still tracked internally via rename_log
+        logger.debug("CSV log file generation disabled")
+        return ""
 
     def get_statistics(self) -> Dict:
         """

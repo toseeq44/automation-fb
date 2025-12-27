@@ -1,13 +1,15 @@
 """
 Intelligent Title Generator using Groq API
 Analyzes video metadata and generates engaging titles
+Uses advanced 9-step title generation strategy
 """
 
 import re
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from modules.logging.logger import get_logger
 from .api_manager import APIKeyManager
 from .frame_analyzer import FrameAnalyzer
+from .title_strategy import TitleStrategy
 
 logger = get_logger(__name__)
 
@@ -19,6 +21,7 @@ class TitleGenerator:
         """Initialize title generator"""
         self.api_manager = APIKeyManager()
         self.frame_analyzer = FrameAnalyzer()
+        self.title_strategy = TitleStrategy()
         self.groq_client = None
         self._init_groq()
 
@@ -41,7 +44,7 @@ class TitleGenerator:
 
     def generate_title(self, video_info: Dict) -> str:
         """
-        Generate engaging title for video
+        Generate engaging title for video using advanced 9-step strategy
 
         Args:
             video_info: Video metadata dict with 'filename', 'duration', 'folder', etc.
@@ -49,10 +52,6 @@ class TitleGenerator:
         Returns:
             Generated title string (sanitized for filename)
         """
-        if not self.groq_client:
-            logger.error("Groq client not initialized")
-            return self._extract_title_from_filename(video_info['filename'])
-
         try:
             # Analyze video frames and extract content
             logger.info(f"Analyzing video: {video_info['filename']}")
@@ -61,15 +60,77 @@ class TitleGenerator:
             # Get video metadata
             metadata = self.frame_analyzer.get_video_metadata(video_info['path'])
 
-            # Merge analysis results into video_info
-            video_info['frame_analysis'] = frame_analysis
-            video_info['metadata'] = metadata
+            # STEP 1-9: Generate titles using advanced strategy
+            logger.info("Applying 9-step title generation strategy...")
+            title_result = self.title_strategy.generate_titles(frame_analysis, metadata)
 
-            # Build intelligent prompt
-            prompt = self._build_prompt(video_info)
+            # Get generated variants
+            optimized_titles = title_result['optimized_titles']
+
+            if not optimized_titles:
+                logger.warning("No titles generated, using fallback")
+                return self._extract_title_from_filename(video_info['filename'])
+
+            # Log all variants for debugging
+            logger.info(f"Generated {len(optimized_titles)} title variants:")
+            for i, variant in enumerate(optimized_titles, 1):
+                logger.info(f"  {i}. {variant}")
+
+            # Use AI to select/refine the best title (if available)
+            if self.groq_client:
+                best_title = self._ai_select_best_title(optimized_titles, frame_analysis, metadata)
+            else:
+                # No AI: Use first variant (already quality-checked)
+                best_title = optimized_titles[0]
+                logger.info(f"Selected first variant: {best_title}")
+
+            # Clean and validate title
+            final_title = self._clean_title(best_title)
+
+            logger.info(f"Final title: {final_title}")
+            return final_title
+
+        except Exception as e:
+            logger.error(f"Title generation failed: {e}")
+            # Fallback to intelligent extraction from filename
+            return self._extract_title_from_filename(video_info['filename'])
+
+    def _ai_select_best_title(self, variants: List[str], frame_analysis: Dict, metadata: Dict) -> str:
+        """
+        Use AI to select/refine the best title from variants
+
+        Args:
+            variants: List of title variants
+            frame_analysis: Frame analysis results
+            metadata: Video metadata
+
+        Returns:
+            Best title selected by AI
+        """
+        try:
+            # Build prompt for AI selection
+            prompt = f"""You are a YouTube title expert. Select or refine the BEST title from these variants.
+
+Video Content:
+- Text Found: {', '.join(frame_analysis.get('text_found', [])[:5])}
+- Duration: {metadata.get('duration', 0)} seconds
+- Resolution: {metadata.get('width', 0)}x{metadata.get('height', 0)}
+
+Title Variants:
+{chr(10).join(f"{i+1}. {title}" for i, title in enumerate(variants))}
+
+Instructions:
+1. Pick the MOST clickable, engaging title
+2. OR create a better one by combining the best parts
+3. Keep length 50-60 characters
+4. Must be content-relevant
+5. NO file-unsafe characters (/ \\ : * ? " < > |)
+6. Return ONLY the title, nothing else
+
+Best Title:"""
 
             # Call Groq API
-            logger.info(f"Generating title for: {video_info['filename']}")
+            logger.info("Using AI to select best title...")
             response = self.groq_client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=[{"role": "user", "content": prompt}],
@@ -79,18 +140,15 @@ class TitleGenerator:
             )
 
             # Extract title from response
-            title = response.choices[0].message.content.strip()
+            ai_title = response.choices[0].message.content.strip()
+            logger.info(f"AI selected: {ai_title}")
 
-            # Clean and validate title
-            title = self._clean_title(title)
-
-            logger.info(f"Generated title: {title}")
-            return title
+            return ai_title
 
         except Exception as e:
-            logger.error(f"Title generation failed: {e}")
-            # Fallback to intelligent extraction from filename
-            return self._extract_title_from_filename(video_info['filename'])
+            logger.error(f"AI selection failed: {e}")
+            # Fallback to first variant
+            return variants[0]
 
     def _build_prompt(self, video_info: Dict) -> str:
         """

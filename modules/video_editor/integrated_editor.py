@@ -16,7 +16,7 @@ except ImportError:  # pragma: no cover - environments without OpenCV
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QSplitter, QFrame, QFileDialog, QMessageBox
+    QSplitter, QFrame, QFileDialog, QMessageBox, QDialog
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QPixmap, QImage, QFont
@@ -331,30 +331,6 @@ class IntegratedVideoEditor(QWidget):
         """)
         export_btn.clicked.connect(self.export_video)
         layout.addWidget(export_btn)
-
-        layout.addSpacing(10)
-
-        # Title Generator button
-        title_gen_btn = QPushButton("🪄 Title Generator")
-        title_gen_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #9c27b0;
-                color: #ffffff;
-                border: none;
-                border-radius: 10px;
-                padding: 12px 24px;
-                font-weight: bold;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: #ab47bc;
-            }
-            QPushButton:pressed {
-                background-color: #8e24aa;
-            }
-        """)
-        title_gen_btn.clicked.connect(self.open_title_generator)
-        layout.addWidget(title_gen_btn)
 
         layout.addSpacing(10)
 

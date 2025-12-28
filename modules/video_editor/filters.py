@@ -27,7 +27,8 @@ def adjust_brightness(clip, intensity: float = 1.0):
         clip: VideoClip
         intensity: Brightness multiplier (0.5 = darker, 2.0 = brighter)
     """
-    return clip.fx(vfx.colorx, intensity)
+    # MoviePy 2.x: Use with_effects([vfx.MultiplyColor()]) instead of fx(vfx.colorx)
+    return clip.with_effects([vfx.MultiplyColor(intensity)])
 
 
 def adjust_contrast(clip, intensity: float = 1.0):
@@ -51,7 +52,8 @@ def adjust_contrast(clip, intensity: float = 1.0):
         # Clip to valid range and convert back
         return np.clip(img, 0, 255).astype(np.uint8)
 
-    return clip.fl_image(contrast_transform)
+    # MoviePy 2.x: Use image_transform() instead of fl_image()
+    return clip.image_transform(contrast_transform)
 
 
 def adjust_saturation(clip, intensity: float = 1.0):
@@ -76,7 +78,8 @@ def adjust_saturation(clip, intensity: float = 1.0):
         # Clip and convert back
         return np.clip(result, 0, 255).astype(np.uint8)
 
-    return clip.fl_image(saturation_transform)
+    # MoviePy 2.x: Use image_transform() instead of fl_image()
+    return clip.image_transform(saturation_transform)
 
 
 def adjust_hue(clip, shift: float = 0.0):
@@ -112,12 +115,14 @@ def adjust_hue(clip, shift: float = 0.0):
 
         return (result * 255).astype(np.uint8)
 
-    return clip.fl_image(hue_transform)
+    # MoviePy 2.x: Use image_transform() instead of fl_image()
+    return clip.image_transform(hue_transform)
 
 
 def grayscale(clip):
     """Convert video to grayscale"""
-    return clip.fx(vfx.blackwhite)
+    # MoviePy 2.x: Use with_effects([vfx.BlackAndWhite()]) instead of fx(vfx.blackwhite)
+    return clip.with_effects([vfx.BlackAndWhite()])
 
 
 def sepia(clip):
@@ -137,7 +142,8 @@ def sepia(clip):
 
         return np.clip(result, 0, 255).astype(np.uint8)
 
-    return clip.fl_image(sepia_transform)
+    # MoviePy 2.x: Use image_transform() instead of fl_image()
+    return clip.image_transform(sepia_transform)
 
 
 def invert_colors(clip):
@@ -145,7 +151,8 @@ def invert_colors(clip):
     def invert_transform(image):
         return 255 - image
 
-    return clip.fl_image(invert_transform)
+    # MoviePy 2.x: Use image_transform() instead of fl_image()
+    return clip.image_transform(invert_transform)
 
 
 # ==================== BLUR & SHARPNESS ====================
@@ -171,7 +178,8 @@ def apply_blur(clip, intensity: int = 5):
             blurred[:, :, i] = gaussian_filter(image[:, :, i], sigma=intensity)
         return blurred.astype(np.uint8)
 
-    return clip.fl_image(blur_transform)
+    # MoviePy 2.x: Use image_transform() instead of fl_image()
+    return clip.image_transform(blur_transform)
 
 
 def sharpen(clip, intensity: float = 1.0):
@@ -199,7 +207,8 @@ def sharpen(clip, intensity: float = 1.0):
 
         return np.clip(sharpened, 0, 255).astype(np.uint8)
 
-    return clip.fl_image(sharpen_transform)
+    # MoviePy 2.x: Use image_transform() instead of fl_image()
+    return clip.image_transform(sharpen_transform)
 
 
 # ==================== ARTISTIC FILTERS ====================
@@ -218,7 +227,8 @@ def posterize(clip, levels: int = 4):
         posterized = (image // factor) * factor
         return posterized.astype(np.uint8)
 
-    return clip.fl_image(posterize_transform)
+    # MoviePy 2.x: Use image_transform() instead of fl_image()
+    return clip.image_transform(posterize_transform)
 
 
 def edge_detect(clip, threshold: int = 50):
@@ -253,7 +263,8 @@ def edge_detect(clip, threshold: int = 50):
 
         return result.astype(np.uint8)
 
-    return clip.fl_image(edge_transform)
+    # MoviePy 2.x: Use image_transform() instead of fl_image()
+    return clip.image_transform(edge_transform)
 
 
 def pixelate(clip, pixel_size: int = 10):
@@ -284,7 +295,8 @@ def pixelate(clip, pixel_size: int = 10):
             # Fallback without PIL
             return image
 
-    return clip.fl_image(pixelate_transform)
+    # MoviePy 2.x: Use image_transform() instead of fl_image()
+    return clip.image_transform(pixelate_transform)
 
 
 def vignette(clip, intensity: float = 0.5):
@@ -320,7 +332,8 @@ def vignette(clip, intensity: float = 0.5):
 
         return result.astype(np.uint8)
 
-    return clip.fl_image(vignette_transform)
+    # MoviePy 2.x: Use image_transform() instead of fl_image()
+    return clip.image_transform(vignette_transform)
 
 
 # ==================== COLOR GRADING ====================
@@ -342,7 +355,8 @@ def warm_filter(clip, intensity: float = 0.3):
 
         return np.clip(img, 0, 255).astype(np.uint8)
 
-    return clip.fl_image(warm_transform)
+    # MoviePy 2.x: Use image_transform() instead of fl_image()
+    return clip.image_transform(warm_transform)
 
 
 def cool_filter(clip, intensity: float = 0.3):
@@ -362,7 +376,8 @@ def cool_filter(clip, intensity: float = 0.3):
 
         return np.clip(img, 0, 255).astype(np.uint8)
 
-    return clip.fl_image(cool_transform)
+    # MoviePy 2.x: Use image_transform() instead of fl_image()
+    return clip.image_transform(cool_transform)
 
 
 def vintage_filter(clip):

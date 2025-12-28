@@ -150,20 +150,78 @@ class EditorBatchWorker(QThread):
 
             source_path = video_info['source']
             dest_path = video_info['destination']
+            is_dual_video = video_info.get('is_dual_video', False)
+            secondary_path = video_info.get('secondary', None)
 
             logger.info(f"      Source path: {source_path}")
             logger.info(f"      Dest path: {dest_path}")
+            if is_dual_video:
+                logger.info(f"      Secondary path: {secondary_path}")
+                logger.info(f"      Dual video mode: ENABLED")
 
             # Emit progress
             self.progress.emit(idx + 1, total)
             self.video_started.emit(source_path, idx + 1, total)
             # Show full path for better tracking
-            self.log_message.emit(f"Processing [{idx + 1}/{total}]: {source_path}", "info")
+            if is_dual_video:
+                self.log_message.emit(f"Processing [{idx + 1}/{total}] DUAL VIDEO: {source_path} + {os.path.basename(secondary_path)}", "info")
+            else:
+                self.log_message.emit(f"Processing [{idx + 1}/{total}]: {source_path}", "info")
+
+            # Update preset with secondary video path if dual video mode
+            if is_dual_video and secondary_path and preset:
+                logger.info(f"      🎬 Dual Video Mode - Updating secondary video path")
+                logger.info(f"      Secondary video: {secondary_path}")
+                updated = False
+                for operation in preset.operations:
+                    if operation['operation'] == 'dual_video_merge':
+                        logger.info(f"      Before update: {operation['params'].get('secondary_video_path')}")
+                        operation['params']['secondary_video_path'] = secondary_path
+                        logger.info(f"      After update: {operation['params'].get('secondary_video_path')}")
+                        logger.info(f"      ✅ Secondary video path updated in preset")
+                        updated = True
+                        break
+                if not updated:
+                    logger.warning(f"      ⚠️  No dual_video_merge operation found in preset!")
+            elif is_dual_video and not secondary_path:
+                logger.warning(f"      ⚠️  Dual video mode but no secondary path provided!")
+            elif is_dual_video and not preset:
+                logger.warning(f"      ⚠️  Dual video mode but no preset loaded!")
 
             # Process video
             start_time = time.time()
             result = self._process_single_video(source_path, dest_path, preset)
             result.processing_time = time.time() - start_time
+
+            # Delete secondary video if dual video mode and processing succeeded
+            if is_dual_video and secondary_path and result.status == ProcessingStatus.SUCCESS:
+                if self.settings and self.settings.delete_source_after_edit:
+                    logger.info(f"      Deleting secondary video: {secondary_path}")
+
+                    # Wait and force GC for file handle release
+                    import gc
+                    gc.collect()
+                    time.sleep(0.5)
+
+                    try:
+                        # Try with retry logic
+                        max_retries = 3
+                        for attempt in range(max_retries):
+                            try:
+                                if os.path.exists(secondary_path):
+                                    os.remove(secondary_path)
+                                    logger.info(f"      ✅ Secondary video deleted successfully")
+                                    self.log_message.emit(f"🗑️  Deleted secondary: {os.path.basename(secondary_path)}", "info")
+                                    break
+                            except PermissionError:
+                                if attempt < max_retries - 1:
+                                    logger.warning(f"      Retry {attempt + 1}/{max_retries}: Secondary file locked, waiting...")
+                                    time.sleep(1.0)
+                                else:
+                                    raise
+                    except Exception as e:
+                        logger.warning(f"      ⚠️  Failed to delete secondary video after {max_retries} attempts: {e}")
+                        self.log_message.emit(f"⚠️  Could not delete secondary (file in use): {os.path.basename(secondary_path)}", "warning")
 
             self.results.append(result)
 
@@ -265,16 +323,47 @@ class EditorBatchWorker(QThread):
                 # In-place editing means source == destination, so no separate source to delete
                 is_inplace = os.path.normpath(source_path) == os.path.normpath(dest_path)
 
+                logger.info(f"   === DELETION CHECK ===")
+                logger.info(f"   Source: {source_path}")
+                logger.info(f"   Destination: {dest_path}")
+                logger.info(f"   In-place editing: {is_inplace}")
+                logger.info(f"   Settings exists: {self.settings is not None}")
+                if self.settings:
+                    logger.info(f"   Delete setting enabled: {self.settings.delete_source_after_edit}")
+
                 if self.settings and self.settings.delete_source_after_edit and not is_inplace:
-                    logger.info(f"   Deleting source file (not in-place editing)...")
+                    logger.info(f"   ✅ CONDITIONS MET - Attempting to delete source file...")
+
+                    # Important: Wait a moment for OS to release file handles
+                    # MoviePy may still have clips open
+                    import gc
+
+                    # Force garbage collection to release file handles
+                    gc.collect()
+                    time.sleep(0.5)  # Wait 500ms for OS to release locks
+
                     try:
-                        os.remove(source_path)
-                        result.source_deleted = True
-                        self.log_message.emit(f"🗑️  Deleted original: {source_path}", "info")
-                        logger.info(f"   ✅ Source deleted successfully")
+                        if os.path.exists(source_path):
+                            # Try deletion with retry logic for locked files
+                            max_retries = 3
+                            for attempt in range(max_retries):
+                                try:
+                                    os.remove(source_path)
+                                    result.source_deleted = True
+                                    self.log_message.emit(f"🗑️  Deleted primary: {os.path.basename(source_path)}", "info")
+                                    logger.info(f"   ✅ Primary video deleted successfully: {source_path}")
+                                    break
+                                except PermissionError as pe:
+                                    if attempt < max_retries - 1:
+                                        logger.warning(f"   Retry {attempt + 1}/{max_retries}: File locked, waiting...")
+                                        time.sleep(1.0)  # Wait 1 second before retry
+                                    else:
+                                        raise pe  # Final attempt failed, raise error
+                        else:
+                            logger.warning(f"   ⚠️  Source file already gone: {source_path}")
                     except Exception as e:
-                        logger.warning(f"   ⚠️  Failed to delete source: {e}")
-                        self.log_message.emit(f"⚠️  Failed to delete: {source_path}\n   → {e}", "warning")
+                        logger.error(f"   ❌ Failed to delete source after {max_retries} attempts: {e}", exc_info=True)
+                        self.log_message.emit(f"⚠️  Could not delete (file in use): {os.path.basename(source_path)}", "warning")
                 elif is_inplace:
                     logger.info(f"   In-place editing - source already replaced, no separate deletion needed")
                     # Mark as deleted for statistics since the original was replaced
@@ -798,7 +887,7 @@ class EditorBatchWorker(QThread):
             return False
 
     def _load_preset(self, preset_name: str):
-        """Load preset by name"""
+        """Load preset by name - searches all folders (system, user, imported)"""
         try:
             logger.info(f"      _load_preset() called for: {preset_name}")
             from modules.video_editor.preset_manager import PresetManager
@@ -806,8 +895,29 @@ class EditorBatchWorker(QThread):
             preset_manager = PresetManager()
             logger.info(f"      PresetManager created")
 
-            preset = preset_manager.load_preset(preset_name)
+            # Try loading from all folders (system, user, imported)
+            preset = None
+
+            # Try system folder first (most common for built-in presets)
+            logger.info(f"      Trying to load from system folder...")
+            preset = preset_manager.load_preset_from_folder(preset_name, PresetManager.FOLDER_SYSTEM)
+
+            if not preset:
+                # Try user folder
+                logger.info(f"      Not in system folder, trying user folder...")
+                preset = preset_manager.load_preset_from_folder(preset_name, PresetManager.FOLDER_USER)
+
+            if not preset:
+                # Try imported folder
+                logger.info(f"      Not in user folder, trying imported folder...")
+                preset = preset_manager.load_preset_from_folder(preset_name, PresetManager.FOLDER_IMPORTED)
+
             logger.info(f"      Preset loaded: {preset is not None}")
+            if preset:
+                logger.info(f"      ✅ Preset '{preset_name}' loaded successfully")
+            else:
+                logger.warning(f"      ❌ Preset '{preset_name}' not found in any folder")
+
             return preset
         except Exception as e:
             logger.error(f"      ❌ Error loading preset {preset_name}: {e}", exc_info=True)

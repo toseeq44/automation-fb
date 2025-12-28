@@ -16,7 +16,7 @@ except ImportError:  # pragma: no cover - environments without OpenCV
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QSplitter, QFrame, QFileDialog, QMessageBox
+    QSplitter, QFrame, QFileDialog, QMessageBox, QDialog
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QPixmap, QImage, QFont
@@ -1222,37 +1222,224 @@ class IntegratedVideoEditor(QWidget):
 
     def open_title_generator(self):
         """Open title generator"""
-        QMessageBox.information(
-            self,
-            "Title Generator",
-            "🪄 Auto Title Generator\n\n"
-            "Generate video titles automatically based on:\n"
-            "• Filename analysis\n"
-            "• Content detection\n"
-            "• Template system\n\n"
-            "This feature will auto-generate engaging titles!"
-        )
-        logger.info("Title generator clicked")
+        from modules.title_generator import TitleGeneratorDialog, APIKeyManager
+        from modules.title_generator.api_key_dialog import APIKeyDialog
+
+        # Check if API key is set
+        api_manager = APIKeyManager()
+
+        if not api_manager.has_api_key():
+            # Show API key setup dialog
+            QMessageBox.information(
+                self,
+                "API Key Required",
+                "🔑 Title Generator requires a FREE Groq API key.\n\n"
+                "You'll be guided through the setup process."
+            )
+
+            # Open API key dialog
+            api_dialog = APIKeyDialog(self)
+            result = api_dialog.exec_()
+
+            if result != QDialog.Accepted:
+                # User cancelled
+                logger.info("User cancelled API key setup")
+                return
+
+        # Open title generator dialog
+        try:
+            logger.info("Opening title generator dialog")
+            dialog = TitleGeneratorDialog(self)
+            dialog.exec_()
+        except Exception as e:
+            logger.error(f"Failed to open title generator: {e}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to open Title Generator:\n\n{str(e)}"
+            )
 
     def export_video(self):
-        """Export edited video"""
+        """Export edited video with all applied effects"""
         if not self.current_video_path:
             QMessageBox.warning(self, "No Video", "Please load a video first")
             return
 
+        # Get output file path from user
+        default_name = Path(self.current_video_path).stem + "_edited.mp4"
         output_path, _ = QFileDialog.getSaveFileName(
             self,
             "Export Video",
-            "",
+            default_name,
             "MP4 Video (*.mp4);;All Files (*.*)"
         )
 
-        if output_path:
-            logger.info(f"Exporting video to: {output_path}")
+        if not output_path:
+            return  # User cancelled
+
+        try:
+            # Show progress dialog
+            from PyQt5.QtWidgets import QProgressDialog
+            from PyQt5.QtCore import Qt
+
+            progress = QProgressDialog("Preparing export...", "Cancel", 0, 100, self)
+            progress.setWindowTitle("Exporting Video")
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setMinimumDuration(0)
+            progress.setValue(0)
+            QApplication.processEvents()
+
+            # Import VideoEditor
+            from modules.video_editor.core import VideoEditor
+
+            progress.setLabelText("Loading video...")
+            progress.setValue(10)
+            QApplication.processEvents()
+
+            # Create video editor instance
+            editor = VideoEditor()
+            editor.load_video(self.current_video_path)
+
+            progress.setLabelText("Applying effects...")
+            progress.setValue(20)
+            QApplication.processEvents()
+
+            # Get active effects from effect_manager
+            zoom_effect = self.effect_manager._effects.get("zoom")
+            blur_effect = self.effect_manager._effects.get("blur")
+            speed_effect = self.effect_manager._effects.get("speed")
+
+            # Apply zoom effect (if active)
+            if zoom_effect and zoom_effect.is_active():
+                zoom_factor = zoom_effect.state.factor
+                logger.info(f"Applying zoom: {zoom_factor}x ({zoom_factor * 100:.0f}%)")
+                editor.resize_video(scale=zoom_factor)
+                progress.setValue(30)
+                QApplication.processEvents()
+
+            # Apply blur effect (if active) using image_transform
+            if blur_effect and blur_effect.is_active():
+                logger.info(f"Applying blur: {blur_effect.state.intensity}%")
+
+                # Create blur transformation function
+                def apply_blur_to_frame(frame):
+                    """Apply blur effect to a single frame"""
+                    import numpy as np
+
+                    if cv2 is None or not isinstance(frame, np.ndarray):
+                        return frame
+
+                    working = np.ascontiguousarray(frame.copy())
+                    height, width = working.shape[:2]
+
+                    if height == 0 or width == 0:
+                        return working
+
+                    # Blur settings from blur_effect
+                    intensity = blur_effect.state.intensity
+                    target = blur_effect.state.target
+
+                    # Apply blur
+                    sigma = max(0.2, intensity * 0.35)
+                    background = cv2.GaussianBlur(working, (0, 0), sigmaX=sigma, sigmaY=sigma)
+
+                    overlay = background.copy()
+
+                    # Compute scales
+                    reduction = min(0.45, intensity * 0.006)
+                    scale_value = max(0.55, 1.0 - reduction)
+
+                    if target in {"top_bottom", "vertical"}:
+                        scale_x, scale_y = 1.0, scale_value
+                    elif target in {"left_right", "horizontal"}:
+                        scale_x, scale_y = scale_value, 1.0
+                    else:
+                        scale_x, scale_y = scale_value, scale_value
+
+                    # Scale and overlay
+                    scaled_w = max(1, min(width, int(round(width * scale_x))))
+                    scaled_h = max(1, min(height, int(round(height * scale_y))))
+                    resized = cv2.resize(working, (scaled_w, scaled_h), interpolation=cv2.INTER_LINEAR)
+
+                    x_offset = max(0, (width - scaled_w) // 2)
+                    y_offset = max(0, (height - scaled_h) // 2)
+                    overlay[y_offset:y_offset + scaled_h, x_offset:x_offset + scaled_w] = resized
+
+                    return overlay
+
+                # MoviePy 2.x: Use image_transform() instead of fl_image()
+                editor.video = editor.video.image_transform(apply_blur_to_frame)
+                progress.setValue(40)
+                QApplication.processEvents()
+
+            # Apply speed effect (if active)
+            if speed_effect and speed_effect.is_active():
+                speed_factor = speed_effect.state.factor
+                logger.info(f"Applying speed: {speed_factor}x")
+                editor.change_speed(speed_factor)
+                progress.setValue(50)
+                QApplication.processEvents()
+
+            # Export video
+            progress.setLabelText(f"Exporting to {Path(output_path).name}...")
+            progress.setValue(60)
+            QApplication.processEvents()
+
+            logger.info(f"Starting export to: {output_path}")
+
+            # Export with progress callback
+            def export_progress_callback(current_frame, total_frames):
+                """Update progress bar during export"""
+                if progress.wasCanceled():
+                    raise Exception("Export cancelled by user")
+
+                # Map 60-95% to export progress
+                export_progress = 60 + int((current_frame / total_frames) * 35)
+                progress.setValue(export_progress)
+                progress.setLabelText(f"Exporting... {current_frame}/{total_frames} frames")
+                QApplication.processEvents()
+
+            # Note: MoviePy doesn't support progress callbacks in write_videofile
+            # So we'll just show indeterminate progress
+            editor.export(output_path, quality='high')
+
+            progress.setValue(95)
+            QApplication.processEvents()
+
+            # Cleanup
+            editor.cleanup()
+
+            progress.setValue(100)
+            progress.close()
+
+            # Show success message
             QMessageBox.information(
                 self,
-                "Export",
-                "Export functionality will be implemented"
+                "Export Complete",
+                f"✅ Video exported successfully!\n\n"
+                f"Location: {output_path}\n\n"
+                f"Applied Effects:\n"
+                f"{'• Zoom: ' + zoom_effect.state.label if zoom_effect and zoom_effect.is_active() else ''}\n"
+                f"{'• Blur: ' + blur_effect.state.label if blur_effect and blur_effect.is_active() else ''}\n"
+                f"{'• Speed: ' + speed_effect.state.label if speed_effect and speed_effect.is_active() else ''}"
+            )
+
+            logger.info(f"✅ Export completed successfully: {output_path}")
+
+        except Exception as e:
+            logger.error(f"Export failed: {e}")
+            import traceback
+            traceback.print_exc()
+
+            if 'progress' in locals():
+                progress.close()
+
+            QMessageBox.critical(
+                self,
+                "Export Failed",
+                f"❌ Failed to export video:\n\n{str(e)}\n\nCheck logs for details."
             )
 
     def close_editor(self):

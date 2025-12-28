@@ -198,6 +198,32 @@ class OperationLibrary:
             icon='⏩'
         ))
 
+        self.register(OperationDef(
+            name='dual_video_merge',
+            display_name='Dual Video Merge',
+            category=self.CATEGORY_VIDEO,
+            description='Merge two videos side-by-side with intelligent length matching',
+            parameters=[
+                ParameterDef('secondary_video_path', 'str', required=True,
+                           description='Path to secondary video file'),
+                ParameterDef('primary_position', 'str', required=False, default='right',
+                           choices=['left', 'right'],
+                           description='Position of primary video (left or right)'),
+                ParameterDef('zoom_factor', 'float', required=False, default=1.1, min_val=0.1, max_val=5.0,
+                           description='Zoom factor for both videos (1.1 = 110%)'),
+                ParameterDef('primary_width_ratio', 'float', required=False, default=0.6, min_val=0.1, max_val=0.9,
+                           description='Width ratio for primary video (0.6 = 60%)'),
+                ParameterDef('divider_width', 'int', required=False, default=2, min_val=0, max_val=20,
+                           description='Width of divider line in pixels'),
+                ParameterDef('divider_color', 'str', required=False, default='black',
+                           description='Color of divider line (black, white, etc.)'),
+                ParameterDef('audio_source', 'str', required=False, default='primary',
+                           choices=['primary', 'secondary', 'both'],
+                           description='Audio source (primary, secondary, or both)')
+            ],
+            icon='📹'
+        ))
+
         # ==================== TRANSFORM OPERATIONS ====================
 
         self.register(OperationDef(

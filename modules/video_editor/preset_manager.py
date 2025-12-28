@@ -210,17 +210,26 @@ class PresetManager:
         """Initialize built-in system presets if they don't exist"""
         system_folder = self.folders[self.FOLDER_SYSTEM]
 
-        # Check if system presets already exist
-        existing_presets = [f for f in os.listdir(system_folder) if f.endswith('.preset.json')]
+        # Get existing preset files
+        existing_files = [f for f in os.listdir(system_folder) if f.endswith('.preset.json')]
+        existing_names = set()
+        for filename in existing_files:
+            # Extract preset name from filename (remove .preset.json extension)
+            name = filename.replace('.preset.json', '')
+            existing_names.add(name)
 
-        if len(existing_presets) == 0:
-            # Create default system presets
-            from modules.video_editor.preset_manager import PresetTemplates
+        # Get all template presets
+        from modules.video_editor.preset_manager import PresetTemplates
+        templates = PresetTemplates.get_all_templates()
 
-            templates = PresetTemplates.get_all_templates()
-            for template in templates:
+        # Create missing presets
+        for template in templates:
+            safe_name = "".join(c for c in template.name if c.isalnum() or c in (' ', '-', '_')).rstrip()
+
+            if safe_name not in existing_names:
+                # Preset doesn't exist, create it
                 try:
-                    filepath = os.path.join(system_folder, f"{template.name}.preset.json")
+                    filepath = os.path.join(system_folder, f"{safe_name}.preset.json")
                     with open(filepath, 'w', encoding='utf-8') as f:
                         json.dump(template.to_dict(), f, indent=2, ensure_ascii=False)
                     logger.info(f"Created system preset: {template.name}")
@@ -358,6 +367,56 @@ class PresetManager:
 
         except Exception as e:
             logger.error(f"Failed to load preset from '{filepath}': {e}")
+            return None
+
+    def load_preset_from_folder(self, name: str, folder: str) -> Optional[EditingPreset]:
+        """
+        Load preset from specific folder
+
+        Args:
+            name: Preset name
+            folder: Folder name (system/user/imported)
+
+        Returns:
+            EditingPreset or None if not found
+        """
+        # Check cache first with folder-specific key
+        cache_key = f"{folder}/{name}"
+        if cache_key in self.presets_cache:
+            logger.info(f"Loaded preset from cache: {cache_key}")
+            return self.presets_cache[cache_key]
+
+        # Get folder path
+        if folder not in self.folders:
+            logger.warning(f"Unknown folder: {folder}")
+            return None
+
+        folder_path = self.folders[folder]
+
+        # Find preset file
+        safe_name = "".join(c for c in name if c.isalnum() or c in (' ', '-', '_')).rstrip()
+        filename = f"{safe_name}.preset.json"
+        filepath = os.path.join(folder_path, filename)
+
+        if not os.path.exists(filepath):
+            logger.warning(f"Preset not found: {name} in folder {folder}")
+            return None
+
+        # Load from file
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            preset = EditingPreset.from_dict(data)
+
+            # Cache it with folder-specific key
+            self.presets_cache[cache_key] = preset
+
+            logger.info(f"Preset loaded: {filepath}")
+            return preset
+
+        except Exception as e:
+            logger.error(f"Failed to load preset '{name}' from folder '{folder}': {e}")
             return None
 
     def list_presets(self, folder: str = None) -> List[Dict[str, Any]]:
@@ -508,6 +567,9 @@ class PresetManager:
                 if progress_callback:
                     progress_callback(f"Applying {op_name}... ({i+1}/{len(preset.operations)})")
 
+                logger.info(f"   Applying operation: {op_name}")
+                logger.info(f"   Operation params: {params}")
+
                 # Fix parameter names for specific operations
                 if op_name == 'crop':
                     # VideoEditor.crop() only accepts: x1, y1, x2, y2, preset
@@ -519,11 +581,22 @@ class PresetManager:
                     params.pop('height', None)
 
                 # Execute operation
-                if hasattr(editor, op_name):
-                    method = getattr(editor, op_name)
-                    method(**params)
-                else:
-                    logger.warning(f"Unknown operation: {op_name}")
+                try:
+                    if hasattr(editor, op_name):
+                        method = getattr(editor, op_name)
+                        logger.info(f"   Calling {op_name} with params...")
+                        method(**params)
+                        logger.info(f"   ✅ {op_name} completed successfully")
+                    else:
+                        logger.warning(f"Unknown operation: {op_name}")
+                        if progress_callback:
+                            progress_callback(f"⚠️  Unknown operation: {op_name}")
+                except Exception as op_error:
+                    logger.error(f"   ❌ Operation '{op_name}' failed: {op_error}", exc_info=True)
+                    if progress_callback:
+                        progress_callback(f"❌ Operation '{op_name}' failed: {op_error}")
+                    # Re-raise to trigger fallback
+                    raise
 
             # Export
             if progress_callback:
@@ -834,6 +907,31 @@ class PresetTemplates:
         preset.tags = ['vintage', 'retro', 'artistic']
         return preset
 
+    @staticmethod
+    def dual_video():
+        """Dual Video preset - merge two videos side-by-side"""
+        preset = EditingPreset(
+            "Dual Video",
+            "Merge two videos side-by-side with intelligent length matching. "
+            "Primary video (60%) with audio, secondary video (40%) muted. "
+            "Both videos zoomed 110% with seamless divider.",
+            author="System",
+            category=EditingPreset.CATEGORY_VIDEO
+        )
+        # Note: secondary_video_path will be provided by user at runtime
+        preset.add_operation('dual_video_merge', {
+            'secondary_video_path': '',  # User will specify this
+            'primary_position': 'right',  # Primary on right, secondary on left
+            'zoom_factor': 1.1,  # 110% zoom
+            'primary_width_ratio': 0.6,  # 60-40 split
+            'divider_width': 2,  # 2px divider line
+            'divider_color': 'black',  # Seamless black divider
+            'audio_source': 'primary'  # Only primary audio
+        })
+        preset.tags = ['dual', 'split-screen', 'merge', 'side-by-side']
+        preset.export_settings['quality'] = 'high'
+        return preset
+
     @classmethod
     def get_all_templates(cls) -> List[EditingPreset]:
         """Get all available templates"""
@@ -842,5 +940,6 @@ class PresetTemplates:
             cls.instagram_reels(),
             cls.youtube_shorts(),
             cls.cinematic(),
-            cls.vintage()
+            cls.vintage(),
+            cls.dual_video()
         ]

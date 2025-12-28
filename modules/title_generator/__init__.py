@@ -8,15 +8,14 @@ SMART MODE DETECTION:
 - Basic Mode: Standard title generation (works without models)
 
 AI Models can be placed in:
-- C:\AI_Models\
-- Desktop\AI_Models\
-- App directory\models\
+- C:\\AI_Models\\
+- Desktop\\AI_Models\\
+- App directory\\models\\
 """
 
 from modules.logging.logger import get_logger
 
-# Always available (core components)
-from .dialog import TitleGeneratorDialog
+# Import core components (NOT dialog yet - to avoid circular import)
 from .api_manager import APIKeyManager
 from .generator import TitleGenerator  # Basic generator (no models needed)
 from .model_finder import ModelFinder, get_model_finder
@@ -87,6 +86,8 @@ __all__ = [
     'TitleGenerator',
     'ModelFinder',
     'get_model_finder',
+    'get_generator',
+    'show_model_instructions',
     'ENHANCED_MODE',
     'models_available'
 ]
@@ -122,3 +123,8 @@ def get_generator(prefer_enhanced: bool = True):
 def show_model_instructions():
     """Display model download instructions"""
     print(model_finder.get_download_instructions())
+
+
+# Import dialog AFTER defining ENHANCED_MODE, models_available, get_generator
+# This prevents circular import since dialog.py imports from this module
+from .dialog import TitleGeneratorDialog

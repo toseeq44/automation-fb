@@ -207,22 +207,62 @@ class TitleGeneratorDialog(QDialog):
             details.setStyleSheet("padding: 10px; background-color: #fff3cd; border-radius: 5px; color: #856404;")
             mode_layout.addWidget(details)
 
-            # Add setup button
-            setup_btn = QPushButton("📥 Install AI Features (Click for Instructions)")
-            setup_btn.setStyleSheet("""
+            # Auto-install button (primary action)
+            auto_install_btn = QPushButton("🚀 AUTO-INSTALL AI Packages (One-Click Setup)")
+            auto_install_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #28a745;
+                    color: white;
+                    font-weight: bold;
+                    font-size: 12pt;
+                    padding: 15px;
+                    border-radius: 5px;
+                }
+                QPushButton:hover {
+                    background-color: #218838;
+                }
+            """)
+            auto_install_btn.clicked.connect(self.auto_install_packages)
+            mode_layout.addWidget(auto_install_btn)
+
+            # Alternative options layout
+            alt_layout = QHBoxLayout()
+
+            # Manual folder selection
+            folder_btn = QPushButton("📂 Select Model Folder (Manual Install)")
+            folder_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #6c757d;
+                    color: white;
+                    font-weight: bold;
+                    padding: 8px;
+                    border-radius: 5px;
+                }
+                QPushButton:hover {
+                    background-color: #5a6268;
+                }
+            """)
+            folder_btn.clicked.connect(self.select_model_folder)
+            alt_layout.addWidget(folder_btn)
+
+            # Instructions button
+            instructions_btn = QPushButton("📖 Manual Setup Guide")
+            instructions_btn.setStyleSheet("""
                 QPushButton {
                     background-color: #007bff;
                     color: white;
                     font-weight: bold;
-                    padding: 10px;
+                    padding: 8px;
                     border-radius: 5px;
                 }
                 QPushButton:hover {
                     background-color: #0056b3;
                 }
             """)
-            setup_btn.clicked.connect(self.show_download_instructions)
-            mode_layout.addWidget(setup_btn)
+            instructions_btn.clicked.connect(self.show_download_instructions)
+            alt_layout.addWidget(instructions_btn)
+
+            mode_layout.addLayout(alt_layout)
 
         mode_group.setLayout(mode_layout)
         layout.addWidget(mode_group)
@@ -544,6 +584,142 @@ To unlock multilingual content analysis and AI-powered titles:
         msg.setInformativeText(instructions)
         msg.setStandardButtons(QMessageBox.Ok)
         msg.exec_()
+
+    def auto_install_packages(self):
+        """Auto-install AI packages with progress tracking"""
+        from .model_finder import get_model_finder
+        from PyQt5.QtCore import QThread
+
+        # Confirm with user
+        reply = QMessageBox.question(
+            self,
+            "Auto-Install AI Packages",
+            "This will automatically install:\n\n"
+            "• openai-whisper (~500MB)\n"
+            "• transformers (~500MB)\n"
+            "• torch (~2GB)\n\n"
+            "Total download: ~2-4GB\n"
+            "Time: 10-15 minutes\n\n"
+            "Continue?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+
+        if reply != QMessageBox.Yes:
+            return
+
+        # Create progress dialog
+        progress_dialog = QMessageBox(self)
+        progress_dialog.setWindowTitle("Installing AI Packages")
+        progress_dialog.setIcon(QMessageBox.Information)
+        progress_dialog.setText("Installing AI packages...")
+        progress_dialog.setInformativeText("Please wait, this may take 10-15 minutes...")
+        progress_dialog.setStandardButtons(QMessageBox.NoButton)
+        progress_dialog.show()
+
+        # Install in background thread
+        class InstallThread(QThread):
+            def __init__(self, parent_dialog):
+                super().__init__()
+                self.parent_dialog = parent_dialog
+                self.result = None
+
+            def run(self):
+                def progress_callback(msg):
+                    self.parent_dialog.setInformativeText(msg)
+
+                model_finder = get_model_finder()
+                self.result = model_finder.auto_install_packages(progress_callback)
+
+        install_thread = InstallThread(progress_dialog)
+        install_thread.finished.connect(lambda: self._on_install_complete(install_thread.result, progress_dialog))
+        install_thread.start()
+
+    def _on_install_complete(self, result, progress_dialog):
+        """Handle installation completion"""
+        progress_dialog.close()
+
+        if result['success']:
+            QMessageBox.information(
+                self,
+                "Success!",
+                "🎉 All packages installed successfully!\n\n"
+                "🔄 Please RESTART the application to enable Enhanced Mode.\n\n"
+                f"✅ Installed: {', '.join(result['installed'])}"
+            )
+        elif result['installed']:
+            QMessageBox.warning(
+                self,
+                "Partial Success",
+                f"⚠️  Some packages installed:\n\n"
+                f"✅ Installed: {', '.join(result['installed'])}\n"
+                f"❌ Failed: {', '.join(result['failed'])}\n\n"
+                f"Errors:\n{chr(10).join(result['errors'][:3])}"
+            )
+        else:
+            QMessageBox.critical(
+                self,
+                "Installation Failed",
+                "❌ No packages installed.\n\n"
+                "Please check:\n"
+                "• Internet connection\n"
+                "• Disk space (need 5GB+)\n"
+                "• Python/pip is working\n\n"
+                "Try manual installation:\n"
+                "pip install openai-whisper transformers torch"
+            )
+
+    def select_model_folder(self):
+        """Let user select folder where they manually installed models"""
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            "Select AI Models Folder",
+            str(Path.home()),
+            QFileDialog.ShowDirsOnly
+        )
+
+        if not folder:
+            return
+
+        folder_path = Path(folder)
+
+        # Check if folder contains models
+        has_whisper = (folder_path / "whisper").exists()
+        has_clip = (folder_path / "clip").exists()
+
+        if not has_whisper and not has_clip:
+            QMessageBox.warning(
+                self,
+                "No Models Found",
+                f"No AI models found in:\n{folder}\n\n"
+                "Expected structure:\n"
+                f"{folder}/\n"
+                "  ├── whisper/\n"
+                "  │   └── base.pt\n"
+                "  └── clip/\n"
+                "      └── vit-base-patch32/\n\n"
+                "Please select the correct folder or use Auto-Install."
+            )
+            return
+
+        # Save custom path
+        from .model_finder import get_model_finder
+        model_finder = get_model_finder()
+        model_finder.save_custom_path('custom', str(folder_path))
+
+        # Show success message
+        models_found = []
+        if has_whisper:
+            models_found.append("Whisper")
+        if has_clip:
+            models_found.append("CLIP")
+
+        QMessageBox.information(
+            self,
+            "Models Found!",
+            f"✅ Found models in:\n{folder}\n\n"
+            f"Models detected: {', '.join(models_found)}\n\n"
+            "🔄 Please RESTART the application to enable Enhanced Mode."
+        )
 
     def closeEvent(self, event):
         """Handle dialog close"""

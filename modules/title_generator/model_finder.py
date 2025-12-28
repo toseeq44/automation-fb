@@ -65,17 +65,46 @@ class ModelFinder:
 
     def find_models(self) -> Dict[str, bool]:
         """
-        Search for AI models in all standard locations
+        Search for AI models in all standard locations AND check pip installations
+
+        PRIORITY:
+        1. Check if packages are installed via pip (MOST COMMON)
+        2. Check for model files in custom directories (MANUAL INSTALL)
 
         Returns:
             Dict with model availability:
             {
                 'whisper': bool,
                 'clip': bool,
-                'base_path': str or None
+                'base_path': str or None,
+                'install_method': 'pip' or 'manual' or None
             }
         """
         logger.info("🔍 Searching for AI models...")
+
+        # PRIORITY 1: Check if packages are installed via pip
+        pip_whisper = self._check_pip_package('whisper')
+        pip_transformers = self._check_pip_package('transformers')
+        pip_torch = self._check_pip_package('torch')
+
+        if pip_whisper or pip_transformers:
+            logger.info("✅ Found AI packages installed via pip:")
+            if pip_whisper:
+                logger.info("   ✅ openai-whisper")
+            if pip_transformers:
+                logger.info("   ✅ transformers (CLIP)")
+            if pip_torch:
+                logger.info("   ✅ torch")
+
+            return {
+                'whisper': pip_whisper,
+                'clip': pip_transformers,  # CLIP requires transformers
+                'base_path': 'pip-installed',
+                'install_method': 'pip'
+            }
+
+        # PRIORITY 2: Check for manual installations in specific folders
+        logger.info("📂 Checking manual installation folders...")
 
         # Add custom paths to search
         search_paths = list(self.SEARCH_PATHS)
@@ -101,7 +130,8 @@ class ModelFinder:
                 self.models_found = {
                     'whisper': whisper_found,
                     'clip': clip_found,
-                    'base_path': str(search_path)
+                    'base_path': str(search_path),
+                    'install_method': 'manual'
                 }
 
                 logger.info(f"✅ Models found in: {search_path}")
@@ -121,8 +151,41 @@ class ModelFinder:
         return {
             'whisper': False,
             'clip': False,
-            'base_path': None
+            'base_path': None,
+            'install_method': None
         }
+
+    def _check_pip_package(self, package_name: str) -> bool:
+        """
+        Check if a Python package is installed via pip
+
+        Args:
+            package_name: Package to check ('whisper', 'transformers', 'torch')
+
+        Returns:
+            True if package can be imported, False otherwise
+        """
+        try:
+            if package_name == 'whisper':
+                import whisper
+                logger.debug(f"✅ Package 'whisper' is importable")
+                return True
+            elif package_name == 'transformers':
+                import transformers
+                logger.debug(f"✅ Package 'transformers' is importable")
+                return True
+            elif package_name == 'torch':
+                import torch
+                logger.debug(f"✅ Package 'torch' is importable")
+                return True
+            else:
+                return False
+        except ImportError:
+            logger.debug(f"❌ Package '{package_name}' not installed")
+            return False
+        except Exception as e:
+            logger.debug(f"❌ Error checking package '{package_name}': {e}")
+            return False
 
     def _check_whisper(self, base_path: Path) -> bool:
         """Check if Whisper models exist"""
@@ -301,6 +364,109 @@ Option 3: Application Folder
             json.dump(config, f, indent=2)
 
         logger.info(f"✅ Saved custom path for {model_type}: {path}")
+
+    def auto_install_packages(self, progress_callback=None) -> Dict[str, any]:
+        """
+        Automatically install AI packages via pip
+
+        Args:
+            progress_callback: Optional callback function(message: str) for progress updates
+
+        Returns:
+            Dict with installation results:
+            {
+                'success': bool,
+                'installed': List[str],
+                'failed': List[str],
+                'errors': List[str]
+            }
+        """
+        import subprocess
+        import sys
+
+        packages = [
+            ('openai-whisper', 'whisper'),
+            ('transformers', 'transformers'),
+            ('torch', 'torch')
+        ]
+
+        installed = []
+        failed = []
+        errors = []
+
+        def log_progress(msg):
+            if progress_callback:
+                progress_callback(msg)
+            logger.info(msg)
+
+        log_progress("🚀 Starting automatic package installation...")
+        log_progress("This may take 10-15 minutes (downloading ~2-4GB)")
+        log_progress("")
+
+        for pip_name, import_name in packages:
+            try:
+                log_progress(f"📥 Installing {pip_name}...")
+
+                # Run pip install
+                result = subprocess.run(
+                    [sys.executable, '-m', 'pip', 'install', pip_name],
+                    capture_output=True,
+                    text=True,
+                    timeout=600  # 10 minute timeout per package
+                )
+
+                if result.returncode == 0:
+                    log_progress(f"   ✅ {pip_name} installed successfully")
+                    installed.append(pip_name)
+                else:
+                    error_msg = result.stderr[:200] if result.stderr else "Unknown error"
+                    log_progress(f"   ❌ {pip_name} installation failed: {error_msg}")
+                    failed.append(pip_name)
+                    errors.append(error_msg)
+
+            except subprocess.TimeoutExpired:
+                error_msg = f"Installation timeout (>10 minutes)"
+                log_progress(f"   ❌ {pip_name}: {error_msg}")
+                failed.append(pip_name)
+                errors.append(error_msg)
+
+            except Exception as e:
+                error_msg = str(e)
+                log_progress(f"   ❌ {pip_name}: {error_msg}")
+                failed.append(pip_name)
+                errors.append(error_msg)
+
+        log_progress("")
+        log_progress("=" * 60)
+
+        if len(installed) == len(packages):
+            log_progress("🎉 SUCCESS! All packages installed")
+            log_progress("🔄 Please RESTART the application to enable Enhanced Mode")
+            return {
+                'success': True,
+                'installed': installed,
+                'failed': [],
+                'errors': []
+            }
+        elif installed:
+            log_progress(f"⚠️  Partial success: {len(installed)}/{len(packages)} installed")
+            log_progress(f"   ✅ Installed: {', '.join(installed)}")
+            log_progress(f"   ❌ Failed: {', '.join(failed)}")
+            return {
+                'success': False,
+                'installed': installed,
+                'failed': failed,
+                'errors': errors
+            }
+        else:
+            log_progress("❌ FAILED: No packages installed")
+            log_progress("Please check your internet connection and try manual installation")
+            return {
+                'success': False,
+                'installed': [],
+                'failed': failed,
+                'errors': errors
+            }
 
 
 # Global model finder instance

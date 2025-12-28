@@ -16,6 +16,30 @@ class ContentAggregator:
     Produces unified content understanding for title generation
     """
 
+    # Language code to name mapping
+    LANGUAGE_NAMES = {
+        'en': 'English',
+        'pt': 'Portuguese',
+        'fr': 'French',
+        'es': 'Spanish',
+        'ur': 'Urdu',
+        'hi': 'Hindi',
+        'ar': 'Arabic',
+        'de': 'German',
+        'it': 'Italian',
+        'ja': 'Japanese',
+        'ko': 'Korean',
+        'zh': 'Chinese',
+        'ru': 'Russian',
+        'tr': 'Turkish',
+        'nl': 'Dutch',
+        'pl': 'Polish',
+        'sv': 'Swedish',
+        'da': 'Danish',
+        'fi': 'Finnish',
+        'no': 'Norwegian'
+    }
+
     def __init__(self):
         """Initialize content aggregator"""
         pass
@@ -39,7 +63,8 @@ class ContentAggregator:
         Returns:
             Aggregated content dict with:
             {
-                'language': str,              # Final detected language
+                'language': str,              # Final detected language (ISO code)
+                'language_name': str,         # Human-readable language name
                 'language_confidence': float, # Confidence in language detection
                 'niche': str,                 # Final video niche
                 'niche_confidence': float,    # Confidence in niche detection
@@ -81,8 +106,10 @@ class ContentAggregator:
         platform = self._determine_platform(metadata, niche_result['niche'])
 
         # Build aggregated result
+        lang_code = language_result['language']
         aggregated = {
-            'language': language_result['language'],
+            'language': lang_code,
+            'language_name': self.LANGUAGE_NAMES.get(lang_code, lang_code.upper()),
             'language_confidence': language_result['confidence'],
             'language_source': language_result['source'],
 

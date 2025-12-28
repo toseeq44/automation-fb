@@ -6,15 +6,17 @@ User interface for video title generation
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QFileDialog, QProgressBar,
                              QTextEdit, QCheckBox, QMessageBox, QGroupBox,
-                             QComboBox)
+                             QComboBox, QTextBrowser)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QFont
 from pathlib import Path
 from modules.logging.logger import get_logger
 from .api_manager import APIKeyManager
 from .scanner import VideoScanner
-from .enhanced_generator import EnhancedTitleGenerator
 from .renamer import VideoRenamer
+
+# Import with smart detection
+from . import ENHANCED_MODE, get_generator, show_model_instructions, models_available
 
 logger = get_logger(__name__)
 
@@ -50,18 +52,30 @@ class ProcessingThread(QThread):
             self.analysis_update.emit(f"{'='*60}")
 
             try:
-                # Phase updates
-                self.analysis_update.emit("🎙️  Phase 1: Audio analysis (language detection)...")
-                self.analysis_update.emit("👁️  Phase 2: Visual analysis (objects, scenes)...")
-                self.analysis_update.emit("📝 Phase 3: Text extraction (OCR)...")
-                self.analysis_update.emit("🔄 Phase 4: Content aggregation...")
+                # Phase updates (only for enhanced mode)
+                import inspect
+                sig = inspect.signature(self.generator.generate_title)
+                is_enhanced = 'platform' in sig.parameters
 
-                # Generate title with enhanced generator
-                new_title = self.generator.generate_title(
-                    video_info,
-                    platform=self.platform,
-                    enable_ai=True
-                )
+                if is_enhanced:
+                    self.analysis_update.emit("🎙️  Phase 1: Audio analysis (language detection)...")
+                    self.analysis_update.emit("👁️  Phase 2: Visual analysis (objects, scenes)...")
+                    self.analysis_update.emit("📝 Phase 3: Text extraction (OCR)...")
+                    self.analysis_update.emit("🔄 Phase 4: Content aggregation...")
+                else:
+                    self.analysis_update.emit("📝 Generating title from filename...")
+
+                # Generate title
+                if is_enhanced:
+                    # Enhanced generator with platform optimization
+                    new_title = self.generator.generate_title(
+                        video_info,
+                        platform=self.platform,
+                        enable_ai=True
+                    )
+                else:
+                    # Basic generator
+                    new_title = self.generator.generate_title(video_info)
 
                 self.analysis_update.emit(f"✨ Generated Title: {new_title}")
 
@@ -103,14 +117,14 @@ class TitleGeneratorDialog(QDialog):
         self.api_manager = APIKeyManager()
         self.scanner = VideoScanner()
 
-        # Use enhanced generator with multilingual support
-        logger.info("Initializing Enhanced Title Generator...")
-        self.generator = EnhancedTitleGenerator(model_size='base')
+        # Smart generator selection (auto-detects models)
+        self.generator = get_generator(prefer_enhanced=True)
         self.renamer = VideoRenamer()
 
         self.videos = []
         self.processing_thread = None
         self.selected_platform = 'facebook'  # Default platform
+        self.enhanced_mode = ENHANCED_MODE
 
         self.setup_ui()
 
@@ -130,6 +144,40 @@ class TitleGeneratorDialog(QDialog):
         title_font.setBold(True)
         title.setFont(title_font)
         layout.addWidget(title)
+
+        # Mode indicator
+        mode_group = QGroupBox("Current Mode")
+        mode_layout = QVBoxLayout()
+
+        if self.enhanced_mode:
+            mode_label = QLabel("🚀 Enhanced Mode - AI Powered")
+            mode_label.setStyleSheet("color: green; font-weight: bold; font-size: 12pt;")
+            mode_layout.addWidget(mode_label)
+
+            details_text = f"✅ Models found in: {models_available.get('base_path', 'N/A')}"
+            if models_available.get('whisper'):
+                details_text += "\n✅ Audio Analysis (Whisper)"
+            if models_available.get('clip'):
+                details_text += "\n✅ Visual Analysis (CLIP)"
+            details_text += "\n✅ Multilingual Support (7+ languages)"
+
+            details = QLabel(details_text)
+            mode_layout.addWidget(details)
+        else:
+            mode_label = QLabel("⚡ Basic Mode")
+            mode_label.setStyleSheet("color: orange; font-weight: bold; font-size: 12pt;")
+            mode_layout.addWidget(mode_label)
+
+            details = QLabel("ℹ️  AI models not found - using basic title generation")
+            mode_layout.addWidget(details)
+
+            # Add download button
+            download_btn = QPushButton("📥 Download AI Models Instructions")
+            download_btn.clicked.connect(self.show_download_instructions)
+            mode_layout.addWidget(download_btn)
+
+        mode_group.setLayout(mode_layout)
+        layout.addWidget(mode_group)
 
         # Folder selection group
         folder_group = QGroupBox("Folder Selection")
@@ -154,26 +202,27 @@ class TitleGeneratorDialog(QDialog):
         folder_group.setLayout(folder_layout)
         layout.addWidget(folder_group)
 
-        # Platform selection group
-        platform_group = QGroupBox("Platform Optimization")
-        platform_layout = QHBoxLayout()
+        # Platform selection group (only in enhanced mode)
+        if self.enhanced_mode:
+            platform_group = QGroupBox("Platform Optimization")
+            platform_layout = QHBoxLayout()
 
-        platform_label = QLabel("Target Platform:")
-        platform_layout.addWidget(platform_label)
+            platform_label = QLabel("Target Platform:")
+            platform_layout.addWidget(platform_label)
 
-        self.platform_combo = QComboBox()
-        self.platform_combo.addItems([
-            "📘 Facebook (255 chars)",
-            "📱 TikTok (150 chars)",
-            "📷 Instagram (125 chars)",
-            "▶️ YouTube (100 chars)"
-        ])
-        self.platform_combo.currentIndexChanged.connect(self.on_platform_changed)
-        platform_layout.addWidget(self.platform_combo)
-        platform_layout.addStretch()
+            self.platform_combo = QComboBox()
+            self.platform_combo.addItems([
+                "📘 Facebook (255 chars)",
+                "📱 TikTok (150 chars)",
+                "📷 Instagram (125 chars)",
+                "▶️ YouTube (100 chars)"
+            ])
+            self.platform_combo.currentIndexChanged.connect(self.on_platform_changed)
+            platform_layout.addWidget(self.platform_combo)
+            platform_layout.addStretch()
 
-        platform_group.setLayout(platform_layout)
-        layout.addWidget(platform_group)
+            platform_group.setLayout(platform_layout)
+            layout.addWidget(platform_group)
 
         # Video count label
         self.video_count_label = QLabel("Videos found: 0")
@@ -356,6 +405,49 @@ class TitleGeneratorDialog(QDialog):
         self.log_text.verticalScrollBar().setValue(
             self.log_text.verticalScrollBar().maximum()
         )
+
+    def show_download_instructions(self):
+        """Show model download instructions"""
+        instructions = """
+🚀 ENABLE ENHANCED AI-POWERED FEATURES
+
+To unlock multilingual content analysis and AI-powered titles:
+
+📥 STEP 1: Download AI Models
+   • Whisper (Audio Analysis):
+     https://github.com/openai/whisper (Use 'base' model recommended)
+   • CLIP (Visual Analysis):
+     Automatically downloaded on first use
+
+📂 STEP 2: Place Models in One of These Locations
+   1. C:\\AI_Models\\
+   2. Desktop\\AI_Models\\
+   3. [App Directory]\\models\\
+
+   Create the folder if it doesn't exist!
+
+🔄 STEP 3: Restart Application
+   The app will auto-detect models and enable Enhanced Mode
+
+✨ ENHANCED FEATURES YOU'LL GET:
+   ✅ Audio transcription + language detection (20+ languages)
+   ✅ Visual object and scene detection
+   ✅ Content-aware title generation
+   ✅ Multilingual support (English, Portuguese, French, Spanish, Urdu, Hindi, Arabic)
+   ✅ Platform optimization (Facebook/TikTok/Instagram/YouTube)
+   ✅ Niche-specific templates (Cooking, Gaming, Reviews, etc.)
+
+📝 For detailed setup instructions, see:
+   modules/title_generator/README.md
+        """
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Download AI Models")
+        msg.setIcon(QMessageBox.Information)
+        msg.setText("Enable Enhanced AI Features")
+        msg.setInformativeText(instructions)
+        msg.setStandardButtons(QMessageBox.Ok)
+        msg.exec_()
 
     def closeEvent(self, event):
         """Handle dialog close"""

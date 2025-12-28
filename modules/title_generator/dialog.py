@@ -142,7 +142,9 @@ class TitleGeneratorDialog(QDialog):
 
         # Show warning if basic mode
         if not self.enhanced_mode:
-            self._show_basic_mode_warning()
+            dll_error = self._check_for_dll_error()
+            if not dll_error:  # Only show basic warning if not DLL error
+                self._show_basic_mode_warning()
 
     def setup_ui(self):
         """Setup UI components"""
@@ -493,6 +495,56 @@ class TitleGeneratorDialog(QDialog):
         self.log_text.verticalScrollBar().setValue(
             self.log_text.verticalScrollBar().maximum()
         )
+
+    def _check_for_dll_error(self) -> bool:
+        """Check if basic mode is due to DLL error and show specific fix"""
+        # Try to detect DLL error by attempting torch import
+        try:
+            import torch
+            return False  # No DLL error
+        except OSError as e:
+            if "DLL" in str(e) or "1114" in str(e):
+                # DLL error detected - show specific fix
+                msg = QMessageBox(self)
+                msg.setWindowTitle("🔧 PyTorch DLL Error")
+                msg.setIcon(QMessageBox.Critical)
+                msg.setText("⚠️  AI Packages Installed But Cannot Load")
+
+                fix_text = """
+<b>Problem Detected:</b> PyTorch DLL initialization failed<br>
+<font color="red">Error: Microsoft Visual C++ Redistributables missing or outdated</font>
+
+<hr>
+
+<b><font color="green">🔧 QUICK FIX (Choose One):</font></b>
+
+<b>Option 1: Install Visual C++ Redistributables (Recommended)</b><br>
+1. Download from: <a href="https://aka.ms/vs/17/release/vc_redist.x64.exe">https://aka.ms/vs/17/release/vc_redist.x64.exe</a><br>
+2. Run the installer<br>
+3. Restart this application<br>
+<br>
+
+<b>Option 2: Use CPU-Only PyTorch (Smaller, No Dependencies)</b><br>
+1. Open Command Prompt / Terminal<br>
+2. Run: <code>pip uninstall torch</code><br>
+3. Run: <code>pip install torch --index-url https://download.pytorch.org/whl/cpu</code><br>
+4. Restart this application<br>
+
+<hr>
+
+<b>After fixing, Enhanced Mode will activate automatically!</b>
+                """
+
+                msg.setInformativeText(fix_text)
+                msg.setTextFormat(Qt.RichText)
+                msg.setStandardButtons(QMessageBox.Ok)
+                msg.exec_()
+                return True  # DLL error detected
+            return False
+        except ImportError:
+            return False  # Not installed
+        except Exception:
+            return False  # Other error
 
     def _show_basic_mode_warning(self):
         """Show warning that basic mode is active (one-time popup)"""

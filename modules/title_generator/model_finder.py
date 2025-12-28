@@ -180,8 +180,24 @@ class ModelFinder:
                 return True
             else:
                 return False
-        except ImportError:
-            logger.debug(f"❌ Package '{package_name}' not installed")
+        except ImportError as e:
+            logger.debug(f"❌ Package '{package_name}' not installed: {e}")
+            return False
+        except OSError as e:
+            # Common Windows DLL error (PyTorch)
+            if "DLL" in str(e) or "1114" in str(e):
+                logger.warning(f"⚠️  DLL Error loading '{package_name}'")
+                logger.warning(f"")
+                logger.warning(f"🔧 QUICK FIX Required:")
+                logger.warning(f"   Option 1: Install Visual C++ Redistributables")
+                logger.warning(f"   Download: https://aka.ms/vs/17/release/vc_redist.x64.exe")
+                logger.warning(f"")
+                logger.warning(f"   Option 2: Reinstall PyTorch (CPU-only)")
+                logger.warning(f"   pip uninstall torch")
+                logger.warning(f"   pip install torch --index-url https://download.pytorch.org/whl/cpu")
+                logger.warning(f"")
+            else:
+                logger.error(f"❌ OS Error checking package '{package_name}': {e}")
             return False
         except Exception as e:
             logger.debug(f"❌ Error checking package '{package_name}': {e}")

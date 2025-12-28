@@ -356,53 +356,67 @@ class EnhancedTitleGenerator:
             niche = aggregated.get('niche', 'general')
             platform_limit = self.templates.get_platform_limit(platform)
 
-            # Get content context
-            transcription = aggregated.get('transcription', '')[:200]  # First 200 chars
+            # Get comprehensive content context
+            transcription = aggregated.get('transcription', '')[:300]  # More context
             objects = ', '.join(aggregated.get('objects', [])[:10])
-            keywords = ', '.join(aggregated.get('keywords', [])[:15])
+            keywords = ', '.join(aggregated.get('keywords', [])[:20])
+            ocr_texts = aggregated.get('ocr_text', [])
+            ocr_summary = ', '.join(ocr_texts[:10]) if ocr_texts else "No text found"
+            actions = ', '.join(aggregated.get('actions', []))
 
-            prompt = f"""You are an expert in creating viral {platform.upper()} titles in {language_name}.
+            prompt = f"""You are an EXPERT in creating viral {platform.upper()} titles that accurately reflect video content.
 
-VIDEO CONTENT ANALYSIS:
-- Language: {language_name}
-- Niche: {niche}
-- Platform: {platform.upper()}
-
-Audio Transcription:
-{transcription if transcription else "No speech detected"}
-
-Visual Objects Detected:
-{objects if objects else "No objects detected"}
-
-Keywords:
-{keywords if keywords else "No keywords extracted"}
-
-Has Person: {aggregated.get('has_person', False)}
-Duration: {aggregated.get('time', 'Unknown')}
-Scene: {aggregated.get('where', 'Unknown')}
-
-TITLE VARIANTS:
-{chr(10).join(f"{i+1}. {title}" for i, title in enumerate(variants))}
-
-YOUR TASK:
-1. Analyze the video content (what's ACTUALLY happening in the video)
-2. Select the BEST variant OR create a better content-accurate title
-3. The title MUST be in {language_name} language ONLY
-4. Make it engaging, clickable, and SEO-friendly for {platform.upper()}
+🎯 CRITICAL RULES:
+1. CREATE content-accurate title based on ACTUAL video analysis below
+2. Use the REAL content (transcription, objects, text) - NOT generic words
+3. ONLY mention duration/time if it's central to the video's value proposition
+4. Title MUST be in {language_name} language ONLY
 5. Character limit: {platform_limit} characters (STRICT)
-6. Must reflect ACTUAL video content
-7. NO generic words like "video", "content", "clip"
-8. Use power words appropriate for {language_name}
-9. NO invalid filename characters (/ \\ : * ? " < > |)
-10. Return ONLY the final title in {language_name}, nothing else
+6. NO generic words: "video", "content", "clip", "amazing", "insane" (unless in actual content)
+7. NO invalid filename characters: / \\ : * ? " < > |
 
-EXAMPLES OF GREAT {platform.upper()} TITLES:
-- Specific and content-accurate
-- Engaging and clickable
-- Natural in {language_name}
-- Platform-optimized
+📊 ACTUAL VIDEO CONTENT ANALYSIS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Return the BEST title:"""
+🎙️ AUDIO (What people are saying):
+{transcription if transcription else "❌ No speech detected - video likely has background music or is silent"}
+
+👁️ VISUAL (What's shown on screen):
+Objects: {objects if objects else "No specific objects detected"}
+Actions: {actions if actions else "No clear actions detected"}
+Scene: {aggregated.get('where', 'Unknown')}
+Has Person: {"✅ Yes" if aggregated.get('has_person', False) else "❌ No"}
+
+📝 ON-SCREEN TEXT (OCR extracted):
+{ocr_summary}
+
+⏱️ Duration: {aggregated.get('time', 'Unknown')}
+📂 Niche: {niche}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+💡 TEMPLATE SUGGESTIONS (use as inspiration, BUT prioritize actual content):
+{chr(10).join(f"   {i+1}. {title}" for i, title in enumerate(variants[:3]))}
+
+🎯 YOUR TASK:
+Based on the ACTUAL content above (transcription + visuals + text), create the BEST title that:
+
+✅ DO:
+- Describe what's ACTUALLY in the video (use transcription, objects, text)
+- Use specific terms from the content analysis
+- Make it engaging and clickable for {platform.upper()}
+- Only mention time/duration if it's a key selling point (e.g., "10-second life hack")
+- Use {language_name} naturally and idiomatically
+- Use power words appropriate for {language_name} and {niche}
+
+❌ DON'T:
+- Use generic phrases like "Amazing Content", "This Video", "Watch This"
+- Force duration into title if content is more important
+- Use English if target language is {language_name}
+- Exceed {platform_limit} characters
+- Include filename-invalid characters
+
+Return ONLY the final title, nothing else:
 
             logger.info("🤖 Sending to Groq AI for refinement...")
 

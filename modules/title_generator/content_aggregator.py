@@ -520,26 +520,33 @@ class ContentAggregator:
         """
         Determine content type for template selection
 
+        NOTE: Prefers 'tutorial' or 'viral' over 'speed' to avoid forcing
+        time/duration into titles when it's not contextually relevant.
+
         Returns: 'speed', 'tutorial', 'viral', 'challenge', etc.
         """
         duration = metadata.get('duration', 0)
+        what = elements.get('what', '').lower()
+        result = elements.get('result', '').lower()
+        difficulty = elements.get('difficulty', '').lower()
 
-        # Speed type for short videos
-        if 0 < duration <= 60:
-            return 'speed'
-
-        # Tutorial type if no specific result
-        if not elements.get('result'):
-            return 'tutorial'
-
-        # Viral type if shocking result
-        if elements.get('result', '').lower() in ['shocking', 'amazing', 'unbelievable']:
+        # Viral type if shocking/engaging result (HIGH PRIORITY)
+        if result in ['shocking', 'amazing', 'unbelievable', 'insane', 'crazy', 'incredible']:
             return 'viral'
 
-        # Challenge type if difficult
-        if elements.get('difficulty', '').lower() in ['hard', 'impossible', 'difficult']:
+        # Challenge type if difficult (PRIORITY 2)
+        if difficulty in ['hard', 'impossible', 'difficult', 'extreme']:
             return 'challenge'
 
+        # Speed type ONLY if video is short AND explicitly about speed/time
+        # (Don't force time into every short video!)
+        if 0 < duration <= 30:
+            # Check if content is actually ABOUT speed/quickness
+            speed_indicators = ['quick', 'fast', 'seconds', 'minutes', 'speed', 'rapid', 'instant']
+            if any(indicator in what for indicator in speed_indicators):
+                return 'speed'
+
+        # Default to tutorial (most versatile, doesn't force TIME)
         return 'tutorial'
 
     def _combine_keywords(self, audio: Dict, frame: Dict) -> List[str]:

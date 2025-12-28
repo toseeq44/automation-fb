@@ -126,7 +126,23 @@ class TitleGeneratorDialog(QDialog):
         self.selected_platform = 'facebook'  # Default platform
         self.enhanced_mode = ENHANCED_MODE
 
+        # LOG WHICH MODE IS ACTIVE
+        logger.info("=" * 70)
+        if self.enhanced_mode:
+            logger.info("🚀 TITLE GENERATOR: ENHANCED MODE ACTIVE")
+            logger.info(f"📂 AI Models location: {models_available.get('base_path')}")
+            logger.info("✅ Content-aware, multilingual title generation enabled")
+        else:
+            logger.warning("⚠️  TITLE GENERATOR: BASIC MODE (Limited Features)")
+            logger.warning("❌ AI models NOT found - using fallback title generation")
+            logger.warning("📥 Download Whisper + CLIP to enable enhanced features")
+        logger.info("=" * 70)
+
         self.setup_ui()
+
+        # Show warning if basic mode
+        if not self.enhanced_mode:
+            self._show_basic_mode_warning()
 
     def setup_ui(self):
         """Setup UI components"""
@@ -145,36 +161,68 @@ class TitleGeneratorDialog(QDialog):
         title.setFont(title_font)
         layout.addWidget(title)
 
-        # Mode indicator
-        mode_group = QGroupBox("Current Mode")
+        # Mode indicator (PROMINENT)
+        mode_group = QGroupBox("⚙️  Generator Mode")
         mode_layout = QVBoxLayout()
 
         if self.enhanced_mode:
-            mode_label = QLabel("🚀 Enhanced Mode - AI Powered")
-            mode_label.setStyleSheet("color: green; font-weight: bold; font-size: 12pt;")
+            mode_label = QLabel("✅ ENHANCED MODE - FULL AI FEATURES")
+            mode_label.setStyleSheet("""
+                color: white;
+                background-color: #28a745;
+                font-weight: bold;
+                font-size: 14pt;
+                padding: 10px;
+                border-radius: 5px;
+            """)
+            mode_label.setAlignment(Qt.AlignCenter)
             mode_layout.addWidget(mode_label)
 
-            details_text = f"✅ Models found in: {models_available.get('base_path', 'N/A')}"
-            if models_available.get('whisper'):
-                details_text += "\n✅ Audio Analysis (Whisper)"
-            if models_available.get('clip'):
-                details_text += "\n✅ Visual Analysis (CLIP)"
-            details_text += "\n✅ Multilingual Support (7+ languages)"
+            details_text = "🎙️  Audio Analysis + Language Detection\n"
+            details_text += "👁️  Visual Content Analysis\n"
+            details_text += "🌐 Multilingual Support (7+ languages)\n"
+            details_text += "🎯 Content-Aware Title Generation"
 
             details = QLabel(details_text)
+            details.setStyleSheet("padding: 10px; background-color: #e8f5e9; border-radius: 5px;")
             mode_layout.addWidget(details)
         else:
-            mode_label = QLabel("⚡ Basic Mode")
-            mode_label.setStyleSheet("color: orange; font-weight: bold; font-size: 12pt;")
+            mode_label = QLabel("🔴 BASIC MODE - LIMITED FEATURES")
+            mode_label.setStyleSheet("""
+                color: white;
+                background-color: #dc3545;
+                font-weight: bold;
+                font-size: 14pt;
+                padding: 10px;
+                border-radius: 5px;
+            """)
+            mode_label.setAlignment(Qt.AlignCenter)
             mode_layout.addWidget(mode_label)
 
-            details = QLabel("ℹ️  AI models not found - using basic title generation")
+            warning_text = "⚠️  AI packages not installed\n"
+            warning_text += "❌ No audio/visual analysis\n"
+            warning_text += "❌ Generic titles only (OCR-based)"
+
+            details = QLabel(warning_text)
+            details.setStyleSheet("padding: 10px; background-color: #fff3cd; border-radius: 5px; color: #856404;")
             mode_layout.addWidget(details)
 
-            # Add download button
-            download_btn = QPushButton("📥 Download AI Models Instructions")
-            download_btn.clicked.connect(self.show_download_instructions)
-            mode_layout.addWidget(download_btn)
+            # Add setup button
+            setup_btn = QPushButton("📥 Install AI Features (Click for Instructions)")
+            setup_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #007bff;
+                    color: white;
+                    font-weight: bold;
+                    padding: 10px;
+                    border-radius: 5px;
+                }
+                QPushButton:hover {
+                    background-color: #0056b3;
+                }
+            """)
+            setup_btn.clicked.connect(self.show_download_instructions)
+            mode_layout.addWidget(setup_btn)
 
         mode_group.setLayout(mode_layout)
         layout.addWidget(mode_group)
@@ -406,6 +454,55 @@ class TitleGeneratorDialog(QDialog):
             self.log_text.verticalScrollBar().maximum()
         )
 
+    def _show_basic_mode_warning(self):
+        """Show warning that basic mode is active (one-time popup)"""
+        msg = QMessageBox(self)
+        msg.setWindowTitle("⚠️  Basic Mode Active")
+        msg.setIcon(QMessageBox.Warning)
+        msg.setText("🔴 LIMITED FEATURES - AI Models Not Found")
+
+        warning_text = """
+<b>Currently running in BASIC MODE with limited features:</b>
+
+<font color="red">❌ NO audio analysis (language detection)</font><br>
+<font color="red">❌ NO visual content analysis</font><br>
+<font color="red">❌ NO multilingual support</font><br>
+<font color="red">❌ Generic titles only (OCR-based)</font>
+
+<hr>
+
+<b><font color="green">To enable ENHANCED AI-POWERED features:</font></b>
+
+<b>1. Install Required Python Packages:</b><br>
+&nbsp;&nbsp;&nbsp;<code>pip install openai-whisper transformers torch</code>
+
+<b>2. Download AI Models:</b><br>
+&nbsp;&nbsp;&nbsp;• Whisper: Auto-downloads on first use<br>
+&nbsp;&nbsp;&nbsp;• CLIP: Auto-downloads on first use
+
+<b>3. Restart Application</b>
+
+<hr>
+
+<b><font color="blue">Enhanced features you'll unlock:</font></b>
+✅ Audio transcription + language detection (20+ languages)<br>
+✅ Visual object and scene detection<br>
+✅ Content-aware title generation<br>
+✅ Multilingual support (7+ languages)<br>
+✅ Platform optimization (Facebook/TikTok/etc.)
+
+<b>Click "Download Instructions" for detailed setup guide.</b>
+        """
+
+        msg.setInformativeText(warning_text)
+        msg.setTextFormat(Qt.RichText)
+        msg.setStandardButtons(QMessageBox.Ok | QMessageBox.Help)
+        msg.button(QMessageBox.Help).setText("Download Instructions")
+
+        result = msg.exec_()
+        if result == QMessageBox.Help:
+            self.show_download_instructions()
+
     def show_download_instructions(self):
         """Show model download instructions"""
         instructions = """
@@ -413,18 +510,17 @@ class TitleGeneratorDialog(QDialog):
 
 To unlock multilingual content analysis and AI-powered titles:
 
-📥 STEP 1: Download AI Models
-   • Whisper (Audio Analysis):
-     https://github.com/openai/whisper (Use 'base' model recommended)
-   • CLIP (Visual Analysis):
-     Automatically downloaded on first use
+📥 STEP 1: Install Python Packages
+   Open terminal/command prompt and run:
+   pip install openai-whisper transformers torch
 
-📂 STEP 2: Place Models in One of These Locations
-   1. C:\\AI_Models\\
-   2. Desktop\\AI_Models\\
-   3. [App Directory]\\models\\
+   This will download ~2-4GB of AI models automatically.
 
-   Create the folder if it doesn't exist!
+📂 STEP 2: Model Auto-Download
+   • Whisper (Audio Analysis): Downloads on first use
+   • CLIP (Visual Analysis): Downloads on first use
+
+   Models will be saved in your user cache directory.
 
 🔄 STEP 3: Restart Application
    The app will auto-detect models and enable Enhanced Mode

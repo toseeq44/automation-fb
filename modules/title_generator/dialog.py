@@ -5,34 +5,37 @@ User interface for video title generation
 
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QFileDialog, QProgressBar,
-                             QTextEdit, QCheckBox, QMessageBox, QGroupBox)
+                             QTextEdit, QCheckBox, QMessageBox, QGroupBox,
+                             QComboBox)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QFont
 from pathlib import Path
 from modules.logging.logger import get_logger
 from .api_manager import APIKeyManager
 from .scanner import VideoScanner
-from .generator import TitleGenerator
+from .enhanced_generator import EnhancedTitleGenerator
 from .renamer import VideoRenamer
 
 logger = get_logger(__name__)
 
 
 class ProcessingThread(QThread):
-    """Background thread for video processing"""
+    """Background thread for video processing with enhanced analysis"""
 
     progress_update = pyqtSignal(int, int, str)  # (current, total, message)
+    analysis_update = pyqtSignal(str)  # detailed analysis messages
     processing_complete = pyqtSignal(dict)  # statistics
 
-    def __init__(self, videos, generator, renamer):
+    def __init__(self, videos, generator, renamer, platform='facebook'):
         super().__init__()
         self.videos = videos
         self.generator = generator
         self.renamer = renamer
+        self.platform = platform
         self._stop_requested = False
 
     def run(self):
-        """Process all videos"""
+        """Process all videos with enhanced analysis"""
         total = len(self.videos)
 
         for index, video_info in enumerate(self.videos):
@@ -41,11 +44,26 @@ class ProcessingThread(QThread):
 
             # Update progress
             filename = video_info['filename']
-            self.progress_update.emit(index + 1, total, f"Processing: {filename}")
+            self.progress_update.emit(index + 1, total, f"📹 Processing: {filename}")
+            self.analysis_update.emit(f"\n{'='*60}")
+            self.analysis_update.emit(f"VIDEO {index + 1}/{total}: {filename}")
+            self.analysis_update.emit(f"{'='*60}")
 
             try:
-                # Generate title
-                new_title = self.generator.generate_title(video_info)
+                # Phase updates
+                self.analysis_update.emit("🎙️  Phase 1: Audio analysis (language detection)...")
+                self.analysis_update.emit("👁️  Phase 2: Visual analysis (objects, scenes)...")
+                self.analysis_update.emit("📝 Phase 3: Text extraction (OCR)...")
+                self.analysis_update.emit("🔄 Phase 4: Content aggregation...")
+
+                # Generate title with enhanced generator
+                new_title = self.generator.generate_title(
+                    video_info,
+                    platform=self.platform,
+                    enable_ai=True
+                )
+
+                self.analysis_update.emit(f"✨ Generated Title: {new_title}")
 
                 # Rename file
                 success, new_path, error = self.renamer.rename_video(
@@ -55,17 +73,18 @@ class ProcessingThread(QThread):
 
                 if success:
                     message = f"✅ {filename} → {Path(new_path).name}"
+                    self.analysis_update.emit(f"✅ Successfully renamed!")
                 else:
                     message = f"❌ {filename}: {error}"
+                    self.analysis_update.emit(f"❌ Rename failed: {error}")
 
                 self.progress_update.emit(index + 1, total, message)
 
             except Exception as e:
-                logger.error(f"Error processing {filename}: {e}")
-                self.progress_update.emit(
-                    index + 1, total,
-                    f"❌ {filename}: {str(e)}"
-                )
+                logger.error(f"Error processing {filename}: {e}", exc_info=True)
+                error_msg = f"❌ {filename}: {str(e)}"
+                self.progress_update.emit(index + 1, total, error_msg)
+                self.analysis_update.emit(f"❌ Error: {str(e)}")
 
         # Send completion signal with statistics
         stats = self.renamer.get_statistics()
@@ -77,17 +96,21 @@ class ProcessingThread(QThread):
 
 
 class TitleGeneratorDialog(QDialog):
-    """Main dialog for title generation"""
+    """Main dialog for enhanced multilingual title generation"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.api_manager = APIKeyManager()
         self.scanner = VideoScanner()
-        self.generator = TitleGenerator()
+
+        # Use enhanced generator with multilingual support
+        logger.info("Initializing Enhanced Title Generator...")
+        self.generator = EnhancedTitleGenerator(model_size='base')
         self.renamer = VideoRenamer()
 
         self.videos = []
         self.processing_thread = None
+        self.selected_platform = 'facebook'  # Default platform
 
         self.setup_ui()
 
@@ -130,6 +153,27 @@ class TitleGeneratorDialog(QDialog):
 
         folder_group.setLayout(folder_layout)
         layout.addWidget(folder_group)
+
+        # Platform selection group
+        platform_group = QGroupBox("Platform Optimization")
+        platform_layout = QHBoxLayout()
+
+        platform_label = QLabel("Target Platform:")
+        platform_layout.addWidget(platform_label)
+
+        self.platform_combo = QComboBox()
+        self.platform_combo.addItems([
+            "📘 Facebook (255 chars)",
+            "📱 TikTok (150 chars)",
+            "📷 Instagram (125 chars)",
+            "▶️ YouTube (100 chars)"
+        ])
+        self.platform_combo.currentIndexChanged.connect(self.on_platform_changed)
+        platform_layout.addWidget(self.platform_combo)
+        platform_layout.addStretch()
+
+        platform_group.setLayout(platform_layout)
+        layout.addWidget(platform_group)
 
         # Video count label
         self.video_count_label = QLabel("Videos found: 0")
@@ -241,13 +285,15 @@ class TitleGeneratorDialog(QDialog):
         self.log_text.clear()
         self.log_text.append("🚀 Starting title generation...\n")
 
-        # Start processing thread
+        # Start processing thread with selected platform
         self.processing_thread = ProcessingThread(
             self.videos,
             self.generator,
-            self.renamer
+            self.renamer,
+            platform=self.selected_platform
         )
         self.processing_thread.progress_update.connect(self.on_progress_update)
+        self.processing_thread.analysis_update.connect(self.on_analysis_update)
         self.processing_thread.processing_complete.connect(self.on_processing_complete)
         self.processing_thread.start()
 
@@ -294,6 +340,21 @@ class TitleGeneratorDialog(QDialog):
             f"Successful: {stats['successful']}/{stats['total']}\n"
             f"Failed: {stats['failed']}/{stats['total']}\n\n"
             f"Videos renamed based on content analysis."
+        )
+
+    def on_platform_changed(self, index: int):
+        """Handle platform selection change"""
+        platforms = ['facebook', 'tiktok', 'instagram', 'youtube']
+        self.selected_platform = platforms[index]
+        logger.info(f"Platform selected: {self.selected_platform}")
+
+    def on_analysis_update(self, message: str):
+        """Handle analysis update messages"""
+        self.log_text.append(message)
+
+        # Scroll to bottom
+        self.log_text.verticalScrollBar().setValue(
+            self.log_text.verticalScrollBar().maximum()
         )
 
     def closeEvent(self, event):

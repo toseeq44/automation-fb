@@ -79,6 +79,46 @@ except Exception as e:
     logger.info("Running in BASIC MODE")
 
 
+# Try to import API-enhanced features (NO PyTorch needed!)
+# This works with Python 3.14+ and doesn't require DLLs
+API_ENHANCED_MODE = False
+APIEnhancedTitleGenerator = None
+APIContentAnalyzer = None
+
+try:
+    # API-enhanced mode only needs: Groq API + pytesseract + opencv
+    # NO PyTorch, Whisper, or Transformers required!
+    from .api_enhanced_generator import APIEnhancedTitleGenerator
+    from .api_content_analyzer import APIContentAnalyzer
+    from .multilingual_templates import MultilingualTemplates
+
+    # Check if required lightweight dependencies are available
+    import cv2  # OpenCV for frame extraction
+    import pytesseract  # OCR for text extraction
+
+    API_ENHANCED_MODE = True
+    logger.info("=" * 60)
+    logger.info("✨ API-ENHANCED MODE ENABLED")
+    logger.info("=" * 60)
+    logger.info("🎯 Python 3.14+ Compatible!")
+    logger.info("   ✅ Groq Vision API (Visual analysis)")
+    logger.info("   ✅ Groq LLaMA 3.3-70b (Title refinement)")
+    logger.info("   ✅ Lightweight OCR (Text extraction)")
+    logger.info("   ✅ Multilingual support (7+ languages)")
+    logger.info("   ✅ Platform optimization (Facebook/TikTok/Instagram)")
+    logger.info("")
+    logger.info("💡 NO PyTorch/Whisper/Transformers needed!")
+    logger.info("💡 Works with ANY Python version (including 3.14+)")
+    logger.info("=" * 60)
+
+except ImportError as e:
+    if not ENHANCED_MODE:
+        logger.debug(f"API-enhanced mode not available: {e}")
+
+except Exception as e:
+    logger.debug(f"Failed to load API-enhanced features: {e}")
+
+
 # Export based on available features
 __all__ = [
     'TitleGeneratorDialog',
@@ -89,6 +129,7 @@ __all__ = [
     'get_generator',
     'show_model_instructions',
     'ENHANCED_MODE',
+    'API_ENHANCED_MODE',
     'models_available'
 ]
 
@@ -101,23 +142,43 @@ if ENHANCED_MODE:
         'MultilingualTemplates'
     ])
 
+if API_ENHANCED_MODE:
+    __all__.extend([
+        'APIEnhancedTitleGenerator',
+        'APIContentAnalyzer'
+    ])
+
 
 def get_generator(prefer_enhanced: bool = True):
     """
     Get appropriate title generator based on availability
 
+    Priority order:
+    1. API-Enhanced (Python 3.14+ compatible, no PyTorch)
+    2. Enhanced (PyTorch-based, Python 3.12 max)
+    3. Basic (no AI features)
+
     Args:
         prefer_enhanced: Use enhanced generator if available
 
     Returns:
-        TitleGenerator or EnhancedTitleGenerator instance
+        TitleGenerator, EnhancedTitleGenerator, or APIEnhancedTitleGenerator instance
     """
-    if ENHANCED_MODE and prefer_enhanced and EnhancedTitleGenerator:
-        logger.info("Using Enhanced Title Generator (AI-powered)")
-        return EnhancedTitleGenerator(model_size='base')
-    else:
-        logger.info("Using Basic Title Generator")
-        return TitleGenerator()
+    if prefer_enhanced:
+        # PRIORITY 1: API-Enhanced (works with Python 3.14+, no DLL issues)
+        if API_ENHANCED_MODE and APIEnhancedTitleGenerator:
+            logger.info("✨ Using API-Enhanced Title Generator (Python 3.14+ compatible)")
+            logger.info("   No PyTorch/Whisper/Transformers needed!")
+            return APIEnhancedTitleGenerator()
+
+        # PRIORITY 2: Enhanced (PyTorch-based, requires Python 3.12 or earlier)
+        elif ENHANCED_MODE and EnhancedTitleGenerator:
+            logger.info("🚀 Using Enhanced Title Generator (PyTorch-based)")
+            return EnhancedTitleGenerator(model_size='base')
+
+    # FALLBACK: Basic generator
+    logger.info("⚡ Using Basic Title Generator")
+    return TitleGenerator()
 
 
 def show_model_instructions():

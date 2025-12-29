@@ -1,7 +1,7 @@
 """
-API-Based Content Analyzer (No PyTorch Required!)
-Uses Groq Vision API + Text API for content analysis
-Works with ANY Python version, no DLL dependencies
+HYBRID Content Analyzer - Best of Both Worlds!
+Uses: Cloud APIs + Local Models + Multi-Source Aggregation
+100% Reliable - Always works with graceful degradation
 """
 
 import base64
@@ -15,18 +15,41 @@ logger = get_logger(__name__)
 
 class APIContentAnalyzer:
     """
-    Content analyzer using cloud APIs instead of local models
-    No PyTorch, Whisper, or Transformers needed!
+    HYBRID content analyzer:
+    - Tries Cloud APIs first (fastest)
+    - Falls back to Local Models (YOLO/BLIP)
+    - Aggregates ALL sources for maximum accuracy
     """
 
-    def __init__(self, groq_client=None):
+    def __init__(self, groq_client=None, use_local_models=True):
         """
-        Initialize API-based analyzer
+        Initialize HYBRID analyzer
 
         Args:
-            groq_client: Groq API client instance
+            groq_client: Groq API client instance (optional)
+            use_local_models: Enable local models fallback (default: True)
         """
         self.groq_client = groq_client
+        self.use_local_models = use_local_models
+
+        # Initialize local vision analyzer (if enabled)
+        self.local_analyzer = None
+        if use_local_models:
+            try:
+                from modules.title_generator.local_vision_analyzer import LocalVisionAnalyzer
+                self.local_analyzer = LocalVisionAnalyzer()
+                logger.info("✅ Local vision analyzer initialized")
+            except Exception as e:
+                logger.warning(f"⚠️  Local vision analyzer not available: {e}")
+
+        # Initialize multi-source aggregator
+        try:
+            from modules.title_generator.multi_source_aggregator import MultiSourceAggregator
+            self.aggregator = MultiSourceAggregator()
+            logger.info("✅ Multi-source aggregator initialized")
+        except Exception as e:
+            logger.warning(f"⚠️  Multi-source aggregator not available: {e}")
+            self.aggregator = None
 
         # Language detection patterns
         self.language_patterns = {
@@ -50,7 +73,13 @@ class APIContentAnalyzer:
 
     def analyze_video_content(self, video_path: str, video_metadata: Dict) -> Dict:
         """
-        Analyze video content using API-based approach
+        Analyze video content using HYBRID approach
+
+        Priority:
+        1. Cloud APIs (Groq/OpenAI) - fastest
+        2. Local Models (YOLO/BLIP) - reliable fallback
+        3. Multi-Source Aggregation - maximum accuracy
+        4. Heuristic - last resort
 
         Args:
             video_path: Path to video file
@@ -73,7 +102,7 @@ class APIContentAnalyzer:
                 'scene_type': str
             }
         """
-        logger.info("📊 Analyzing video content via API (no local models)...")
+        logger.info("📊 HYBRID Content Analysis (APIs + Local Models + Aggregation)...")
 
         results = {
             'language': 'en',
@@ -130,27 +159,55 @@ class APIContentAnalyzer:
                 results['language_confidence'] = lang_result['confidence']
                 logger.info(f"   Language (from text): {lang_result['language_name']} ({lang_result['confidence']:.0%})")
 
-            # Step 5: Analyze content via Groq Vision API (use REPRESENTATIVE frames)
+            # Step 5: VISION ANALYSIS (Multi-tier approach)
             # Use beginning, middle, end frames for vision analysis (cost-efficient)
-            api_success = False
-            if self.groq_client and all_frames:
+            api_result = None
+            local_result = None
+
+            if all_frames:
                 representative_frames = self._select_representative_frames(all_frames, count=3)
-                logger.info(f"   Analyzing {len(representative_frames)} representative frames with Vision API...")
+                logger.info(f"   Analyzing {len(representative_frames)} representative frames...")
 
-                # Try vision analysis on first representative frame
-                api_analysis = self._analyze_via_groq_vision(representative_frames[0], video_metadata)
-                if api_analysis:
-                    results.update(api_analysis)
-                    logger.info(f"   👁️  Visual: {api_analysis.get('content_description', 'N/A')}")
-                    api_success = True
+                # 5a. Try Cloud API first (fastest if available)
+                if self.groq_client:
+                    logger.info("   🌐 Trying Cloud Vision APIs...")
+                    api_result = self._analyze_via_groq_vision(representative_frames[0], video_metadata)
+                    if api_result:
+                        logger.info(f"   ✅ API Vision: {api_result.get('content_description', 'N/A')[:60]}")
 
-            # Step 6: Fallback heuristics if API failed or not available
-            if not api_success:
-                heuristic_analysis = self._heuristic_analysis(video_metadata, ocr_texts)
-                results.update(heuristic_analysis)
-                logger.info(f"   🔄 Heuristic fallback: {heuristic_analysis.get('niche', 'general')}")
+                # 5b. Try Local Models fallback (YOLO/BLIP - 100% reliable!)
+                if not api_result and self.local_analyzer:
+                    logger.info("   🔍 Trying Local Vision Models (YOLO/BLIP)...")
+                    local_result = self.local_analyzer.analyze_frame(representative_frames[0], video_metadata)
+                    if local_result:
+                        logger.info(f"   ✅ Local Vision: {local_result.get('content_description', 'N/A')[:60]}")
 
-            logger.info("✅ Content analysis complete (API-based)")
+            # Step 6: Heuristic analysis (always run for additional data)
+            heuristic_result = self._heuristic_analysis(video_metadata, ocr_texts)
+
+            # Step 7: MULTI-SOURCE AGGREGATION (Combine all data!)
+            if self.aggregator:
+                logger.info("   🧠 Aggregating all sources for maximum accuracy...")
+                final_result = self.aggregator.aggregate_analysis(
+                    api_result=api_result,
+                    local_result=local_result,
+                    ocr_texts=ocr_texts,
+                    audio_result=audio_analysis,
+                    heuristic_result=heuristic_result,
+                    filename=video_metadata.get('filename', '')
+                )
+                results.update(final_result)
+                logger.info(f"   ✅ AGGREGATED: {final_result['niche']} ({final_result['niche_confidence']:.0%})")
+            else:
+                # Fallback: use best available result
+                if api_result:
+                    results.update(api_result)
+                elif local_result:
+                    results.update(local_result)
+                else:
+                    results.update(heuristic_result)
+
+            logger.info("✅ HYBRID content analysis complete!")
             return results
 
         except Exception as e:

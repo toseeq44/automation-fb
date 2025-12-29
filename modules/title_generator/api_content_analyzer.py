@@ -321,7 +321,12 @@ class APIContentAnalyzer:
 
     def _analyze_via_groq_vision(self, frame_path: str, metadata: Dict) -> Optional[Dict]:
         """
-        Analyze video content using Groq Vision API with fallback models
+        Analyze video content using multiple Vision API providers
+
+        Priority:
+        1. OpenAI GPT-4 Vision (most reliable)
+        2. Groq Vision models (if available)
+        3. HuggingFace BLIP (free, no auth needed)
 
         Args:
             frame_path: Path to video frame image
@@ -333,19 +338,104 @@ class APIContentAnalyzer:
         if not self.groq_client:
             return None
 
-        # Try multiple vision models in order (fallback chain)
-        vision_models = [
-            "llama-3.2-90b-vision-preview",  # Try latest first
-            "llama-3.2-11b-vision-preview",   # Fallback 1
-            "llava-v1.5-7b-4096-preview"      # Fallback 2 (older, stable)
-        ]
+        # Try OpenAI Vision API first (most reliable)
+        result = self._try_openai_vision(frame_path, metadata)
+        if result:
+            return result
 
+        # Try Groq Vision models
+        result = self._try_groq_vision(frame_path, metadata)
+        if result:
+            return result
+
+        # Try HuggingFace BLIP (free, no auth)
+        result = self._try_huggingface_vision(frame_path, metadata)
+        if result:
+            return result
+
+        logger.error("   ❌ All Vision APIs failed")
+        return None
+
+    def _try_openai_vision(self, frame_path: str, metadata: Dict) -> Optional[Dict]:
+        """Try OpenAI GPT-4 Vision API"""
         try:
-            # Encode frame as base64
+            # Check if OpenAI client available
+            from openai import OpenAI
+
+            # Try to get API key from environment or config
+            import os
+            api_key = os.getenv('OPENAI_API_KEY')
+
+            if not api_key:
+                logger.debug("   OpenAI API key not found, skipping")
+                return None
+
+            client = OpenAI(api_key=api_key)
+
+            # Encode image
             with open(frame_path, 'rb') as f:
                 image_data = base64.b64encode(f.read()).decode('utf-8')
 
-            # Prepare prompt
+            logger.info("   Trying OpenAI GPT-4 Vision API...")
+
+            response = client.chat.completions.create(
+                model="gpt-4-vision-preview",
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": """Analyze this video frame. Provide:
+1. Objects visible (comma-separated)
+2. Main action happening
+3. Is person visible? (yes/no)
+4. Scene type (kitchen/outdoor/indoor/etc)
+5. Content category (cooking/gaming/tutorial/review/vlog/fitness/music/beauty/general)
+6. Brief description (1 sentence)
+
+Format:
+OBJECTS: [list]
+ACTION: [action]
+PERSON: [yes/no]
+SCENE: [type]
+NICHE: [category]
+DESCRIPTION: [text]"""
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{image_data}"
+                            }
+                        }
+                    ]
+                }],
+                max_tokens=300
+            )
+
+            analysis_text = response.choices[0].message.content.strip()
+            logger.info("   ✅ OpenAI Vision API success!")
+            return self._parse_vision_response(analysis_text)
+
+        except ImportError:
+            logger.debug("   OpenAI library not installed")
+            return None
+        except Exception as e:
+            logger.debug(f"   OpenAI Vision failed: {str(e)[:100]}")
+            return None
+
+    def _try_groq_vision(self, frame_path: str, metadata: Dict) -> Optional[Dict]:
+        """Try Groq Vision models with fallback"""
+        vision_models = [
+            "llama-3.2-90b-vision-preview",
+            "llama-3.2-11b-vision-preview",
+            "llava-v1.5-7b-4096-preview"
+        ]
+
+        try:
+            # Encode frame
+            with open(frame_path, 'rb') as f:
+                image_data = base64.b64encode(f.read()).decode('utf-8')
+
             prompt = f"""Analyze this video frame and provide:
 
 1. What objects/items are visible? (list them)
@@ -356,7 +446,6 @@ class APIContentAnalyzer:
 6. Brief content description (1 sentence)
 
 Video duration: {metadata.get('duration', 'unknown')}
-Video resolution: {metadata.get('resolution', 'unknown')}
 
 Respond in this exact format:
 OBJECTS: [comma-separated list]
@@ -367,11 +456,10 @@ NICHE: [niche category]
 DESCRIPTION: [brief description]
 """
 
-            # Try each model in sequence
-            last_error = None
+            # Try each Groq model
             for model_name in vision_models:
                 try:
-                    logger.info(f"   Trying Vision API model: {model_name}")
+                    logger.info(f"   Trying Groq model: {model_name}")
                     response = self.groq_client.chat.completions.create(
                         model=model_name,
                         messages=[{
@@ -390,27 +478,83 @@ DESCRIPTION: [brief description]
                         max_tokens=300
                     )
 
-                    # Success! Parse and return
                     analysis_text = response.choices[0].message.content.strip()
-                    logger.info(f"   ✅ Vision API success with model: {model_name}")
+                    logger.info(f"   ✅ Groq Vision success with: {model_name}")
                     return self._parse_vision_response(analysis_text)
 
-                except Exception as model_error:
-                    last_error = model_error
-                    if "decommissioned" in str(model_error) or "deprecated" in str(model_error):
-                        logger.warning(f"   ⚠️  Model {model_name} decommissioned, trying next...")
+                except Exception as e:
+                    if "decommissioned" in str(e):
+                        logger.debug(f"   Model {model_name} decommissioned")
                     else:
-                        logger.warning(f"   ⚠️  Model {model_name} failed: {str(model_error)[:100]}")
-                    continue  # Try next model
+                        logger.debug(f"   Model {model_name} failed: {str(e)[:100]}")
+                    continue
 
-            # All models failed
-            logger.error(f"   ❌ All Vision API models failed. Last error: {last_error}")
-            logger.error("   💡 Falling back to heuristic analysis")
             return None
 
         except Exception as e:
-            logger.error(f"   ❌ Vision API unexpected error: {e}")
+            logger.debug(f"   Groq Vision failed: {str(e)[:100]}")
             return None
+
+    def _try_huggingface_vision(self, frame_path: str, metadata: Dict) -> Optional[Dict]:
+        """Try HuggingFace BLIP model (free, no auth needed)"""
+        try:
+            import requests
+            from PIL import Image
+
+            logger.info("   Trying HuggingFace BLIP (free vision model)...")
+
+            # Use Salesforce BLIP model via HF Inference API
+            API_URL = "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-large"
+
+            with open(frame_path, "rb") as f:
+                data = f.read()
+
+            response = requests.post(API_URL, data=data, timeout=10)
+
+            if response.status_code == 200:
+                result = response.json()
+                if isinstance(result, list) and len(result) > 0:
+                    description = result[0].get('generated_text', '')
+
+                    # Parse description to extract niche
+                    niche = self._infer_niche_from_description(description)
+
+                    logger.info(f"   ✅ HuggingFace Vision success!")
+                    logger.info(f"   Description: {description}")
+
+                    return {
+                        'content_description': description,
+                        'niche': niche,
+                        'niche_confidence': 0.6,
+                        'detected_objects': [],
+                        'detected_actions': [],
+                        'has_person': 'person' in description.lower(),
+                        'scene_type': 'unknown'
+                    }
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"   HuggingFace Vision failed: {str(e)[:100]}")
+            return None
+
+    def _infer_niche_from_description(self, description: str) -> str:
+        """Infer niche from image description"""
+        desc_lower = description.lower()
+
+        niche_keywords = {
+            'cooking': ['cook', 'food', 'kitchen', 'recipe', 'meal', 'dish', 'eat'],
+            'gaming': ['game', 'play', 'screen', 'controller', 'gaming'],
+            'fitness': ['workout', 'exercise', 'gym', 'fitness', 'training'],
+            'music': ['music', 'instrument', 'guitar', 'piano', 'singing'],
+            'tutorial': ['tutorial', 'learning', 'teaching', 'demonstration']
+        }
+
+        for niche, keywords in niche_keywords.items():
+            if any(kw in desc_lower for kw in keywords):
+                return niche
+
+        return 'general'
 
     def _parse_vision_response(self, response_text: str) -> Dict:
         """Parse Groq Vision API response into structured data"""

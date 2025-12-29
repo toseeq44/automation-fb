@@ -17,6 +17,12 @@ scipy>=1.10.0
 imageio>=2.31.0
 imageio-ffmpeg>=0.4.9
 
+# Title Generator AI Models (NEW - for local vision analysis)
+ultralytics>=8.0.0          # YOLO object detection (6MB model)
+transformers>=4.30.0        # BLIP image captioning
+torch>=2.0.0                # Required for transformers
+pytesseract>=0.3.10         # OCR text extraction
+
 pyperclip>=1.8.2
 
 # Browser Automation Dependencies (NEW - for intelligent automation)

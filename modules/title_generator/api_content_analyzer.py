@@ -424,11 +424,14 @@ DESCRIPTION: [text]"""
             return None
 
     def _try_groq_vision(self, frame_path: str, metadata: Dict) -> Optional[Dict]:
-        """Try Groq Vision models with fallback"""
+        """Try Groq Vision models with fallback - UPDATED WITH NEW MODELS"""
+        # NEW Groq Vision models (December 2024+)
         vision_models = [
-            "llama-3.2-90b-vision-preview",
-            "llama-3.2-11b-vision-preview",
-            "llava-v1.5-7b-4096-preview"
+            "llama-4-scout",              # NEW! Llama 4 Scout (vision)
+            "llama-4-maverick",           # NEW! Llama 4 Maverick (vision)
+            "llama-3.2-90b-vision-preview",  # Old fallback (decommissioned)
+            "llama-3.2-11b-vision-preview",   # Old fallback (decommissioned)
+            "llava-v1.5-7b-4096-preview"     # Old fallback (decommissioned)
         ]
 
         try:
@@ -797,13 +800,26 @@ DESCRIPTION: [brief description]
                 video_clip.close()
 
                 # Step 2: Transcribe using Groq Whisper API
-                with open(audio_path, 'rb') as audio_file:
-                    transcription = self.groq_client.audio.transcriptions.create(
-                        file=audio_file,
-                        model="whisper-large-v3",
-                        response_format="verbose_json",  # Get language info
-                        language=None  # Auto-detect
-                    )
+                # Try Turbo model first (faster), fall back to standard
+                whisper_models = ["whisper-large-v3-turbo", "whisper-large-v3"]
+                transcription = None
+
+                for model in whisper_models:
+                    try:
+                        with open(audio_path, 'rb') as audio_file:
+                            transcription = self.groq_client.audio.transcriptions.create(
+                                file=audio_file,
+                                model=model,
+                                response_format="verbose_json",  # Get language info
+                                language=None  # Auto-detect
+                            )
+                        logger.info(f"   ✅ Using Whisper model: {model}")
+                        break
+                    except Exception as e:
+                        if model == whisper_models[-1]:  # Last model failed
+                            raise
+                        logger.debug(f"   Model {model} failed, trying next...")
+                        continue
 
                 # Step 3: Parse results
                 transcription_text = transcription.text.strip()

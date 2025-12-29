@@ -16,7 +16,7 @@ from .scanner import VideoScanner
 from .renamer import VideoRenamer
 
 # Import with smart detection
-from . import ENHANCED_MODE, get_generator, show_model_instructions, models_available
+from . import ENHANCED_MODE, API_ENHANCED_MODE, get_generator, show_model_instructions, models_available
 
 logger = get_logger(__name__)
 
@@ -124,12 +124,18 @@ class TitleGeneratorDialog(QDialog):
         self.videos = []
         self.processing_thread = None
         self.selected_platform = 'facebook'  # Default platform
+        self.api_enhanced_mode = API_ENHANCED_MODE
         self.enhanced_mode = ENHANCED_MODE
 
         # LOG WHICH MODE IS ACTIVE
         logger.info("=" * 70)
-        if self.enhanced_mode:
-            logger.info("🚀 TITLE GENERATOR: ENHANCED MODE ACTIVE")
+        if self.api_enhanced_mode:
+            logger.info("✨ TITLE GENERATOR: API-ENHANCED MODE ACTIVE")
+            logger.info("🎯 Python 3.14+ Compatible - NO PyTorch/DLL issues!")
+            logger.info("✅ Groq Vision API + Lightweight OCR")
+            logger.info("✅ Content-aware, multilingual title generation enabled")
+        elif self.enhanced_mode:
+            logger.info("🚀 TITLE GENERATOR: ENHANCED MODE ACTIVE (PyTorch-based)")
             logger.info(f"📂 AI Models location: {models_available.get('base_path')}")
             logger.info("✅ Content-aware, multilingual title generation enabled")
         else:
@@ -140,8 +146,8 @@ class TitleGeneratorDialog(QDialog):
 
         self.setup_ui()
 
-        # Show warning if basic mode
-        if not self.enhanced_mode:
+        # Show warning if basic mode (not API-enhanced and not PyTorch-enhanced)
+        if not self.api_enhanced_mode and not self.enhanced_mode:
             dll_error = self._check_for_dll_error()
             if not dll_error:  # Only show basic warning if not DLL error
                 self._show_basic_mode_warning()
@@ -167,8 +173,33 @@ class TitleGeneratorDialog(QDialog):
         mode_group = QGroupBox("⚙️  Generator Mode")
         mode_layout = QVBoxLayout()
 
-        if self.enhanced_mode:
-            mode_label = QLabel("✅ ENHANCED MODE - FULL AI FEATURES")
+        if self.api_enhanced_mode:
+            # API-Enhanced Mode (Python 3.14+ compatible)
+            mode_label = QLabel("✨ API-ENHANCED MODE - PYTHON 3.14+ COMPATIBLE")
+            mode_label.setStyleSheet("""
+                color: white;
+                background-color: #7c3aed;
+                font-weight: bold;
+                font-size: 14pt;
+                padding: 10px;
+                border-radius: 5px;
+            """)
+            mode_label.setAlignment(Qt.AlignCenter)
+            mode_layout.addWidget(mode_label)
+
+            details_text = "🎯 Python 3.14+ Compatible (NO PyTorch needed!)\n"
+            details_text += "☁️  Groq Vision API (Cloud-based visual analysis)\n"
+            details_text += "📝 Lightweight OCR (Text extraction)\n"
+            details_text += "🌐 Multilingual Support (7+ languages)\n"
+            details_text += "🎯 Content-Aware Title Generation"
+
+            details = QLabel(details_text)
+            details.setStyleSheet("padding: 10px; background-color: #ede9fe; border-radius: 5px;")
+            mode_layout.addWidget(details)
+
+        elif self.enhanced_mode:
+            # PyTorch-based Enhanced Mode
+            mode_label = QLabel("✅ ENHANCED MODE - FULL AI FEATURES (PyTorch)")
             mode_label.setStyleSheet("""
                 color: white;
                 background-color: #28a745;
@@ -181,7 +212,7 @@ class TitleGeneratorDialog(QDialog):
             mode_layout.addWidget(mode_label)
 
             details_text = "🎙️  Audio Analysis + Language Detection\n"
-            details_text += "👁️  Visual Content Analysis\n"
+            details_text += "👁️  Visual Content Analysis (CLIP)\n"
             details_text += "🌐 Multilingual Support (7+ languages)\n"
             details_text += "🎯 Content-Aware Title Generation"
 

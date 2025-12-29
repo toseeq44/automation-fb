@@ -107,15 +107,20 @@ class APIContentAnalyzer:
                     else:
                         logger.info(f"   🎵 Music detected - ignoring audio for language detection")
 
-            # Step 2: Extract video frames for visual analysis
-            frames = self._extract_key_frames(video_path, max_frames=3)
-            logger.info(f"   Extracted {len(frames)} key frames")
+            # Step 2: Extract video frames (ONE PER SECOND, up to 60 seconds)
+            all_frames = self._extract_key_frames(video_path, max_frames=60)
 
-            # Step 3: Extract text from frames (lightweight OCR)
-            ocr_texts = self._extract_text_from_frames(frames)
-            results['ocr_text'] = ocr_texts
-            if ocr_texts:
-                logger.info(f"   Found {len(ocr_texts)} text items via OCR")
+            if not all_frames:
+                logger.warning("   ⚠️  No frames extracted from video!")
+
+            # Step 3: Extract text from ALL frames (comprehensive OCR)
+            ocr_texts = []
+            if all_frames:
+                logger.info(f"   Running OCR on {len(all_frames)} frames...")
+                ocr_texts = self._extract_text_from_frames(all_frames)
+                results['ocr_text'] = ocr_texts
+                if ocr_texts:
+                    logger.info(f"   ✅ Found {len(ocr_texts)} unique text items via OCR")
 
             # Step 4: Detect language from text (fallback if no audio)
             if not audio_analysis and ocr_texts:
@@ -125,10 +130,15 @@ class APIContentAnalyzer:
                 results['language_confidence'] = lang_result['confidence']
                 logger.info(f"   Language (from text): {lang_result['language_name']} ({lang_result['confidence']:.0%})")
 
-            # Step 5: Analyze content via Groq Vision API (if available)
+            # Step 5: Analyze content via Groq Vision API (use REPRESENTATIVE frames)
+            # Use beginning, middle, end frames for vision analysis (cost-efficient)
             api_success = False
-            if self.groq_client and frames:
-                api_analysis = self._analyze_via_groq_vision(frames[0], video_metadata)
+            if self.groq_client and all_frames:
+                representative_frames = self._select_representative_frames(all_frames, count=3)
+                logger.info(f"   Analyzing {len(representative_frames)} representative frames with Vision API...")
+
+                # Try vision analysis on first representative frame
+                api_analysis = self._analyze_via_groq_vision(representative_frames[0], video_metadata)
                 if api_analysis:
                     results.update(api_analysis)
                     logger.info(f"   👁️  Visual: {api_analysis.get('content_description', 'N/A')}")
@@ -147,28 +157,75 @@ class APIContentAnalyzer:
             logger.error(f"❌ Content analysis failed: {e}")
             return results
 
-    def _extract_key_frames(self, video_path: str, max_frames: int = 3) -> List[str]:
-        """Extract key frames from video (lightweight, no torch needed)"""
+    def _select_representative_frames(self, all_frames: List[str], count: int = 3) -> List[str]:
+        """
+        Select representative frames from all extracted frames
+        Returns: beginning, middle, and end frames
+
+        Args:
+            all_frames: List of all frame paths
+            count: Number of frames to select (default 3)
+
+        Returns:
+            List of selected frame paths
+        """
+        if not all_frames:
+            return []
+
+        if len(all_frames) <= count:
+            return all_frames
+
+        # Select evenly distributed frames
+        indices = []
+        if count >= 1:
+            indices.append(0)  # Beginning
+        if count >= 2:
+            indices.append(len(all_frames) // 2)  # Middle
+        if count >= 3:
+            indices.append(len(all_frames) - 1)  # End
+
+        return [all_frames[i] for i in indices]
+
+    def _extract_key_frames(self, video_path: str, max_frames: int = 60) -> List[str]:
+        """
+        Extract frames from video - ONE FRAME PER SECOND
+
+        Example: 59 second video = 59 frames
+
+        Args:
+            video_path: Path to video file
+            max_frames: Maximum frames to extract (default 60 = 1 minute)
+
+        Returns:
+            List of frame file paths
+        """
         try:
             import cv2
             import tempfile
             import os
 
             cap = cv2.VideoCapture(video_path)
+            fps = cap.get(cv2.CAP_PROP_FPS)
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-            if total_frames == 0:
+            if total_frames == 0 or fps == 0:
+                cap.release()
                 return []
 
-            # Extract frames at intervals
+            # Calculate video duration in seconds
+            duration_seconds = int(total_frames / fps)
+
+            # Extract ONE frame per second (up to max_frames)
+            frames_to_extract = min(duration_seconds, max_frames)
+
+            logger.info(f"   Extracting {frames_to_extract} frames (1 per second) from {duration_seconds}s video")
+
             frame_paths = []
-            interval = max(1, total_frames // max_frames)
+            for second in range(frames_to_extract):
+                # Get frame at this second
+                frame_number = int(second * fps)
 
-            for i in range(0, total_frames, interval):
-                if len(frame_paths) >= max_frames:
-                    break
-
-                cap.set(cv2.CAP_PROP_POS_FRAMES, i)
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
                 ret, frame = cap.read()
 
                 if ret:
@@ -178,10 +235,11 @@ class APIContentAnalyzer:
                     frame_paths.append(temp_file.name)
 
             cap.release()
+            logger.info(f"   ✅ Extracted {len(frame_paths)} frames successfully")
             return frame_paths
 
         except Exception as e:
-            logger.warning(f"Frame extraction failed: {e}")
+            logger.error(f"   ❌ Frame extraction failed: {e}")
             return []
 
     def _extract_text_from_frames(self, frame_paths: List[str]) -> List[str]:
@@ -263,24 +321,31 @@ class APIContentAnalyzer:
 
     def _analyze_via_groq_vision(self, frame_path: str, metadata: Dict) -> Optional[Dict]:
         """
-        Analyze video content using Groq Vision API
+        Analyze video content using Groq Vision API with fallback models
 
         Args:
             frame_path: Path to video frame image
             metadata: Video metadata
 
         Returns:
-            Analysis results or None if API unavailable
+            Analysis results or None if all APIs fail
         """
         if not self.groq_client:
             return None
+
+        # Try multiple vision models in order (fallback chain)
+        vision_models = [
+            "llama-3.2-90b-vision-preview",  # Try latest first
+            "llama-3.2-11b-vision-preview",   # Fallback 1
+            "llava-v1.5-7b-4096-preview"      # Fallback 2 (older, stable)
+        ]
 
         try:
             # Encode frame as base64
             with open(frame_path, 'rb') as f:
                 image_data = base64.b64encode(f.read()).decode('utf-8')
 
-            # Call Groq Vision API
+            # Prepare prompt
             prompt = f"""Analyze this video frame and provide:
 
 1. What objects/items are visible? (list them)
@@ -302,30 +367,49 @@ NICHE: [niche category]
 DESCRIPTION: [brief description]
 """
 
-            response = self.groq_client.chat.completions.create(
-                model="llama-3.2-11b-vision-preview",  # Groq vision model (current)
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{image_data}"
-                            }
-                        }
-                    ]
-                }],
-                temperature=0.5,
-                max_tokens=300
-            )
+            # Try each model in sequence
+            last_error = None
+            for model_name in vision_models:
+                try:
+                    logger.info(f"   Trying Vision API model: {model_name}")
+                    response = self.groq_client.chat.completions.create(
+                        model=model_name,
+                        messages=[{
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:image/jpeg;base64,{image_data}"
+                                    }
+                                }
+                            ]
+                        }],
+                        temperature=0.5,
+                        max_tokens=300
+                    )
 
-            # Parse response
-            analysis_text = response.choices[0].message.content.strip()
-            return self._parse_vision_response(analysis_text)
+                    # Success! Parse and return
+                    analysis_text = response.choices[0].message.content.strip()
+                    logger.info(f"   ✅ Vision API success with model: {model_name}")
+                    return self._parse_vision_response(analysis_text)
+
+                except Exception as model_error:
+                    last_error = model_error
+                    if "decommissioned" in str(model_error) or "deprecated" in str(model_error):
+                        logger.warning(f"   ⚠️  Model {model_name} decommissioned, trying next...")
+                    else:
+                        logger.warning(f"   ⚠️  Model {model_name} failed: {str(model_error)[:100]}")
+                    continue  # Try next model
+
+            # All models failed
+            logger.error(f"   ❌ All Vision API models failed. Last error: {last_error}")
+            logger.error("   💡 Falling back to heuristic analysis")
+            return None
 
         except Exception as e:
-            logger.warning(f"Groq Vision API failed: {e}")
+            logger.error(f"   ❌ Vision API unexpected error: {e}")
             return None
 
     def _parse_vision_response(self, response_text: str) -> Dict:
@@ -532,9 +616,16 @@ DESCRIPTION: [brief description]
             Dict with audio analysis or None if failed
         """
         try:
-            import tempfile
-            import os
-            from moviepy.editor import VideoFileClip
+            # Check imports first
+            try:
+                import tempfile
+                import os
+                from moviepy.editor import VideoFileClip
+            except ImportError as ie:
+                logger.warning("   ⚠️  MoviePy not installed - audio analysis disabled")
+                logger.warning("   💡 Install: pip install moviepy")
+                logger.warning("   📌 Audio analysis provides accurate language detection!")
+                return None
 
             logger.info("🎙️  Analyzing audio with Groq Whisper API...")
 
@@ -614,16 +705,10 @@ DESCRIPTION: [brief description]
                     'keywords': keywords
                 }
 
-        except ModuleNotFoundError as e:
-            if 'moviepy' in str(e):
-                logger.warning("   ⚠️  MoviePy not installed - audio analysis disabled")
-                logger.warning("   💡 Install: pip install moviepy")
-                logger.warning("   📌 Audio analysis provides accurate language detection!")
-            else:
-                logger.warning(f"   ⚠️  Audio analysis failed: Missing module - {e}")
-            return None
         except Exception as e:
-            logger.warning(f"   ⚠️  Audio analysis failed: {e}")
+            logger.error(f"   ❌ Audio analysis failed: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
             return None
 
     def _is_music_audio(self, transcription_text: str, transcription_obj) -> bool:

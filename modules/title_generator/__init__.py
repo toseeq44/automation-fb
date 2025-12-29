@@ -169,7 +169,25 @@ def get_generator(prefer_enhanced: bool = True):
         if API_ENHANCED_MODE and APIEnhancedTitleGenerator:
             logger.info("✨ Using API-Enhanced Title Generator (Python 3.14+ compatible)")
             logger.info("   No PyTorch/Whisper/Transformers needed!")
-            return APIEnhancedTitleGenerator()
+
+            # Initialize Groq client with API key
+            groq_client = None
+            try:
+                api_manager = APIKeyManager()
+                api_key = api_manager.get_api_key()
+
+                if api_key:
+                    from groq import Groq
+                    groq_client = Groq(api_key=api_key)
+                    logger.info("   ✅ Groq API client initialized (Vision API enabled)")
+                else:
+                    logger.warning("   ⚠️  Groq API key not found - using heuristic fallback")
+                    logger.warning("   💡 Add API key in Title Generator dialog for better results")
+            except Exception as e:
+                logger.warning(f"   ⚠️  Failed to initialize Groq client: {e}")
+                logger.warning("   💡 Using heuristic fallback")
+
+            return APIEnhancedTitleGenerator(groq_client=groq_client)
 
         # PRIORITY 2: Enhanced (PyTorch-based, requires Python 3.12 or earlier)
         elif ENHANCED_MODE and EnhancedTitleGenerator:

@@ -354,9 +354,15 @@ DESCRIPTION: [brief description]
 
     def _heuristic_analysis(self, metadata: Dict, ocr_texts: List[str]) -> Dict:
         """
-        Fallback heuristic analysis when API not available
-        Uses simple rules based on filename, duration, OCR text
+        Improved fallback heuristic analysis when API not available
+        Extracts actual content from filename, OCR text, and metadata
         """
+        import re
+
+        filename = metadata.get('filename', '')
+        combined_text = (filename + ' ' + ' '.join(ocr_texts))
+
+        # Initialize result
         result = {
             'niche': 'general',
             'niche_confidence': 0.5,
@@ -367,27 +373,124 @@ DESCRIPTION: [brief description]
             'content_description': ''
         }
 
-        # Analyze filename for clues
-        filename = metadata.get('filename', '').lower()
+        # ========================================
+        # STEP 1: Extract actual content from filename and OCR
+        # ========================================
 
-        # Niche detection from filename/text
-        niche_keywords = {
-            'cooking': ['cook', 'recipe', 'food', 'kitchen', 'chef', 'eat', 'taste', 'delicious'],
-            'gaming': ['game', 'play', 'level', 'win', 'score', 'gaming', 'gamer', 'controller'],
-            'tutorial': ['tutorial', 'how to', 'guide', 'learn', 'teach', 'step', 'lesson'],
-            'review': ['review', 'unbox', 'test', 'vs', 'comparison', 'honest', 'opinion'],
-            'fitness': ['workout', 'fitness', 'exercise', 'gym', 'yoga', 'cardio', 'abs'],
-            'music': ['music', 'song', 'beat', 'cover', 'sing', 'guitar', 'piano'],
-            'vlog': ['vlog', 'day in', 'life', 'daily', 'routine', 'morning', 'night']
+        # Clean filename: remove file extension, special chars
+        clean_name = re.sub(r'\.[a-zA-Z0-9]+$', '', filename)  # Remove extension
+        clean_name = re.sub(r'[_\-\.]', ' ', clean_name)  # Replace _ - . with space
+        clean_name = re.sub(r'[^\w\s]', '', clean_name)  # Remove special chars
+
+        # Extract meaningful words (ignore generic terms)
+        generic_terms = {
+            'amazing', 'content', 'video', 'clip', 'new', 'latest', 'best',
+            'story', 'see', 'watch', 'check', 'viral', 'trending', 'secs', 'seconds'
         }
 
-        combined_text = (filename + ' ' + ' '.join(ocr_texts)).lower()
+        words = clean_name.lower().split()
+        meaningful_words = [w for w in words if w not in generic_terms and len(w) > 2]
+
+        # Combine with OCR text
+        all_text = ' '.join(meaningful_words + ocr_texts)
+
+        # ========================================
+        # STEP 2: Detect objects/actions from text
+        # ========================================
+
+        # Common objects
+        object_keywords = {
+            # Food items
+            'food', 'recipe', 'pasta', 'pizza', 'burger', 'cake', 'bread', 'chicken',
+            'rice', 'noodles', 'salad', 'soup', 'dessert', 'coffee', 'tea',
+            # People
+            'man', 'woman', 'person', 'chef', 'player', 'gamer', 'trainer',
+            # Objects
+            'phone', 'laptop', 'car', 'bike', 'camera', 'guitar', 'piano'
+        }
+
+        action_keywords = {
+            # Cooking actions
+            'cook', 'cooking', 'bake', 'fry', 'grill', 'boil', 'mix', 'chop',
+            # Activity actions
+            'play', 'playing', 'run', 'running', 'dance', 'dancing', 'workout',
+            'exercise', 'sing', 'singing', 'teach', 'teaching', 'review', 'unbox'
+        }
+
+        detected_objects = [obj for obj in object_keywords if obj in all_text.lower()]
+        detected_actions = [act for act in action_keywords if act in all_text.lower()]
+
+        result['detected_objects'] = detected_objects[:5]  # Top 5
+        result['detected_actions'] = detected_actions[:3]  # Top 3
+
+        # ========================================
+        # STEP 3: Niche detection (improved)
+        # ========================================
+
+        niche_keywords = {
+            'cooking': ['cook', 'recipe', 'food', 'kitchen', 'chef', 'bake', 'fry', 'taste',
+                       'pasta', 'pizza', 'burger', 'cake', 'chicken', 'delicious'],
+            'gaming': ['game', 'gaming', 'play', 'player', 'level', 'win', 'score', 'gamer',
+                      'controller', 'console', 'mobile', 'pubg', 'fortnite'],
+            'tutorial': ['tutorial', 'how to', 'guide', 'learn', 'teach', 'step', 'lesson',
+                        'tips', 'tricks', 'hacks', 'diy'],
+            'review': ['review', 'unbox', 'unboxing', 'test', 'testing', 'vs', 'comparison',
+                      'honest', 'opinion', 'pros', 'cons'],
+            'fitness': ['workout', 'fitness', 'exercise', 'gym', 'yoga', 'cardio', 'abs',
+                       'training', 'muscle', 'weight', 'strength'],
+            'music': ['music', 'song', 'beat', 'cover', 'sing', 'singing', 'guitar',
+                     'piano', 'drum', 'rap', 'dance'],
+            'vlog': ['vlog', 'day in', 'life', 'daily', 'routine', 'morning', 'night',
+                    'lifestyle', 'behind', 'scenes'],
+            'entertainment': ['funny', 'comedy', 'prank', 'meme', 'joke', 'laugh', 'fun',
+                             'entertainment', 'react', 'reaction']
+        }
+
+        combined_lower = all_text.lower()
+        best_niche = 'general'
+        best_score = 0
 
         for niche, keywords in niche_keywords.items():
-            matches = sum(1 for kw in keywords if kw in combined_text)
-            if matches >= 2:
-                result['niche'] = niche
-                result['niche_confidence'] = min(0.9, 0.5 + (matches * 0.1))
-                break
+            matches = sum(1 for kw in keywords if kw in combined_lower)
+            if matches > best_score:
+                best_score = matches
+                best_niche = niche
+
+        if best_score >= 1:  # Even 1 match is enough (lowered threshold)
+            result['niche'] = best_niche
+            result['niche_confidence'] = min(0.9, 0.4 + (best_score * 0.15))
+
+        # ========================================
+        # STEP 4: Build content description
+        # ========================================
+
+        # Use detected objects/actions to build description
+        if detected_objects or detected_actions:
+            desc_parts = []
+            if detected_actions:
+                desc_parts.append(detected_actions[0])
+            if detected_objects:
+                desc_parts.append(detected_objects[0])
+
+            result['content_description'] = ' '.join(desc_parts)
+        else:
+            # Use first few meaningful words from filename
+            if meaningful_words:
+                result['content_description'] = ' '.join(meaningful_words[:3])
+
+        # ========================================
+        # STEP 5: Person detection
+        # ========================================
+
+        person_indicators = ['person', 'man', 'woman', 'people', 'chef', 'player', 'i ', 'my ', 'me ']
+        result['has_person'] = any(ind in combined_lower for ind in person_indicators)
+
+        logger.info(f"   Heuristic analysis: {result['niche']} (confidence: {result['niche_confidence']:.0%})")
+        if result['content_description']:
+            logger.info(f"   Content: {result['content_description']}")
+        if detected_objects:
+            logger.info(f"   Objects: {', '.join(detected_objects[:3])}")
+        if detected_actions:
+            logger.info(f"   Actions: {', '.join(detected_actions[:3])}")
 
         return result

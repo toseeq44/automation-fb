@@ -178,12 +178,37 @@ class APIEnhancedTitleGenerator:
             if capitalized:
                 who = capitalized[0]
 
-        # Extract WHAT from content description or objects
+        # Extract WHAT from content description, objects, or filename
         what = analysis.get('content_description', '')
+
         if not what and analysis.get('detected_objects'):
             what = analysis['detected_objects'][0]
+
+        # Last resort: extract from filename (NO more "Amazing Content"!)
         if not what:
-            what = "Amazing Content"
+            import re
+            filename = video_info.get('filename', '')
+
+            # Clean filename: remove extension, special chars
+            clean_name = re.sub(r'\.[a-zA-Z0-9]+$', '', filename)
+            clean_name = re.sub(r'[_\-\.]', ' ', clean_name)
+
+            # Remove generic terms
+            generic_terms = {
+                'amazing', 'content', 'video', 'clip', 'new', 'latest', 'best',
+                'story', 'see', 'watch', 'check', 'viral', 'trending', 'secs', 'seconds',
+                'in', 'the', 'a', 'an', 'and', 'or', 'of', 'to', 'for'
+            }
+
+            words = clean_name.split()
+            meaningful = [w for w in words if w.lower() not in generic_terms and len(w) > 2]
+
+            if meaningful:
+                # Use first 2-3 meaningful words
+                what = ' '.join(meaningful[:3])
+            else:
+                # Absolute last resort
+                what = "This Video"
 
         # Extract FOOD/GAME/PRODUCT specific
         objects = analysis.get('detected_objects', [])

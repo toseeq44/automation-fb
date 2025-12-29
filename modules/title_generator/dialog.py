@@ -146,6 +146,10 @@ class TitleGeneratorDialog(QDialog):
 
         self.setup_ui()
 
+        # Check for API key if using API-enhanced mode
+        if self.api_enhanced_mode:
+            self._check_api_key()
+
         # Show warning if basic mode (not API-enhanced and not PyTorch-enhanced)
         if not self.api_enhanced_mode and not self.enhanced_mode:
             dll_error = self._check_for_dll_error()
@@ -526,6 +530,71 @@ class TitleGeneratorDialog(QDialog):
         self.log_text.verticalScrollBar().setValue(
             self.log_text.verticalScrollBar().maximum()
         )
+
+    def _check_api_key(self):
+        """Check if Groq API key is configured, prompt user if not"""
+        api_key = self.api_manager.get_api_key()
+
+        if not api_key:
+            # API key not found - show friendly popup
+            msg = QMessageBox(self)
+            msg.setWindowTitle("🔑 Groq API Key Required")
+            msg.setIcon(QMessageBox.Information)
+            msg.setText("✨ API-Enhanced Mode Detected!")
+
+            info_text = """
+<b>🎯 You're using API-Enhanced Title Generator!</b><br>
+<font color="green">Compatible with Python 3.14+ • No PyTorch needed</font>
+
+<hr>
+
+<b>⚠️  Groq API Key Not Found</b><br>
+To unlock full AI-powered features, you need a <b>FREE</b> Groq API key:
+
+<hr>
+
+<b><font color="blue">🌟 Features with API Key:</font></b>
+<ul>
+<li>☁️  Groq Vision API - Analyzes actual video content</li>
+<li>🎙️  Groq Whisper - Audio transcription & language detection</li>
+<li>🤖 LLaMA 3.3-70b - AI-powered title refinement</li>
+<li>🌐 Accurate multilingual support (7+ languages)</li>
+<li>🎯 Content-aware, platform-optimized titles</li>
+</ul>
+
+<hr>
+
+<b><font color="green">🆓 Get FREE API Key (2 minutes):</font></b>
+<ol>
+<li>Visit: <a href="https://console.groq.com/">https://console.groq.com/</a></li>
+<li>Sign up (free account)</li>
+<li>Click "API Keys" → "Create API Key"</li>
+<li>Copy the key</li>
+<li>Click "Add API Key Now" below and paste it</li>
+</ol>
+
+<hr>
+
+<b>💡 Without API Key:</b><br>
+<font color="orange">You can still use the generator with heuristic analysis (filename-based),<br>
+but AI-powered features will be disabled.</font>
+
+<hr>
+
+<b>Click "Add API Key Now" to set it up, or "Later" to continue without AI features.</b>
+            """
+
+            msg.setInformativeText(info_text)
+            msg.setTextFormat(Qt.RichText)
+            msg.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
+            msg.button(QMessageBox.Ok).setText("🔑 Add API Key Now")
+            msg.button(QMessageBox.Cancel).setText("⏭️  Continue Without API")
+
+            result = msg.exec_()
+
+            if result == QMessageBox.Ok:
+                # User wants to add API key - open API manager dialog
+                self.manage_api_keys()
 
     def _check_for_dll_error(self) -> bool:
         """Check if basic mode is due to DLL error and show specific fix"""

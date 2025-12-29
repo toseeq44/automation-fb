@@ -91,31 +91,48 @@ class APIContentAnalyzer:
         }
 
         try:
-            # Step 1: Extract video frames for analysis
+            # Step 1: Audio analysis using Groq Whisper API (PRIORITY for language!)
+            audio_analysis = None
+            if self.groq_client:
+                audio_analysis = self._analyze_audio_via_groq(video_path, video_metadata)
+                if audio_analysis:
+                    # Audio provides BEST language detection
+                    if not audio_analysis.get('is_music', False):
+                        results['language'] = audio_analysis.get('language', 'en')
+                        results['language_name'] = audio_analysis.get('language_name', 'English')
+                        results['language_confidence'] = audio_analysis.get('language_confidence', 0.9)
+                        results['keywords'].extend(audio_analysis.get('keywords', []))
+                        logger.info(f"   🎙️  Audio: {audio_analysis.get('transcription_preview', 'N/A')}")
+                        logger.info(f"   🌐 Language (from audio): {results['language_name']} ({results['language_confidence']:.0%})")
+                    else:
+                        logger.info(f"   🎵 Music detected - ignoring audio for language detection")
+
+            # Step 2: Extract video frames for visual analysis
             frames = self._extract_key_frames(video_path, max_frames=3)
             logger.info(f"   Extracted {len(frames)} key frames")
 
-            # Step 2: Extract text from frames (lightweight OCR)
+            # Step 3: Extract text from frames (lightweight OCR)
             ocr_texts = self._extract_text_from_frames(frames)
             results['ocr_text'] = ocr_texts
-            logger.info(f"   Found {len(ocr_texts)} text items via OCR")
-
-            # Step 3: Detect language from text
             if ocr_texts:
+                logger.info(f"   Found {len(ocr_texts)} text items via OCR")
+
+            # Step 4: Detect language from text (fallback if no audio)
+            if not audio_analysis and ocr_texts:
                 lang_result = self._detect_language_from_text(ocr_texts)
                 results['language'] = lang_result['language']
                 results['language_name'] = lang_result['language_name']
                 results['language_confidence'] = lang_result['confidence']
-                logger.info(f"   Language detected: {lang_result['language_name']} ({lang_result['confidence']:.0%})")
+                logger.info(f"   Language (from text): {lang_result['language_name']} ({lang_result['confidence']:.0%})")
 
-            # Step 4: Analyze content via Groq Vision API (if available)
+            # Step 5: Analyze content via Groq Vision API (if available)
             if self.groq_client and frames:
                 api_analysis = self._analyze_via_groq_vision(frames[0], video_metadata)
                 if api_analysis:
                     results.update(api_analysis)
-                    logger.info(f"   API analysis: {api_analysis.get('content_description', 'N/A')}")
+                    logger.info(f"   👁️  Visual: {api_analysis.get('content_description', 'N/A')}")
 
-            # Step 5: Fallback heuristics if API not available
+            # Step 6: Fallback heuristics if API not available
             else:
                 heuristic_analysis = self._heuristic_analysis(video_metadata, ocr_texts)
                 results.update(heuristic_analysis)
@@ -494,3 +511,163 @@ DESCRIPTION: [brief description]
             logger.info(f"   Actions: {', '.join(detected_actions[:3])}")
 
         return result
+
+    def _analyze_audio_via_groq(self, video_path: str, metadata: Dict) -> Optional[Dict]:
+        """
+        Analyze audio using Groq Whisper API
+        - Transcribes audio
+        - Detects language (MOST ACCURATE!)
+        - Extracts content keywords
+        - Detects if music (to ignore)
+
+        Returns:
+            Dict with audio analysis or None if failed
+        """
+        try:
+            import tempfile
+            import os
+            from moviepy.editor import VideoFileClip
+
+            logger.info("🎙️  Analyzing audio with Groq Whisper API...")
+
+            # Step 1: Extract audio from video (first 60 seconds for speed)
+            duration = metadata.get('duration', 0)
+            sample_duration = min(60, duration) if duration > 0 else 60
+
+            with tempfile.TemporaryDirectory() as temp_dir:
+                audio_path = os.path.join(temp_dir, 'audio.mp3')
+
+                # Extract audio using moviepy
+                video_clip = VideoFileClip(video_path)
+                audio_clip = video_clip.audio
+
+                if not audio_clip:
+                    logger.warning("   ⚠️  No audio track found in video")
+                    return None
+
+                # Sample first 60 seconds
+                if duration > sample_duration:
+                    audio_clip = audio_clip.subclip(0, sample_duration)
+
+                audio_clip.write_audiofile(audio_path, logger=None, verbose=False)
+                audio_clip.close()
+                video_clip.close()
+
+                # Step 2: Transcribe using Groq Whisper API
+                with open(audio_path, 'rb') as audio_file:
+                    transcription = self.groq_client.audio.transcriptions.create(
+                        file=audio_file,
+                        model="whisper-large-v3",
+                        response_format="verbose_json",  # Get language info
+                        language=None  # Auto-detect
+                    )
+
+                # Step 3: Parse results
+                transcription_text = transcription.text.strip()
+                detected_language = transcription.language  # ISO code (e.g., 'en', 'pt', 'ur')
+
+                # Language code to name mapping
+                LANGUAGE_NAMES = {
+                    'en': 'English', 'pt': 'Portuguese', 'fr': 'French',
+                    'es': 'Spanish', 'ur': 'Urdu', 'hi': 'Hindi', 'ar': 'Arabic',
+                    'zh': 'Chinese', 'ja': 'Japanese', 'ko': 'Korean',
+                    'de': 'German', 'it': 'Italian', 'ru': 'Russian'
+                }
+
+                language_name = LANGUAGE_NAMES.get(detected_language, detected_language.upper())
+
+                # Step 4: Detect if music (low confidence in transcription)
+                is_music = self._is_music_audio(transcription_text, transcription)
+
+                if is_music:
+                    logger.info("   🎵 Music detected (no speech)")
+                    return {
+                        'is_music': True,
+                        'language': 'en',  # Default
+                        'language_name': 'English',
+                        'language_confidence': 0.3,
+                        'transcription': '',
+                        'keywords': []
+                    }
+
+                # Step 5: Extract keywords from transcription
+                keywords = self._extract_keywords_from_text(transcription_text, detected_language)
+
+                logger.info(f"   ✅ Audio transcribed: {len(transcription_text)} chars")
+                logger.info(f"   🌐 Language: {language_name} ({detected_language})")
+
+                return {
+                    'is_music': False,
+                    'language': detected_language,
+                    'language_name': language_name,
+                    'language_confidence': 0.95,  # Whisper is very accurate
+                    'transcription': transcription_text,
+                    'transcription_preview': transcription_text[:100] + '...' if len(transcription_text) > 100 else transcription_text,
+                    'keywords': keywords
+                }
+
+        except Exception as e:
+            logger.warning(f"   ⚠️  Audio analysis failed: {e}")
+            return None
+
+    def _is_music_audio(self, transcription_text: str, transcription_obj) -> bool:
+        """
+        Detect if audio is primarily music (no speech)
+
+        Indicators:
+        - Very short transcription (< 10 chars)
+        - Repetitive patterns
+        - Low confidence
+        - Musical terms only
+        """
+        # Empty or very short transcription = likely music
+        if len(transcription_text.strip()) < 10:
+            return True
+
+        # Check for musical patterns
+        musical_terms = ['[music]', '(music)', 'instrumental', 'beat', 'melody']
+        if any(term in transcription_text.lower() for term in musical_terms):
+            return True
+
+        # Check for repetitive characters (instrumental sounds transcribed)
+        if len(set(transcription_text.lower().replace(' ', ''))) < 5:
+            return True
+
+        return False
+
+    def _extract_keywords_from_text(self, text: str, language: str = 'en') -> List[str]:
+        """Extract meaningful keywords from transcription"""
+        import re
+
+        # Common stopwords per language
+        stopwords = {
+            'en': {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+                   'of', 'with', 'by', 'from', 'is', 'are', 'was', 'were', 'be', 'been',
+                   'this', 'that', 'these', 'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they'},
+            'pt': {'o', 'a', 'de', 'do', 'da', 'em', 'para', 'com', 'por', 'um', 'uma',
+                   'os', 'as', 'dos', 'das', 'no', 'na', 'nos', 'nas', 'e', 'ou', 'mas'},
+            'es': {'el', 'la', 'de', 'del', 'en', 'para', 'con', 'por', 'un', 'una',
+                   'los', 'las', 'y', 'o', 'pero', 'al'},
+            'fr': {'le', 'la', 'de', 'du', 'des', 'en', 'pour', 'avec', 'par', 'un', 'une',
+                   'les', 'et', 'ou', 'mais'},
+            'ur': {'کا', 'کی', 'کے', 'میں', 'پر', 'سے', 'کو', 'نے', 'ہے', 'ہیں', 'تھا', 'تھے'},
+            'hi': {'का', 'की', 'के', 'में', 'पर', 'से', 'को', 'ने', 'है', 'हैं', 'था', 'थे'},
+            'ar': {'في', 'من', 'إلى', 'على', 'عن', 'هو', 'هي', 'كان', 'كانت'}
+        }
+
+        lang_stopwords = stopwords.get(language, stopwords['en'])
+
+        # Extract words
+        words = re.findall(r'\b\w+\b', text.lower())
+
+        # Filter: length > 3, not stopword, not number
+        keywords = []
+        for word in words:
+            if (len(word) > 3 and
+                word not in lang_stopwords and
+                not word.isdigit()):
+                keywords.append(word)
+
+        # Return top 10 unique keywords
+        unique_keywords = list(dict.fromkeys(keywords))  # Preserve order, remove duplicates
+        return unique_keywords[:10]

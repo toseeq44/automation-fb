@@ -126,17 +126,19 @@ class APIContentAnalyzer:
                 logger.info(f"   Language (from text): {lang_result['language_name']} ({lang_result['confidence']:.0%})")
 
             # Step 5: Analyze content via Groq Vision API (if available)
+            api_success = False
             if self.groq_client and frames:
                 api_analysis = self._analyze_via_groq_vision(frames[0], video_metadata)
                 if api_analysis:
                     results.update(api_analysis)
                     logger.info(f"   👁️  Visual: {api_analysis.get('content_description', 'N/A')}")
+                    api_success = True
 
-            # Step 6: Fallback heuristics if API not available
-            else:
+            # Step 6: Fallback heuristics if API failed or not available
+            if not api_success:
                 heuristic_analysis = self._heuristic_analysis(video_metadata, ocr_texts)
                 results.update(heuristic_analysis)
-                logger.info(f"   Heuristic analysis: {heuristic_analysis.get('niche', 'general')}")
+                logger.info(f"   🔄 Heuristic fallback: {heuristic_analysis.get('niche', 'general')}")
 
             logger.info("✅ Content analysis complete (API-based)")
             return results
@@ -301,7 +303,7 @@ DESCRIPTION: [brief description]
 """
 
             response = self.groq_client.chat.completions.create(
-                model="llama-3.2-90b-vision-preview",  # Groq vision model
+                model="llama-3.2-11b-vision-preview",  # Groq vision model (current)
                 messages=[{
                     "role": "user",
                     "content": [
@@ -467,8 +469,13 @@ DESCRIPTION: [brief description]
         best_niche = 'general'
         best_score = 0
 
+        # DEBUG: Show what text we're analyzing
+        logger.debug(f"   DEBUG: Analyzing text: '{combined_lower[:100]}'")
+
         for niche, keywords in niche_keywords.items():
             matches = sum(1 for kw in keywords if kw in combined_lower)
+            if matches > 0:
+                logger.debug(f"   DEBUG: {niche} = {matches} matches")
             if matches > best_score:
                 best_score = matches
                 best_niche = niche
@@ -476,6 +483,7 @@ DESCRIPTION: [brief description]
         if best_score >= 1:  # Even 1 match is enough (lowered threshold)
             result['niche'] = best_niche
             result['niche_confidence'] = min(0.9, 0.4 + (best_score * 0.15))
+            logger.info(f"   ✅ Niche detected: {best_niche} ({matches} keywords matched)")
 
         # ========================================
         # STEP 4: Build content description
@@ -606,6 +614,14 @@ DESCRIPTION: [brief description]
                     'keywords': keywords
                 }
 
+        except ModuleNotFoundError as e:
+            if 'moviepy' in str(e):
+                logger.warning("   ⚠️  MoviePy not installed - audio analysis disabled")
+                logger.warning("   💡 Install: pip install moviepy")
+                logger.warning("   📌 Audio analysis provides accurate language detection!")
+            else:
+                logger.warning(f"   ⚠️  Audio analysis failed: Missing module - {e}")
+            return None
         except Exception as e:
             logger.warning(f"   ⚠️  Audio analysis failed: {e}")
             return None

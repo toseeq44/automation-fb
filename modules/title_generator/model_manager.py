@@ -29,20 +29,45 @@ class ModelManager:
         self.ensure_models_dir()
 
     def _get_default_models_dir(self) -> str:
-        """Get platform-specific models directory"""
+        """
+        Get models directory with priority search order:
+        1. C:\AI_Models\ (Windows) or ~/AI_Models/ (Linux/Mac)
+        2. Desktop\AI_Models\
+        3. ~/.cache/ (automatic downloads)
+        """
+        import platform
+
+        # Try multiple locations in order
+        possible_locations = []
+
         system = platform.system()
 
         if system == 'Windows':
-            # For Windows EXE: C:\TitleGenerator\models
-            models_dir = r"C:\TitleGenerator\models"
-        elif system == 'Darwin':  # macOS
-            # For macOS: ~/Library/TitleGenerator/models
-            models_dir = os.path.expanduser("~/Library/TitleGenerator/models")
-        else:  # Linux
-            # For Linux: ~/.title_generator/models
-            models_dir = os.path.expanduser("~/.title_generator/models")
+            # Windows paths
+            possible_locations = [
+                r"C:\AI_Models",                                    # Priority 1
+                os.path.join(os.path.expanduser("~"), "Desktop", "AI_Models"),  # Priority 2
+                os.path.join(os.path.expanduser("~"), "AI_Models"),  # Priority 3
+            ]
+        else:  # Linux/Mac
+            # Unix paths
+            home = os.path.expanduser("~")
+            possible_locations = [
+                os.path.join(home, "AI_Models"),                    # Priority 1
+                os.path.join(home, "Desktop", "AI_Models"),         # Priority 2
+                os.path.join(home, ".cache", "ai_models"),          # Priority 3
+            ]
 
-        return models_dir
+        # Check which directory exists and has models
+        for location in possible_locations:
+            if os.path.exists(location):
+                # Check if it has any model files
+                if any(os.listdir(location)) if os.path.isdir(location) else False:
+                    logger.info(f"📁 Found AI_Models at: {location}")
+                    return location
+
+        # If none exist, return first priority (will be created)
+        return possible_locations[0]
 
     def ensure_models_dir(self):
         """Create models directory if it doesn't exist"""

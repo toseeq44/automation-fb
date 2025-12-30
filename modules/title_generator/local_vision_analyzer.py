@@ -35,18 +35,43 @@ class LocalVisionAnalyzer:
         self._check_models()
 
     def _get_default_models_dir(self) -> str:
-        """Get default models directory"""
+        """
+        Get default models directory with priority search:
+        1. C:\AI_Models\ (Windows) or ~/AI_Models/ (Linux/Mac)
+        2. Desktop\AI_Models\
+        3. Cache directory (automatic downloads)
+        """
         import platform
 
-        if platform.system() == 'Windows':
-            # For EXE: C:\TitleGenerator\models
-            default_dir = r"C:\TitleGenerator\models"
-        else:
-            # For Linux/Mac: ~/.title_generator/models
-            default_dir = os.path.expanduser("~/.title_generator/models")
+        possible_locations = []
+        system = platform.system()
 
-        # Create if doesn't exist
+        if system == 'Windows':
+            # Windows: Check multiple locations
+            possible_locations = [
+                r"C:\AI_Models",
+                os.path.join(os.path.expanduser("~"), "Desktop", "AI_Models"),
+                os.path.join(os.path.expanduser("~"), "AI_Models"),
+            ]
+        else:  # Linux/Mac
+            home = os.path.expanduser("~")
+            possible_locations = [
+                os.path.join(home, "AI_Models"),
+                os.path.join(home, "Desktop", "AI_Models"),
+                os.path.join(home, ".cache", "ai_models"),
+            ]
+
+        # Return first existing directory with files, or first in list
+        for location in possible_locations:
+            if os.path.exists(location):
+                if os.path.isdir(location) and os.listdir(location):
+                    logger.info(f"   📁 Using AI_Models from: {location}")
+                    return location
+
+        # Create and return first priority location
+        default_dir = possible_locations[0]
         os.makedirs(default_dir, exist_ok=True)
+        logger.info(f"   📁 Created AI_Models at: {default_dir}")
         return default_dir
 
     def _check_models(self):

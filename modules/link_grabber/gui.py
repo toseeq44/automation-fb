@@ -42,7 +42,21 @@ class LinkGrabberPage(QWidget):
         self.cookies_dir = Path(__file__).parent.parent.parent / "cookies"
         self.cookies_dir.mkdir(parents=True, exist_ok=True)
 
+        # Proxy settings file
+        self.config_dir = Path(__file__).parent.parent.parent / "config"
+        self.config_dir.mkdir(parents=True, exist_ok=True)
+        self.proxy_config_file = self.config_dir / "proxy_settings.json"
+
+        # Store validated proxies
+        self.validated_proxies = []
+
+        # Logs expanded state (default: expanded)
+        self.logs_expanded = True
+
         self.init_ui()
+
+        # Load saved proxies after UI is initialized
+        self.load_proxy_settings()
 
     def closeEvent(self, event):
         """Properly cleanup thread on close to prevent crash"""
@@ -307,9 +321,6 @@ class LinkGrabberPage(QWidget):
         self.validate_proxy1_btn.clicked.connect(lambda: self.validate_proxy(1))
         self.validate_proxy2_btn.clicked.connect(lambda: self.validate_proxy(2))
 
-        # Store validated proxies
-        self.validated_proxies = []
-
         options_row = QHBoxLayout()
         options_row.setSpacing(10)
 
@@ -450,8 +461,42 @@ class LinkGrabberPage(QWidget):
         """)
         layout.addWidget(self.progress_bar)
 
+        # ===== LOGS SECTION WITH TOGGLE =====
+        logs_header_row = QHBoxLayout()
+        logs_header_label = QLabel("📋 Activity Logs")
+        logs_header_label.setStyleSheet("""
+            font-size: 16px;
+            font-weight: bold;
+            color: #1ABC9C;
+        """)
+
+        self.toggle_logs_btn = QPushButton("▼ Collapse")
+        self.toggle_logs_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2C2F33;
+                color: #1ABC9C;
+                border: 2px solid #1ABC9C;
+                padding: 5px 15px;
+                border-radius: 5px;
+                font-size: 12px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #1ABC9C;
+                color: #F5F6F5;
+            }
+        """)
+        self.toggle_logs_btn.clicked.connect(self.toggle_logs)
+
+        logs_header_row.addWidget(logs_header_label)
+        logs_header_row.addStretch()
+        logs_header_row.addWidget(self.toggle_logs_btn)
+        layout.addLayout(logs_header_row)
+
         self.log_area = QTextEdit()
         self.log_area.setReadOnly(True)
+        self.log_area.setMinimumHeight(200)  # Default expanded height
+        self.log_area.setMaximumHeight(400)  # Can expand up to this
         self.log_area.setStyleSheet("""
             QTextEdit {
                 background-color: #2C2F33;
@@ -503,6 +548,76 @@ class LinkGrabberPage(QWidget):
             )
             self.log_area.append("ℹ️ Links ready for downloader - open the Video Downloader module to continue.")
 
+    def load_proxy_settings(self):
+        """Load saved proxy settings from config file"""
+        try:
+            if self.proxy_config_file.exists():
+                import json
+                with open(self.proxy_config_file, 'r') as f:
+                    settings = json.load(f)
+
+                # Load proxies into input fields
+                proxy1 = settings.get('proxy1', '')
+                proxy2 = settings.get('proxy2', '')
+
+                if proxy1:
+                    self.proxy1_input.setText(proxy1)
+                    # Mark as previously validated (will re-validate on use)
+                    self.proxy1_status.setText("💾 Saved")
+                    self.proxy1_status.setStyleSheet("color: #FFA500; font-size: 11px;")
+                    self.validated_proxies.append(proxy1)
+
+                if proxy2:
+                    self.proxy2_input.setText(proxy2)
+                    self.proxy2_status.setText("💾 Saved")
+                    self.proxy2_status.setStyleSheet("color: #FFA500; font-size: 11px;")
+                    self.validated_proxies.append(proxy2)
+
+                if proxy1 or proxy2:
+                    self.log_area.append(f"📥 Loaded {len([p for p in [proxy1, proxy2] if p])} saved proxy(ies)")
+
+        except Exception as e:
+            # Silently fail if can't load (first time use)
+            pass
+
+    def save_proxy_settings(self):
+        """Save current proxies to config file"""
+        try:
+            import json
+
+            # Get current proxies from input fields
+            proxy1 = self.proxy1_input.text().strip()
+            proxy2 = self.proxy2_input.text().strip()
+
+            settings = {
+                'proxy1': proxy1,
+                'proxy2': proxy2,
+                'last_updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+
+            with open(self.proxy_config_file, 'w') as f:
+                json.dump(settings, f, indent=2)
+
+            self.log_area.append("💾 Proxy settings saved")
+
+        except Exception as e:
+            self.log_area.append(f"⚠️ Failed to save proxy settings: {str(e)[:50]}")
+
+    def toggle_logs(self):
+        """Toggle logs area between collapsed and expanded"""
+        if self.logs_expanded:
+            # Collapse
+            self.log_area.setMaximumHeight(80)  # Collapsed height (3-4 lines)
+            self.log_area.setMinimumHeight(80)
+            self.toggle_logs_btn.setText("▶ Expand")
+            self.logs_expanded = False
+        else:
+            # Expand
+            self.log_area.setMaximumHeight(400)  # Expanded height
+            self.log_area.setMinimumHeight(200)
+            self.toggle_logs_btn.setText("▼ Collapse")
+            self.logs_expanded = True
+
     def validate_proxy(self, proxy_num):
         """Validate proxy and update status"""
         from .core import _validate_proxy
@@ -537,6 +652,9 @@ class LinkGrabberPage(QWidget):
             # Add to validated list
             if proxy not in self.validated_proxies:
                 self.validated_proxies.append(proxy)
+
+            # Auto-save validated proxies
+            self.save_proxy_settings()
 
         else:
             # Proxy failed - Show detailed error

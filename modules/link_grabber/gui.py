@@ -198,6 +198,118 @@ class LinkGrabberPage(QWidget):
         self.save_cookie_btn.setEnabled(True)
         self.clear_cookie_btn.setEnabled(True)
 
+        # ===== PROXY SECTION (2026 Upgrade) =====
+        proxy_group = QGroupBox("🌐 Proxy Settings (Optional - Max 2 Proxies)")
+        proxy_group.setCheckable(True)
+        proxy_group.setChecked(False)  # Collapsed by default
+        proxy_group.setStyleSheet("""
+            QGroupBox {
+                font-size: 14px;
+                font-weight: bold;
+                border: 2px solid #4B5057;
+                border-radius: 5px;
+                margin-top: 10px;
+                padding-top: 15px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+        """)
+        proxy_layout = QVBoxLayout()
+
+        # Proxy 1 Input
+        proxy1_row = QHBoxLayout()
+        proxy1_label = QLabel("Proxy 1:")
+        proxy1_label.setStyleSheet("color: #F5F6F5; font-size: 13px;")
+        self.proxy1_input = QLineEdit()
+        self.proxy1_input.setPlaceholderText("e.g., 123.45.67.89:8080 or user:pass@ip:port")
+        self.proxy1_input.setStyleSheet("""
+            QLineEdit {
+                background-color: #2C2F33;
+                color: #F5F6F5;
+                border: 2px solid #4B5057;
+                padding: 5px;
+                border-radius: 5px;
+                font-size: 12px;
+            }
+            QLineEdit:focus { border: 2px solid #1ABC9C; }
+        """)
+        self.validate_proxy1_btn = QPushButton("✓ Validate")
+        self.validate_proxy1_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #1ABC9C;
+                color: white;
+                border: none;
+                padding: 5px 10px;
+                border-radius: 5px;
+                font-size: 11px;
+            }
+            QPushButton:hover { background-color: #16A085; }
+        """)
+        self.proxy1_status = QLabel("⚪ Not validated")
+        self.proxy1_status.setStyleSheet("color: #888; font-size: 11px;")
+
+        proxy1_row.addWidget(proxy1_label)
+        proxy1_row.addWidget(self.proxy1_input, 3)
+        proxy1_row.addWidget(self.validate_proxy1_btn)
+        proxy1_row.addWidget(self.proxy1_status, 1)
+        proxy_layout.addLayout(proxy1_row)
+
+        # Proxy 2 Input
+        proxy2_row = QHBoxLayout()
+        proxy2_label = QLabel("Proxy 2:")
+        proxy2_label.setStyleSheet("color: #F5F6F5; font-size: 13px;")
+        self.proxy2_input = QLineEdit()
+        self.proxy2_input.setPlaceholderText("e.g., 98.76.54.32:3128 (optional)")
+        self.proxy2_input.setStyleSheet("""
+            QLineEdit {
+                background-color: #2C2F33;
+                color: #F5F6F5;
+                border: 2px solid #4B5057;
+                padding: 5px;
+                border-radius: 5px;
+                font-size: 12px;
+            }
+            QLineEdit:focus { border: 2px solid #1ABC9C; }
+        """)
+        self.validate_proxy2_btn = QPushButton("✓ Validate")
+        self.validate_proxy2_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #1ABC9C;
+                color: white;
+                border: none;
+                padding: 5px 10px;
+                border-radius: 5px;
+                font-size: 11px;
+            }
+            QPushButton:hover { background-color: #16A085; }
+        """)
+        self.proxy2_status = QLabel("⚪ Not validated")
+        self.proxy2_status.setStyleSheet("color: #888; font-size: 11px;")
+
+        proxy2_row.addWidget(proxy2_label)
+        proxy2_row.addWidget(self.proxy2_input, 3)
+        proxy2_row.addWidget(self.validate_proxy2_btn)
+        proxy2_row.addWidget(self.proxy2_status, 1)
+        proxy_layout.addLayout(proxy2_row)
+
+        # Proxy info/tip
+        proxy_tip = QLabel("💡 Proxies help bypass IP blocks and rate limits. Leave empty to use direct connection.")
+        proxy_tip.setStyleSheet("color: #888; font-size: 11px; font-style: italic;")
+        proxy_layout.addWidget(proxy_tip)
+
+        proxy_group.setLayout(proxy_layout)
+        layout.addWidget(proxy_group)
+
+        # Connect proxy validation signals
+        self.validate_proxy1_btn.clicked.connect(lambda: self.validate_proxy(1))
+        self.validate_proxy2_btn.clicked.connect(lambda: self.validate_proxy(2))
+
+        # Store validated proxies
+        self.validated_proxies = []
+
         options_row = QHBoxLayout()
         options_row.setSpacing(10)
 
@@ -387,6 +499,51 @@ class LinkGrabberPage(QWidget):
             )
             self.log_area.append("ℹ️ Links ready for downloader - open the Video Downloader module to continue.")
 
+    def validate_proxy(self, proxy_num):
+        """Validate proxy and update status"""
+        from .core import _validate_proxy
+
+        # Get proxy input
+        if proxy_num == 1:
+            proxy = self.proxy1_input.text().strip()
+            status_label = self.proxy1_status
+        else:
+            proxy = self.proxy2_input.text().strip()
+            status_label = self.proxy2_status
+
+        if not proxy:
+            status_label.setText("⚪ Not validated")
+            status_label.setStyleSheet("color: #888; font-size: 11px;")
+            return
+
+        # Show validating message
+        status_label.setText("🔄 Validating...")
+        status_label.setStyleSheet("color: #FFA500; font-size: 11px;")
+        self.log_area.append(f"🔄 Validating Proxy {proxy_num}: {proxy}")
+
+        # Validate proxy
+        result = _validate_proxy(proxy, timeout=10)
+
+        if result['working']:
+            # Proxy is working
+            status_label.setText(f"✅ Working ({result['response_time']}s)")
+            status_label.setStyleSheet("color: #1ABC9C; font-size: 11px;")
+            self.log_area.append(f"✅ Proxy {proxy_num} validated: {result['ip']} ({result['response_time']}s)")
+
+            # Add to validated list
+            if proxy not in self.validated_proxies:
+                self.validated_proxies.append(proxy)
+
+        else:
+            # Proxy failed
+            status_label.setText("❌ Not working")
+            status_label.setStyleSheet("color: #E74C3C; font-size: 11px;")
+            self.log_area.append(f"❌ Proxy {proxy_num} validation failed")
+
+            # Remove from validated list if exists
+            if proxy in self.validated_proxies:
+                self.validated_proxies.remove(proxy)
+
     def toggle_limit_spin(self, state):
         self.limit_spin.setEnabled(state != Qt.Checked)
 
@@ -419,9 +576,24 @@ class LinkGrabberPage(QWidget):
             # Extract browser name (e.g., "Use Browser (Chrome)" -> "chrome")
             browser = cookie_source.split("(")[1].split(")")[0].lower()
 
+        # Collect proxies (if provided)
+        proxies = []
+        proxy1 = self.proxy1_input.text().strip()
+        proxy2 = self.proxy2_input.text().strip()
+
+        if proxy1 and proxy1 in self.validated_proxies:
+            proxies.append(proxy1)
+        if proxy2 and proxy2 in self.validated_proxies:
+            proxies.append(proxy2)
+
+        if proxies:
+            self.log_area.append(f"🌐 Using {len(proxies)} validated proxy(ies)")
+
         options = {
             "max_videos": max_videos,
-            "cookie_browser": browser  # None for file, "chrome"/"firefox"/"edge" for browser
+            "cookie_browser": browser,  # None for file, "chrome"/"firefox"/"edge" for browser
+            "proxies": proxies,  # List of validated proxies
+            "use_enhancements": True  # Enable enhanced extraction methods
         }
         if len(urls) == 1:
             self.thread = LinkGrabberThread(urls[0], options)

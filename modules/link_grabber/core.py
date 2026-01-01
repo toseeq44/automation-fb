@@ -333,6 +333,244 @@ def _save_links_to_file(creator_name: str, links: typing.List[dict], creator_fol
     return str(filepath)
 
 
+# ============ ENHANCED FEATURES (2026 Upgrade) ============
+
+def _validate_proxy(proxy: str, timeout: int = 10) -> dict:
+    """
+    Validate if proxy is working and get performance metrics
+
+    Args:
+        proxy: Proxy string (e.g., "123.45.67.89:8080" or "user:pass@ip:port")
+        timeout: Validation timeout in seconds
+
+    Returns:
+        dict with 'working': bool, 'response_time': float, 'ip': str
+    """
+    result = {'working': False, 'response_time': 999, 'ip': 'Unknown'}
+
+    try:
+        from .config import PROXY_CONFIG
+        import requests
+
+        # Format proxy for requests
+        proxy_url = f"http://{proxy}" if not proxy.startswith('http') else proxy
+        proxies = {
+            'http': proxy_url,
+            'https': proxy_url
+        }
+
+        # Test proxy with httpbin
+        start_time = time.time()
+        response = requests.get(
+            PROXY_CONFIG['test_urls']['ip_check'],
+            proxies=proxies,
+            timeout=timeout
+        )
+        response_time = time.time() - start_time
+
+        if response.status_code == 200:
+            result['working'] = True
+            result['response_time'] = round(response_time, 2)
+            try:
+                result['ip'] = response.json().get('origin', 'Unknown')
+            except:
+                result['ip'] = 'Working'
+
+    except Exception as e:
+        logging.debug(f"Proxy validation failed for {proxy}: {e}")
+
+    return result
+
+
+def _get_random_user_agent() -> str:
+    """Get random user agent from config pool"""
+    try:
+        from .config import USER_AGENTS
+        import random
+        return random.choice(USER_AGENTS)
+    except:
+        # Fallback if config not available
+        return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+
+
+def _apply_rate_limit(platform_key: str, custom_delay: float = None):
+    """
+    Apply rate limit delay based on platform
+
+    Args:
+        platform_key: Platform name (youtube, instagram, etc.)
+        custom_delay: Custom delay override (seconds)
+    """
+    try:
+        if custom_delay is not None:
+            time.sleep(custom_delay)
+            return
+
+        from .config import get_rate_limit, DELAY_CONFIG
+        import random
+
+        # Get platform-specific rate limit
+        rate_limit = get_rate_limit(platform_key)
+
+        # Add random jitter (human-like)
+        min_delay = max(rate_limit, DELAY_CONFIG['before_request_min'])
+        max_delay = DELAY_CONFIG['before_request_max']
+        delay = random.uniform(min_delay, max_delay)
+
+        logging.debug(f"Rate limit: waiting {delay:.1f}s for {platform_key}")
+        time.sleep(delay)
+
+    except Exception as e:
+        # Fallback: 2-3 second delay
+        import random
+        time.sleep(random.uniform(2, 3))
+
+
+def _get_ytdlp_binary_path() -> str:
+    """
+    Get path to bundled yt-dlp.exe binary
+
+    Returns:
+        Path to yt-dlp binary (bundled or system)
+    """
+    import sys
+
+    try:
+        # Check if running as EXE (PyInstaller)
+        if getattr(sys, 'frozen', False):
+            # Running as bundled EXE
+            base_path = sys._MEIPASS
+            ytdlp_path = os.path.join(base_path, 'bin', 'yt-dlp.exe')
+
+            if os.path.exists(ytdlp_path):
+                logging.debug(f"Using bundled yt-dlp.exe: {ytdlp_path}")
+                return ytdlp_path
+
+        # Fallback to system yt-dlp
+        return 'yt-dlp'
+
+    except Exception:
+        return 'yt-dlp'
+
+
+def _execute_ytdlp_dual(url: str, options: dict, proxy: str = None, user_agent: str = None) -> typing.List[dict]:
+    """
+    DUAL YT-DLP APPROACH: Try Python API first, fallback to binary
+
+    Args:
+        url: URL to extract
+        options: yt-dlp options dict
+        proxy: Proxy string (optional)
+        user_agent: User agent string (optional)
+
+    Returns:
+        List of extracted entries with url, title, date
+    """
+    entries = []
+
+    # Add proxy and user agent to options
+    if proxy:
+        options['proxy'] = f"http://{proxy}" if not proxy.startswith('http') else proxy
+    if user_agent:
+        options['user_agent'] = user_agent
+
+    # ===== APPROACH 1: Python API (Faster, Better Error Handling) =====
+    try:
+        import yt_dlp
+
+        logging.debug("Trying yt-dlp Python API...")
+
+        with yt_dlp.YoutubeDL(options) as ydl:
+            info = ydl.extract_info(url, download=False)
+
+            if info:
+                # Handle playlist
+                if 'entries' in info:
+                    for entry in info['entries']:
+                        if entry:
+                            entries.append({
+                                'url': entry.get('webpage_url') or entry.get('url', ''),
+                                'title': entry.get('title', 'Untitled')[:100],
+                                'date': entry.get('upload_date', '00000000')
+                            })
+                # Handle single video
+                else:
+                    entries.append({
+                        'url': info.get('webpage_url') or info.get('url', ''),
+                        'title': info.get('title', 'Untitled')[:100],
+                        'date': info.get('upload_date', '00000000')
+                    })
+
+                if entries:
+                    logging.debug(f"✓ Python API success: {len(entries)} links")
+                    return entries
+
+    except Exception as e:
+        logging.debug(f"Python API failed: {e}")
+
+    # ===== APPROACH 2: Binary Subprocess (Fallback) =====
+    try:
+        logging.debug("Falling back to yt-dlp binary...")
+
+        ytdlp_path = _get_ytdlp_binary_path()
+
+        cmd = [ytdlp_path, '--dump-json', '--flat-playlist', '--ignore-errors', '--no-warnings']
+
+        # Add proxy
+        if proxy:
+            cmd.extend(['--proxy', options.get('proxy', proxy)])
+
+        # Add user agent
+        if user_agent:
+            cmd.extend(['--user-agent', user_agent])
+
+        # Add cookies
+        if 'cookiesfrombrowser' in options:
+            cmd.extend(['--cookies-from-browser', options['cookiesfrombrowser']])
+        elif 'cookiefile' in options:
+            cmd.extend(['--cookies', options['cookiefile']])
+
+        # Add max videos
+        if 'playlistend' in options:
+            cmd.extend(['--playlist-end', str(options['playlistend'])])
+
+        cmd.append(url)
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=options.get('socket_timeout', 30),
+            encoding='utf-8',
+            errors='replace'
+        )
+
+        if result.stdout:
+            for line in result.stdout.splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    data = json.loads(line)
+                    video_url = data.get('webpage_url') or data.get('url')
+                    if video_url:
+                        entries.append({
+                            'url': video_url,
+                            'title': data.get('title', 'Untitled')[:100],
+                            'date': data.get('upload_date', '00000000')
+                        })
+                except:
+                    continue
+
+            if entries:
+                logging.debug(f"✓ Binary success: {len(entries)} links")
+                return entries
+
+    except Exception as e:
+        logging.debug(f"Binary fallback failed: {e}")
+
+    return entries
+
+
 # ============ EXTRACTION METHODS ============
 
 def _retry_on_failure(func, max_retries=3, delay=2):
@@ -347,7 +585,73 @@ def _retry_on_failure(func, max_retries=3, delay=2):
     return None
 
 
-def _method_ytdlp_dump_json(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, cookie_browser: str = None) -> typing.List[dict]:
+def _method_ytdlp_enhanced(
+    url: str,
+    platform_key: str,
+    cookie_file: str = None,
+    max_videos: int = 0,
+    cookie_browser: str = None,
+    proxy: str = None,
+    user_agent: str = None,
+    apply_delay: bool = True
+) -> typing.List[dict]:
+    """
+    ENHANCED YT-DLP METHOD: Uses dual approach (Python API + Binary fallback)
+    with proxy, user agent rotation, and rate limiting
+    """
+    try:
+        # Apply rate limiting before request
+        if apply_delay:
+            _apply_rate_limit(platform_key)
+
+        # Get random user agent if not provided
+        if not user_agent:
+            user_agent = _get_random_user_agent()
+
+        # Build yt-dlp options
+        from .config import YTDLP_CONFIG
+
+        options = {
+            'quiet': YTDLP_CONFIG['quiet'],
+            'no_warnings': YTDLP_CONFIG['no_warnings'],
+            'ignore_errors': True,
+            'extract_flat': 'in_playlist',
+            'socket_timeout': YTDLP_CONFIG['socket_timeout'],
+        }
+
+        # Add cookies
+        if cookie_browser:
+            options['cookiesfrombrowser'] = cookie_browser
+        elif cookie_file:
+            options['cookiefile'] = cookie_file
+
+        # Add playlist limit
+        if max_videos > 0:
+            options['playlistend'] = max_videos
+
+        # Platform-specific optimizations
+        if platform_key == 'instagram':
+            options['extractor_args'] = {'instagram': {'feed_count': 100}}
+        elif platform_key == 'youtube':
+            options['extractor_args'] = {'youtube': {'player_client': 'android'}}
+
+        # Execute with dual approach
+        entries = _execute_ytdlp_dual(url, options, proxy, user_agent)
+
+        if entries:
+            # Sort by date (newest first)
+            entries.sort(key=lambda x: x.get('date', '00000000'), reverse=True)
+            logging.debug(f"Enhanced yt-dlp: {len(entries)} links extracted")
+
+        return entries
+
+    except Exception as e:
+        logging.debug(f"Enhanced yt-dlp method failed: {e}")
+
+    return []
+
+
+def _method_ytdlp_dump_json(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, cookie_browser: str = None, proxy: str = None, user_agent: str = None) -> typing.List[dict]:
     """METHOD 1: yt-dlp --dump-json (WITH DATES) - PRIMARY METHOD"""
     try:
         cmd = ['yt-dlp', '--dump-json', '--flat-playlist', '--ignore-errors', '--no-warnings']
@@ -998,9 +1302,36 @@ def extract_links_intelligent(
         entries: typing.List[dict] = []
         seen_normalized: typing.Set[str] = set()
 
+        # Extract proxy settings from options (support for 1-2 proxies)
+        proxy_list = options.get('proxies', []) or []
+        active_proxy = proxy_list[0] if proxy_list else None  # Use first proxy if available
+        use_enhancements = options.get('use_enhancements', True)  # Enable enhancements by default
+
+        # Show configuration summary
+        if progress_callback:
+            progress_callback(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            progress_callback(f"📊 Extraction Configuration:")
+            progress_callback(f"   • Creator: @{creator}")
+            progress_callback(f"   • Platform: {platform_key.title()}")
+            if active_proxy:
+                progress_callback(f"   • Proxy: {active_proxy} ✓")
+            if cookie_file:
+                progress_callback(f"   • Cookies: Loaded ✓")
+            if max_videos > 0:
+                progress_callback(f"   • Limit: {max_videos} videos")
+            else:
+                progress_callback(f"   • Limit: All videos (unlimited)")
+            if use_enhancements:
+                progress_callback(f"   • Enhancements: Enabled (Dual yt-dlp + UA Rotation)")
+            progress_callback(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
         # Define all available methods (pass cookie_browser to yt-dlp methods)
-        # PRIORITY ORDER: Simplest working methods first!
+        # PRIORITY ORDER: Enhanced method first, then fallback methods
         all_methods = [
+            ("Method 0: Enhanced yt-dlp (Dual API + Proxy + UA Rotation)",
+             lambda: _method_ytdlp_enhanced(url, platform_key, cookie_file, max_videos, cookie_browser, active_proxy),
+             use_enhancements),  # Only use if enhancements enabled
+
             ("Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)",
              lambda: _method_ytdlp_get_url(url, platform_key, cookie_file, max_videos, cookie_browser),
              True),
@@ -1147,9 +1478,23 @@ def extract_links_intelligent(
                 entries = entries[:max_videos]
 
             if progress_callback:
-                progress_callback(f"✅ Total: {len(entries)} unique links")
+                progress_callback(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                progress_callback(f"✅ Extraction Complete!")
+                progress_callback(f"   • Total Links: {len(entries)}")
                 if successful_method:
-                    progress_callback(f"🎯 Successful method: {successful_method}")
+                    progress_callback(f"   • Method Used: {successful_method}")
+                if active_proxy:
+                    progress_callback(f"   • Proxy Used: {active_proxy}")
+                progress_callback(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        else:
+            if progress_callback:
+                progress_callback(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                progress_callback(f"❌ No links found after trying all methods")
+                progress_callback(f"💡 Suggestions:")
+                progress_callback(f"   • Try updating cookies")
+                progress_callback(f"   • Use a different proxy")
+                progress_callback(f"   • Check if the account is private")
+                progress_callback(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
         return entries, creator
 

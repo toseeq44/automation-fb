@@ -15,7 +15,7 @@ else:
 
 from modules.logging import get_logger
 from modules.config import get_config
-from modules.license import LicenseManager
+from modules.license import LicenseManager, sync_all_plans
 from modules.ui import LicenseActivationDialog
 
 # Import development mode settings
@@ -178,6 +178,10 @@ def main():
                 f"Your license will expire in {days_remaining} day(s).\n\n"
                 "Please renew your subscription to continue using OneSoul."
             )
+
+    # Sync user plan across all modules
+    logger.info("Syncing user plan across modules...", "App")
+    sync_all_plans(license_manager)
 
     # Launch main window
     logger.info("Launching main window", "App")

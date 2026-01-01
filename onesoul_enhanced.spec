@@ -43,6 +43,7 @@ a = Analysis(
     pathex=['.'],
     binaries=[
         ('cloudflared.exe', '.'),
+        ('bin/yt-dlp.exe', 'bin'),  # yt-dlp binary for Link Grabber
     ],
     datas=[
         # Helper images for auto uploader (REQUIRED - image recognition)

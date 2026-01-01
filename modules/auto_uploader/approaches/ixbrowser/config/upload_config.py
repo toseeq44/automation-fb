@@ -291,3 +291,52 @@ def update_config(section: str, key: str, value):
 
     if section.lower() in config_map:
         config_map[section.lower()][key] = value
+
+
+def sync_user_type_with_license():
+    """
+    Sync user_type in USER_CONFIG with current license plan.
+    Called automatically on module import and can be called manually.
+    """
+    try:
+        # Try to load license data from local storage
+        import os
+        license_path = os.path.join(os.path.expanduser('~'), '.onesoul', 'license.dat')
+
+        if not os.path.exists(license_path):
+            # No license file, keep default (basic)
+            return
+
+        # Import here to avoid circular dependencies
+        from modules.license import LicenseManager
+
+        # Create temporary license manager to get plan
+        license_manager = LicenseManager()
+        license_info = license_manager.get_license_info()
+
+        if not license_info:
+            return
+
+        # Get plan type from license
+        plan_type = license_info.get('plan_type', 'basic').lower()
+
+        # Map license plan types to basic/pro
+        if plan_type in ['pro', 'yearly', 'premium']:
+            new_user_type = 'pro'
+        else:
+            new_user_type = 'basic'
+
+        # Update USER_CONFIG if different
+        if USER_CONFIG['user_type'] != new_user_type:
+            import logging
+            logging.info(f"[Auto Uploader] Syncing user_type from license: {new_user_type}")
+            USER_CONFIG['user_type'] = new_user_type
+
+    except Exception as e:
+        # Silent fail - not critical, will use default
+        import logging
+        logging.debug(f"Could not sync auto uploader user_type with license: {e}")
+
+
+# Auto-sync on module import
+sync_user_type_with_license()

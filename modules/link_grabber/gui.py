@@ -42,7 +42,21 @@ class LinkGrabberPage(QWidget):
         from modules.config.paths import get_cookies_dir
         self.cookies_dir = get_cookies_dir()
 
+        # Proxy settings file
+        self.config_dir = Path(__file__).parent.parent.parent / "config"
+        self.config_dir.mkdir(parents=True, exist_ok=True)
+        self.proxy_config_file = self.config_dir / "proxy_settings.json"
+
+        # Store validated proxies
+        self.validated_proxies = []
+
+        # Logs expanded state (default: expanded)
+        self.logs_expanded = True
+
         self.init_ui()
+
+        # Load saved proxies after UI is initialized
+        self.load_proxy_settings()
 
     def closeEvent(self, event):
         """Properly cleanup thread on close to prevent crash"""
@@ -198,6 +212,115 @@ class LinkGrabberPage(QWidget):
         self.save_cookie_btn.setEnabled(True)
         self.clear_cookie_btn.setEnabled(True)
 
+        # ===== PROXY SECTION (2026 Upgrade) =====
+        proxy_group = QGroupBox("🌐 Proxy Settings (Optional - Max 2 Proxies)")
+        proxy_group.setCheckable(True)
+        proxy_group.setChecked(False)  # Collapsed by default
+        proxy_group.setStyleSheet("""
+            QGroupBox {
+                font-size: 14px;
+                font-weight: bold;
+                border: 2px solid #4B5057;
+                border-radius: 5px;
+                margin-top: 10px;
+                padding-top: 15px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+        """)
+        proxy_layout = QVBoxLayout()
+
+        # Proxy 1 Input
+        proxy1_row = QHBoxLayout()
+        proxy1_label = QLabel("Proxy 1:")
+        proxy1_label.setStyleSheet("color: #F5F6F5; font-size: 13px;")
+        self.proxy1_input = QLineEdit()
+        self.proxy1_input.setPlaceholderText("e.g., 123.45.67.89:8080 or user:pass@ip:port")
+        self.proxy1_input.setStyleSheet("""
+            QLineEdit {
+                background-color: #2C2F33;
+                color: #F5F6F5;
+                border: 2px solid #4B5057;
+                padding: 5px;
+                border-radius: 5px;
+                font-size: 12px;
+            }
+            QLineEdit:focus { border: 2px solid #1ABC9C; }
+        """)
+        self.validate_proxy1_btn = QPushButton("✓ Validate")
+        self.validate_proxy1_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #1ABC9C;
+                color: white;
+                border: none;
+                padding: 5px 10px;
+                border-radius: 5px;
+                font-size: 11px;
+            }
+            QPushButton:hover { background-color: #16A085; }
+        """)
+        self.proxy1_status = QLabel("⚪ Not validated")
+        self.proxy1_status.setStyleSheet("color: #888; font-size: 11px;")
+
+        proxy1_row.addWidget(proxy1_label)
+        proxy1_row.addWidget(self.proxy1_input, 3)
+        proxy1_row.addWidget(self.validate_proxy1_btn)
+        proxy1_row.addWidget(self.proxy1_status, 1)
+        proxy_layout.addLayout(proxy1_row)
+
+        # Proxy 2 Input
+        proxy2_row = QHBoxLayout()
+        proxy2_label = QLabel("Proxy 2:")
+        proxy2_label.setStyleSheet("color: #F5F6F5; font-size: 13px;")
+        self.proxy2_input = QLineEdit()
+        self.proxy2_input.setPlaceholderText("e.g., 98.76.54.32:3128 (optional)")
+        self.proxy2_input.setStyleSheet("""
+            QLineEdit {
+                background-color: #2C2F33;
+                color: #F5F6F5;
+                border: 2px solid #4B5057;
+                padding: 5px;
+                border-radius: 5px;
+                font-size: 12px;
+            }
+            QLineEdit:focus { border: 2px solid #1ABC9C; }
+        """)
+        self.validate_proxy2_btn = QPushButton("✓ Validate")
+        self.validate_proxy2_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #1ABC9C;
+                color: white;
+                border: none;
+                padding: 5px 10px;
+                border-radius: 5px;
+                font-size: 11px;
+            }
+            QPushButton:hover { background-color: #16A085; }
+        """)
+        self.proxy2_status = QLabel("⚪ Not validated")
+        self.proxy2_status.setStyleSheet("color: #888; font-size: 11px;")
+
+        proxy2_row.addWidget(proxy2_label)
+        proxy2_row.addWidget(self.proxy2_input, 3)
+        proxy2_row.addWidget(self.validate_proxy2_btn)
+        proxy2_row.addWidget(self.proxy2_status, 1)
+        proxy_layout.addLayout(proxy2_row)
+
+        # Proxy info/tip
+        proxy_tip = QLabel("💡 Proxies help bypass IP blocks and rate limits. Leave empty to use direct connection.")
+        proxy_tip.setStyleSheet("color: #888; font-size: 11px; font-style: italic;")
+        proxy_layout.addWidget(proxy_tip)
+
+        proxy_group.setLayout(proxy_layout)
+        layout.addWidget(proxy_group)
+
+        # Connect proxy validation signals
+        self.validate_proxy1_btn.clicked.connect(lambda: self.validate_proxy(1))
+        self.validate_proxy2_btn.clicked.connect(lambda: self.validate_proxy(2))
+
         options_row = QHBoxLayout()
         options_row.setSpacing(10)
 
@@ -257,6 +380,7 @@ class LinkGrabberPage(QWidget):
         self.copy_btn = QPushButton("📋 Copy All")
         self.clear_btn = QPushButton("🧹 Clear")
         self.download_btn = QPushButton("⬇ Download Links")  # New button to switch to downloader
+        self.help_btn = QPushButton("❓ Help")  # New help button
 
         button_style = """
             QPushButton {
@@ -285,6 +409,7 @@ class LinkGrabberPage(QWidget):
         self.copy_btn.setStyleSheet(button_style)
         self.clear_btn.setStyleSheet(button_style)
         self.download_btn.setStyleSheet(button_style)
+        self.help_btn.setStyleSheet(button_style)
 
         self.save_btn.setEnabled(False)
         self.copy_btn.setEnabled(False)
@@ -295,6 +420,7 @@ class LinkGrabberPage(QWidget):
         btn_row.addWidget(self.save_btn)
         btn_row.addWidget(self.copy_btn)
         btn_row.addWidget(self.clear_btn)
+        btn_row.addWidget(self.help_btn)
         btn_row.addWidget(self.download_btn)
         layout.addLayout(btn_row)
 
@@ -335,8 +461,42 @@ class LinkGrabberPage(QWidget):
         """)
         layout.addWidget(self.progress_bar)
 
+        # ===== LOGS SECTION WITH TOGGLE =====
+        logs_header_row = QHBoxLayout()
+        logs_header_label = QLabel("📋 Activity Logs")
+        logs_header_label.setStyleSheet("""
+            font-size: 16px;
+            font-weight: bold;
+            color: #1ABC9C;
+        """)
+
+        self.toggle_logs_btn = QPushButton("▼ Collapse")
+        self.toggle_logs_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2C2F33;
+                color: #1ABC9C;
+                border: 2px solid #1ABC9C;
+                padding: 5px 15px;
+                border-radius: 5px;
+                font-size: 12px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #1ABC9C;
+                color: #F5F6F5;
+            }
+        """)
+        self.toggle_logs_btn.clicked.connect(self.toggle_logs)
+
+        logs_header_row.addWidget(logs_header_label)
+        logs_header_row.addStretch()
+        logs_header_row.addWidget(self.toggle_logs_btn)
+        layout.addLayout(logs_header_row)
+
         self.log_area = QTextEdit()
         self.log_area.setReadOnly(True)
+        self.log_area.setMinimumHeight(200)  # Default expanded height
+        self.log_area.setMaximumHeight(400)  # Can expand up to this
         self.log_area.setStyleSheet("""
             QTextEdit {
                 background-color: #2C2F33;
@@ -357,6 +517,7 @@ class LinkGrabberPage(QWidget):
         self.copy_btn.clicked.connect(self.copy_all_links)
         self.clear_btn.clicked.connect(self.clear_interface)
         self.download_btn.clicked.connect(self.start_download_page)
+        self.help_btn.clicked.connect(self.show_help)
 
         # Populate link list if shared links exist
         for link in self.links:
@@ -386,6 +547,132 @@ class LinkGrabberPage(QWidget):
                 f"Prepared {len(cleaned)} link(s). Switch to the Video Downloader module to continue."
             )
             self.log_area.append("ℹ️ Links ready for downloader - open the Video Downloader module to continue.")
+
+    def load_proxy_settings(self):
+        """Load saved proxy settings from config file"""
+        try:
+            if self.proxy_config_file.exists():
+                import json
+                with open(self.proxy_config_file, 'r') as f:
+                    settings = json.load(f)
+
+                # Load proxies into input fields
+                proxy1 = settings.get('proxy1', '')
+                proxy2 = settings.get('proxy2', '')
+
+                if proxy1:
+                    self.proxy1_input.setText(proxy1)
+                    # Mark as previously validated (will re-validate on use)
+                    self.proxy1_status.setText("💾 Saved")
+                    self.proxy1_status.setStyleSheet("color: #FFA500; font-size: 11px;")
+                    self.validated_proxies.append(proxy1)
+
+                if proxy2:
+                    self.proxy2_input.setText(proxy2)
+                    self.proxy2_status.setText("💾 Saved")
+                    self.proxy2_status.setStyleSheet("color: #FFA500; font-size: 11px;")
+                    self.validated_proxies.append(proxy2)
+
+                if proxy1 or proxy2:
+                    self.log_area.append(f"📥 Loaded {len([p for p in [proxy1, proxy2] if p])} saved proxy(ies)")
+
+        except Exception as e:
+            # Silently fail if can't load (first time use)
+            pass
+
+    def save_proxy_settings(self):
+        """Save current proxies to config file"""
+        try:
+            import json
+
+            # Get current proxies from input fields
+            proxy1 = self.proxy1_input.text().strip()
+            proxy2 = self.proxy2_input.text().strip()
+
+            settings = {
+                'proxy1': proxy1,
+                'proxy2': proxy2,
+                'last_updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+
+            with open(self.proxy_config_file, 'w') as f:
+                json.dump(settings, f, indent=2)
+
+            self.log_area.append("💾 Proxy settings saved")
+
+        except Exception as e:
+            self.log_area.append(f"⚠️ Failed to save proxy settings: {str(e)[:50]}")
+
+    def toggle_logs(self):
+        """Toggle logs area between collapsed and expanded"""
+        if self.logs_expanded:
+            # Collapse
+            self.log_area.setMaximumHeight(80)  # Collapsed height (3-4 lines)
+            self.log_area.setMinimumHeight(80)
+            self.toggle_logs_btn.setText("▶ Expand")
+            self.logs_expanded = False
+        else:
+            # Expand
+            self.log_area.setMaximumHeight(400)  # Expanded height
+            self.log_area.setMinimumHeight(200)
+            self.toggle_logs_btn.setText("▼ Collapse")
+            self.logs_expanded = True
+
+    def validate_proxy(self, proxy_num):
+        """Validate proxy and update status"""
+        from .core import _validate_proxy
+
+        # Get proxy input
+        if proxy_num == 1:
+            proxy = self.proxy1_input.text().strip()
+            status_label = self.proxy1_status
+        else:
+            proxy = self.proxy2_input.text().strip()
+            status_label = self.proxy2_status
+
+        if not proxy:
+            status_label.setText("⚪ Not validated")
+            status_label.setStyleSheet("color: #888; font-size: 11px;")
+            return
+
+        # Show validating message
+        status_label.setText("🔄 Validating...")
+        status_label.setStyleSheet("color: #FFA500; font-size: 11px;")
+        self.log_area.append(f"🔄 Validating Proxy {proxy_num}: {proxy}")
+
+        # Validate proxy
+        result = _validate_proxy(proxy, timeout=10)
+
+        if result['working']:
+            # Proxy is working
+            status_label.setText(f"✅ Working ({result['response_time']}s)")
+            status_label.setStyleSheet("color: #1ABC9C; font-size: 11px;")
+            self.log_area.append(f"✅ Proxy {proxy_num} validated: {result['ip']} ({result['response_time']}s)")
+
+            # Add to validated list
+            if proxy not in self.validated_proxies:
+                self.validated_proxies.append(proxy)
+
+            # Auto-save validated proxies
+            self.save_proxy_settings()
+
+        else:
+            # Proxy failed - Show detailed error
+            error_msg = result.get('error', 'Unknown error')
+
+            # Truncate error for status label (max 30 chars)
+            short_error = error_msg[:30] + "..." if len(error_msg) > 30 else error_msg
+            status_label.setText(f"❌ {short_error}")
+            status_label.setStyleSheet("color: #E74C3C; font-size: 10px;")
+            status_label.setToolTip(error_msg)  # Full error in tooltip
+
+            # Show full error in log
+            self.log_area.append(f"❌ Proxy {proxy_num} validation failed")
+            self.log_area.append(f"   Error: {error_msg}")
+
+            # Remove from validated list if exists
+            if proxy in self.validated_proxies:
+                self.validated_proxies.remove(proxy)
 
     def toggle_limit_spin(self, state):
         self.limit_spin.setEnabled(state != Qt.Checked)
@@ -419,9 +706,24 @@ class LinkGrabberPage(QWidget):
             # Extract browser name (e.g., "Use Browser (Chrome)" -> "chrome")
             browser = cookie_source.split("(")[1].split(")")[0].lower()
 
+        # Collect proxies (if provided)
+        proxies = []
+        proxy1 = self.proxy1_input.text().strip()
+        proxy2 = self.proxy2_input.text().strip()
+
+        if proxy1 and proxy1 in self.validated_proxies:
+            proxies.append(proxy1)
+        if proxy2 and proxy2 in self.validated_proxies:
+            proxies.append(proxy2)
+
+        if proxies:
+            self.log_area.append(f"🌐 Using {len(proxies)} validated proxy(ies)")
+
         options = {
             "max_videos": max_videos,
-            "cookie_browser": browser  # None for file, "chrome"/"firefox"/"edge" for browser
+            "cookie_browser": browser,  # None for file, "chrome"/"firefox"/"edge" for browser
+            "proxies": proxies,  # List of validated proxies
+            "use_enhancements": True  # Enable enhanced extraction methods
         }
         if len(urls) == 1:
             self.thread = LinkGrabberThread(urls[0], options)
@@ -504,6 +806,148 @@ class LinkGrabberPage(QWidget):
         if self.thread and self.thread.isRunning():
             self.thread.cancel()
             self.thread = None
+
+    def show_help(self):
+        """Show comprehensive help dialog"""
+        help_text = """
+╔══════════════════════════════════════════════════════════════════════╗
+║           📖 Link Grabber - User Guide & Troubleshooting             ║
+╚══════════════════════════════════════════════════════════════════════╝
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  🌐 PROXY SETUP GUIDE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The app supports ALL proxy formats automatically:
+
+1️⃣ No Authentication:
+   209.101.203.79:59100
+
+2️⃣ Standard Format (user:pass@ip:port):
+   username:password@209.101.203.79:59100
+
+3️⃣ Provider Format (ip:port:user:pass):
+   209.101.203.79:59100:username:password
+
+✨ All formats are automatically detected and converted!
+
+HOW TO USE:
+• Enter proxy in ANY format above
+• Click "✓ Validate" to test connection
+• Green ✅ = Working, Red ❌ = Failed
+• Only validated proxies are used during extraction
+
+WHY USE PROXIES:
+• Bypass IP blocks and rate limits
+• Access geo-restricted content
+• Prevent detection during bulk operations
+• Max 2 proxies supported
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  🔧 yt-dlp INSTALLATION (Optional - App Has Built-in)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The app includes yt-dlp, but you can install your own for updates:
+
+DETECTION PRIORITY:
+1. Bundled yt-dlp.exe (in app) - Most reliable ✓
+2. System yt-dlp (in PATH) - If you installed
+3. Custom locations (C:\\yt-dlp, AppData, etc.)
+
+RECOMMENDED INSTALL (for updates):
+1. Download: https://github.com/yt-dlp/yt-dlp/releases/latest
+2. Install to system PATH OR save to: C:\\yt-dlp\\yt-dlp.exe
+3. Restart app
+
+VERIFICATION:
+• Open Command Prompt
+• Run: yt-dlp --version
+• Should show version number
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  🍪 COOKIE TROUBLESHOOTING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+If link grabbing fails:
+
+✅ SOLUTIONS:
+1. Update cookies (they expire!)
+2. Use "Use Browser (Chrome)" option
+3. Try different proxy
+4. Check if account is private
+5. Verify you're logged into the platform
+
+COOKIE FORMATS:
+• Netscape format (recommended)
+• Export using "Get cookies.txt" Chrome extension
+• Place in cookies/ folder or use Browser mode
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  🎯 BEST PRACTICES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+• Always validate proxies before use
+• Update cookies regularly (weekly)
+• Use "Fetch All Videos" for complete extraction
+• For private accounts, ensure cookies are fresh
+• Check logs for detailed error messages
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ❓ COMMON ERRORS & FIXES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ERROR: "Proxy connection failed"
+FIX: Check proxy format, verify credentials, try HTTP instead of HTTPS
+
+ERROR: "No links found"
+FIX: Update cookies, check account privacy, try proxy, verify URL
+
+ERROR: "Proxy timeout"
+FIX: Proxy too slow, try different proxy or increase timeout
+
+ERROR: "Authentication failed"
+FIX: Check proxy username/password, verify format
+
+╔══════════════════════════════════════════════════════════════════════╗
+║  Need more help? Check the logs for detailed error messages!         ║
+╚══════════════════════════════════════════════════════════════════════╝
+        """
+
+        # Create scrollable message box
+        msg = QMessageBox(self)
+        msg.setWindowTitle("📖 Link Grabber Help & Guide")
+        msg.setText("Comprehensive Guide for Link Grabber")
+        msg.setDetailedText(help_text)
+        msg.setIcon(QMessageBox.Information)
+        msg.setStandardButtons(QMessageBox.Ok)
+
+        # Make it bigger and scrollable
+        msg.setStyleSheet("""
+            QMessageBox {
+                background-color: #2C2F33;
+                color: #F5F6F5;
+            }
+            QTextEdit {
+                background-color: #23272A;
+                color: #F5F6F5;
+                font-family: 'Courier New', monospace;
+                font-size: 11px;
+                min-width: 700px;
+                min-height: 500px;
+            }
+            QPushButton {
+                background-color: #1ABC9C;
+                color: white;
+                padding: 8px 20px;
+                border-radius: 5px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #16A085;
+            }
+        """)
+
+        msg.exec_()
 
     def on_progress_log(self, msg):
         self.log_area.append(msg)

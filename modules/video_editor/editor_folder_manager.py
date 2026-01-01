@@ -327,6 +327,7 @@ class PlanLimitChecker:
             )
         self.config_path = config_path
         self.plan_info = self._load_plan_info()
+        self._sync_with_license()  # Auto-sync with license on init
 
     def _load_plan_info(self) -> PlanInfo:
         """Load plan info from file"""
@@ -348,6 +349,44 @@ class PlanLimitChecker:
                 json.dump(self.plan_info.to_dict(), f, indent=2)
         except Exception as e:
             logger.error(f"Error saving plan info: {e}")
+
+    def _sync_with_license(self):
+        """Sync plan with license manager (auto-sync on init)"""
+        try:
+            # Try to load license data from local storage
+            license_path = os.path.join(os.path.expanduser('~'), '.onesoul', 'license.dat')
+
+            if not os.path.exists(license_path):
+                # No license file, keep current plan (default: basic)
+                return
+
+            # Import here to avoid circular dependencies
+            from modules.license import LicenseManager
+
+            # Create temporary license manager to get plan
+            license_manager = LicenseManager()
+            license_info = license_manager.get_license_info()
+
+            if not license_info:
+                return
+
+            # Get plan type from license
+            plan_type = license_info.get('plan_type', 'basic').lower()
+
+            # Map license plan types to basic/pro
+            if plan_type in ['pro', 'yearly', 'premium']:
+                new_plan = 'pro'
+            else:
+                new_plan = 'basic'
+
+            # Update plan if different
+            if self.plan_info.user_plan != new_plan:
+                logger.info(f"[Video Editor] Syncing plan from license: {new_plan}")
+                self.set_user_plan(new_plan)
+
+        except Exception as e:
+            logger.debug(f"Could not sync with license (not critical): {e}")
+            # Silent fail - not critical, will use default/saved plan
 
     def _check_and_reset_daily(self):
         """Reset daily count if new day"""

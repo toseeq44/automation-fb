@@ -335,49 +335,161 @@ def _save_links_to_file(creator_name: str, links: typing.List[dict], creator_fol
 
 # ============ ENHANCED FEATURES (2026 Upgrade) ============
 
-def _validate_proxy(proxy: str, timeout: int = 10) -> dict:
+def _parse_proxy_format(proxy: str) -> str:
     """
-    Validate if proxy is working and get performance metrics
+    Parse and convert proxy format to standard format
+
+    Supports 3 formats:
+    1. ip:port                                    → http://ip:port
+    2. user:pass@ip:port                          → http://user:pass@ip:port
+    3. ip:port:user:pass (provider format)        → http://user:pass@ip:port
 
     Args:
-        proxy: Proxy string (e.g., "123.45.67.89:8080" or "user:pass@ip:port")
+        proxy: Proxy string in any supported format
+
+    Returns:
+        Standardized proxy URL (http://...)
+    """
+    try:
+        proxy = proxy.strip()
+
+        # If already has protocol, return as-is
+        if proxy.startswith('http://') or proxy.startswith('https://'):
+            return proxy
+
+        # Check for @ symbol (standard format: user:pass@ip:port)
+        if '@' in proxy:
+            # Format: user:pass@ip:port (already standard)
+            return f"http://{proxy}"
+
+        # Split by colon to check format
+        parts = proxy.split(':')
+
+        if len(parts) == 4:
+            # Format: ip:port:user:pass (provider format)
+            ip, port, user, password = parts
+            return f"http://{user}:{password}@{ip}:{port}"
+
+        elif len(parts) == 2:
+            # Format: ip:port (no authentication)
+            return f"http://{proxy}"
+
+        else:
+            # Unknown format, try as-is
+            logging.warning(f"Unknown proxy format: {proxy}, using as-is")
+            return f"http://{proxy}"
+
+    except Exception as e:
+        logging.error(f"Failed to parse proxy format: {e}")
+        return f"http://{proxy}"
+
+
+def _validate_proxy(proxy: str, timeout: int = 10) -> dict:
+    """
+    Enhanced proxy validation with detailed error reporting
+
+    Validates proxy by testing connection to httpbin.org
+    Supports all proxy formats via _parse_proxy_format()
+
+    Args:
+        proxy: Proxy string in any format
         timeout: Validation timeout in seconds
 
     Returns:
-        dict with 'working': bool, 'response_time': float, 'ip': str
+        dict with:
+        - 'working': bool
+        - 'response_time': float
+        - 'ip': str (detected IP through proxy)
+        - 'error': str (error message if failed)
     """
-    result = {'working': False, 'response_time': 999, 'ip': 'Unknown'}
+    result = {
+        'working': False,
+        'response_time': 999,
+        'ip': 'Unknown',
+        'error': ''
+    }
 
     try:
-        from .config import PROXY_CONFIG
         import requests
+        from requests.packages.urllib3.exceptions import InsecureRequestWarning
 
-        # Format proxy for requests
-        proxy_url = f"http://{proxy}" if not proxy.startswith('http') else proxy
+        # Suppress SSL warnings for proxy testing
+        requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+
+        # Parse proxy format (handles all 3 formats)
+        proxy_url = _parse_proxy_format(proxy)
+        logging.debug(f"Parsed proxy: {proxy} → {proxy_url}")
+
         proxies = {
             'http': proxy_url,
             'https': proxy_url
         }
 
-        # Test proxy with httpbin
-        start_time = time.time()
-        response = requests.get(
-            PROXY_CONFIG['test_urls']['ip_check'],
-            proxies=proxies,
-            timeout=timeout
-        )
-        response_time = time.time() - start_time
+        # Try HTTP first (faster, less SSL issues)
+        try:
+            start_time = time.time()
+            response = requests.get(
+                'http://httpbin.org/ip',
+                proxies=proxies,
+                timeout=timeout,
+                verify=False
+            )
+            response_time = time.time() - start_time
 
-        if response.status_code == 200:
-            result['working'] = True
-            result['response_time'] = round(response_time, 2)
+            if response.status_code == 200:
+                result['working'] = True
+                result['response_time'] = round(response_time, 2)
+                try:
+                    result['ip'] = response.json().get('origin', 'Working')
+                except:
+                    result['ip'] = 'Working'
+
+                logging.info(f"Proxy validated: {result['ip']} ({result['response_time']}s)")
+                return result
+
+        except requests.exceptions.ProxyError as e:
+            result['error'] = f"Proxy connection failed: {str(e)[:50]}"
+        except requests.exceptions.Timeout:
+            result['error'] = "Proxy timeout (too slow)"
+        except requests.exceptions.ConnectionError as e:
+            result['error'] = f"Connection error: {str(e)[:50]}"
+        except Exception as http_error:
+            # HTTP failed, try HTTPS as fallback
             try:
-                result['ip'] = response.json().get('origin', 'Unknown')
-            except:
-                result['ip'] = 'Working'
+                start_time = time.time()
+                response = requests.get(
+                    'https://httpbin.org/ip',
+                    proxies=proxies,
+                    timeout=timeout,
+                    verify=False
+                )
+                response_time = time.time() - start_time
 
+                if response.status_code == 200:
+                    result['working'] = True
+                    result['response_time'] = round(response_time, 2)
+                    try:
+                        result['ip'] = response.json().get('origin', 'Working')
+                    except:
+                        result['ip'] = 'Working'
+
+                    logging.info(f"Proxy validated (HTTPS): {result['ip']} ({result['response_time']}s)")
+                    return result
+
+            except requests.exceptions.ProxyError as e:
+                result['error'] = f"Proxy auth failed: {str(e)[:50]}"
+            except requests.exceptions.Timeout:
+                result['error'] = "Proxy timeout (too slow)"
+            except requests.exceptions.ConnectionError as e:
+                result['error'] = f"Connection error: {str(e)[:50]}"
+            except Exception as https_error:
+                result['error'] = f"Both HTTP/HTTPS failed: {str(https_error)[:50]}"
+
+    except ImportError:
+        result['error'] = "requests library not available"
     except Exception as e:
-        logging.debug(f"Proxy validation failed for {proxy}: {e}")
+        result['error'] = f"Validation error: {str(e)[:100]}"
+        logging.error(f"Proxy validation error: {e}")
 
     return result
 
@@ -428,28 +540,70 @@ def _apply_rate_limit(platform_key: str, custom_delay: float = None):
 
 def _get_ytdlp_binary_path() -> str:
     """
-    Get path to bundled yt-dlp.exe binary
+    Multi-location yt-dlp detection with fallback chain
+
+    Priority Order:
+    1. Bundled yt-dlp.exe (in EXE) - Most reliable for distribution
+    2. System yt-dlp (in PATH) - If user has installed/updated
+    3. User's custom locations - Common installation directories
 
     Returns:
-        Path to yt-dlp binary (bundled or system)
+        Path to yt-dlp binary or command
     """
     import sys
 
     try:
-        # Check if running as EXE (PyInstaller)
+        # PRIORITY 1: Bundled yt-dlp.exe (in EXE distribution) - MOST RELIABLE
         if getattr(sys, 'frozen', False):
             # Running as bundled EXE
             base_path = sys._MEIPASS
             ytdlp_path = os.path.join(base_path, 'bin', 'yt-dlp.exe')
 
             if os.path.exists(ytdlp_path):
-                logging.debug(f"Using bundled yt-dlp.exe: {ytdlp_path}")
+                logging.info(f"✓ Using bundled yt-dlp: {ytdlp_path}")
                 return ytdlp_path
 
-        # Fallback to system yt-dlp
+        # PRIORITY 2: System yt-dlp (in PATH) - USER MANAGED/UPDATED
+        try:
+            result = subprocess.run(
+                ['yt-dlp', '--version'],
+                capture_output=True,
+                timeout=5,
+                text=True,
+                errors='ignore'
+            )
+            if result.returncode == 0:
+                version = result.stdout.strip()
+                logging.info(f"✓ Using system yt-dlp (v{version})")
+                return 'yt-dlp'
+        except (subprocess.SubprocessError, FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+
+        # PRIORITY 3: User's custom locations (common installation directories)
+        user_locations = [
+            r"C:\yt-dlp\yt-dlp.exe",  # Recommended location
+            os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Programs', 'yt-dlp', 'yt-dlp.exe'),
+            os.path.join(os.environ.get('APPDATA', ''), 'yt-dlp', 'yt-dlp.exe'),
+            os.path.join(Path.home(), 'yt-dlp', 'yt-dlp.exe'),
+            os.path.join(Path.home(), 'yt-dlp.exe'),
+            r"C:\Program Files\yt-dlp\yt-dlp.exe",
+        ]
+
+        for location in user_locations:
+            try:
+                expanded = os.path.expandvars(location)
+                if os.path.exists(expanded):
+                    logging.info(f"✓ Using user's yt-dlp: {expanded}")
+                    return expanded
+            except:
+                continue
+
+        # Ultimate fallback - try system command anyway
+        logging.warning("⚠ No yt-dlp found in known locations, trying system command")
         return 'yt-dlp'
 
-    except Exception:
+    except Exception as e:
+        logging.error(f"Error detecting yt-dlp: {e}")
         return 'yt-dlp'
 
 

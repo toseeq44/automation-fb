@@ -369,6 +369,7 @@ class LinkGrabberPage(QWidget):
         self.copy_btn = QPushButton("📋 Copy All")
         self.clear_btn = QPushButton("🧹 Clear")
         self.download_btn = QPushButton("⬇ Download Links")  # New button to switch to downloader
+        self.help_btn = QPushButton("❓ Help")  # New help button
 
         button_style = """
             QPushButton {
@@ -397,6 +398,7 @@ class LinkGrabberPage(QWidget):
         self.copy_btn.setStyleSheet(button_style)
         self.clear_btn.setStyleSheet(button_style)
         self.download_btn.setStyleSheet(button_style)
+        self.help_btn.setStyleSheet(button_style)
 
         self.save_btn.setEnabled(False)
         self.copy_btn.setEnabled(False)
@@ -407,6 +409,7 @@ class LinkGrabberPage(QWidget):
         btn_row.addWidget(self.save_btn)
         btn_row.addWidget(self.copy_btn)
         btn_row.addWidget(self.clear_btn)
+        btn_row.addWidget(self.help_btn)
         btn_row.addWidget(self.download_btn)
         layout.addLayout(btn_row)
 
@@ -469,6 +472,7 @@ class LinkGrabberPage(QWidget):
         self.copy_btn.clicked.connect(self.copy_all_links)
         self.clear_btn.clicked.connect(self.clear_interface)
         self.download_btn.clicked.connect(self.start_download_page)
+        self.help_btn.clicked.connect(self.show_help)
 
         # Populate link list if shared links exist
         for link in self.links:
@@ -535,10 +539,18 @@ class LinkGrabberPage(QWidget):
                 self.validated_proxies.append(proxy)
 
         else:
-            # Proxy failed
-            status_label.setText("❌ Not working")
-            status_label.setStyleSheet("color: #E74C3C; font-size: 11px;")
+            # Proxy failed - Show detailed error
+            error_msg = result.get('error', 'Unknown error')
+
+            # Truncate error for status label (max 30 chars)
+            short_error = error_msg[:30] + "..." if len(error_msg) > 30 else error_msg
+            status_label.setText(f"❌ {short_error}")
+            status_label.setStyleSheet("color: #E74C3C; font-size: 10px;")
+            status_label.setToolTip(error_msg)  # Full error in tooltip
+
+            # Show full error in log
             self.log_area.append(f"❌ Proxy {proxy_num} validation failed")
+            self.log_area.append(f"   Error: {error_msg}")
 
             # Remove from validated list if exists
             if proxy in self.validated_proxies:
@@ -676,6 +688,148 @@ class LinkGrabberPage(QWidget):
         if self.thread and self.thread.isRunning():
             self.thread.cancel()
             self.thread = None
+
+    def show_help(self):
+        """Show comprehensive help dialog"""
+        help_text = """
+╔══════════════════════════════════════════════════════════════════════╗
+║           📖 Link Grabber - User Guide & Troubleshooting             ║
+╚══════════════════════════════════════════════════════════════════════╝
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  🌐 PROXY SETUP GUIDE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The app supports ALL proxy formats automatically:
+
+1️⃣ No Authentication:
+   209.101.203.79:59100
+
+2️⃣ Standard Format (user:pass@ip:port):
+   username:password@209.101.203.79:59100
+
+3️⃣ Provider Format (ip:port:user:pass):
+   209.101.203.79:59100:username:password
+
+✨ All formats are automatically detected and converted!
+
+HOW TO USE:
+• Enter proxy in ANY format above
+• Click "✓ Validate" to test connection
+• Green ✅ = Working, Red ❌ = Failed
+• Only validated proxies are used during extraction
+
+WHY USE PROXIES:
+• Bypass IP blocks and rate limits
+• Access geo-restricted content
+• Prevent detection during bulk operations
+• Max 2 proxies supported
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  🔧 yt-dlp INSTALLATION (Optional - App Has Built-in)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The app includes yt-dlp, but you can install your own for updates:
+
+DETECTION PRIORITY:
+1. Bundled yt-dlp.exe (in app) - Most reliable ✓
+2. System yt-dlp (in PATH) - If you installed
+3. Custom locations (C:\\yt-dlp, AppData, etc.)
+
+RECOMMENDED INSTALL (for updates):
+1. Download: https://github.com/yt-dlp/yt-dlp/releases/latest
+2. Install to system PATH OR save to: C:\\yt-dlp\\yt-dlp.exe
+3. Restart app
+
+VERIFICATION:
+• Open Command Prompt
+• Run: yt-dlp --version
+• Should show version number
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  🍪 COOKIE TROUBLESHOOTING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+If link grabbing fails:
+
+✅ SOLUTIONS:
+1. Update cookies (they expire!)
+2. Use "Use Browser (Chrome)" option
+3. Try different proxy
+4. Check if account is private
+5. Verify you're logged into the platform
+
+COOKIE FORMATS:
+• Netscape format (recommended)
+• Export using "Get cookies.txt" Chrome extension
+• Place in cookies/ folder or use Browser mode
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  🎯 BEST PRACTICES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+• Always validate proxies before use
+• Update cookies regularly (weekly)
+• Use "Fetch All Videos" for complete extraction
+• For private accounts, ensure cookies are fresh
+• Check logs for detailed error messages
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ❓ COMMON ERRORS & FIXES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ERROR: "Proxy connection failed"
+FIX: Check proxy format, verify credentials, try HTTP instead of HTTPS
+
+ERROR: "No links found"
+FIX: Update cookies, check account privacy, try proxy, verify URL
+
+ERROR: "Proxy timeout"
+FIX: Proxy too slow, try different proxy or increase timeout
+
+ERROR: "Authentication failed"
+FIX: Check proxy username/password, verify format
+
+╔══════════════════════════════════════════════════════════════════════╗
+║  Need more help? Check the logs for detailed error messages!         ║
+╚══════════════════════════════════════════════════════════════════════╝
+        """
+
+        # Create scrollable message box
+        msg = QMessageBox(self)
+        msg.setWindowTitle("📖 Link Grabber Help & Guide")
+        msg.setText("Comprehensive Guide for Link Grabber")
+        msg.setDetailedText(help_text)
+        msg.setIcon(QMessageBox.Information)
+        msg.setStandardButtons(QMessageBox.Ok)
+
+        # Make it bigger and scrollable
+        msg.setStyleSheet("""
+            QMessageBox {
+                background-color: #2C2F33;
+                color: #F5F6F5;
+            }
+            QTextEdit {
+                background-color: #23272A;
+                color: #F5F6F5;
+                font-family: 'Courier New', monospace;
+                font-size: 11px;
+                min-width: 700px;
+                min-height: 500px;
+            }
+            QPushButton {
+                background-color: #1ABC9C;
+                color: white;
+                padding: 8px 20px;
+                border-radius: 5px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #16A085;
+            }
+        """)
+
+        msg.exec_()
 
     def on_progress_log(self, msg):
         self.log_area.append(msg)

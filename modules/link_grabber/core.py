@@ -1428,21 +1428,108 @@ def _method_gallery_dl(url: str, platform_key: str, cookie_file: str = None, pro
     return []
 
 
-def _method_playwright(url: str, platform_key: str, cookie_file: str = None) -> typing.List[dict]:
-    """METHOD 7: Playwright (BROWSER AUTOMATION - LAST RESORT)"""
-    if platform_key not in ['tiktok', 'instagram']:
+def _method_playwright(url: str, platform_key: str, cookie_file: str = None, proxy: str = None, max_videos: int = 0) -> typing.List[dict]:
+    """
+    METHOD 7: Playwright Browser Automation - ENHANCED WITH STEALTH
+
+    Uses real Chromium browser to bypass advanced bot detection.
+    Includes stealth mode, proxy support, and human-like behavior.
+    """
+    if platform_key not in ['tiktok', 'instagram', 'youtube']:
         return []
 
     try:
         from playwright.sync_api import sync_playwright
+        import random
+
+        logging.debug(f"🎭 Starting Playwright method for {platform_key}")
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            )
+            # ENHANCED: Launch options with stealth
+            launch_options = {
+                'headless': True,
+                'args': [
+                    '--disable-blink-features=AutomationControlled',  # Hide automation
+                    '--disable-dev-shm-usage',
+                    '--no-sandbox',
+                    '--disable-web-security',
+                    '--disable-features=IsolateOrigins,site-per-process',
+                ]
+            }
 
-            # Load cookies if available so we can access private/region locked content
+            # ENHANCED: Use bundled Chromium if available
+            chromium_path = Path(__file__).parent.parent.parent / 'bin' / 'chromium'
+            if chromium_path.exists():
+                launch_options['executable_path'] = str(chromium_path)
+                logging.debug(f"✓ Using bundled Chromium: {chromium_path}")
+
+            # ENHANCED: Add proxy if available
+            if proxy:
+                parsed_proxy = _parse_proxy_format(proxy)
+                if parsed_proxy.startswith('http'):
+                    # Extract proxy server (remove credentials for Playwright)
+                    if '@' in parsed_proxy:
+                        # Format: http://user:pass@ip:port
+                        proxy_parts = parsed_proxy.split('@')
+                        proxy_server = f"http://{proxy_parts[1]}"
+                        logging.debug(f"🌐 Playwright using proxy: {proxy_parts[1][:25]}...")
+                    else:
+                        proxy_server = parsed_proxy
+                        logging.debug(f"🌐 Playwright using proxy: {proxy_server[:25]}...")
+
+                    launch_options['proxy'] = {'server': proxy_server}
+
+            browser = p.chromium.launch(**launch_options)
+
+            # ENHANCED: Context with realistic Chrome fingerprint
+            context_options = {
+                'user_agent': _get_random_user_agent(),
+                'viewport': {'width': 1920, 'height': 1080},
+                'locale': 'en-US',
+                'timezone_id': 'America/New_York',
+                'permissions': ['geolocation'],
+                'color_scheme': 'light',
+                'extra_http_headers': {
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'DNT': '1',
+                }
+            }
+
+            context = browser.new_context(**context_options)
+
+            # ENHANCED: Add stealth scripts to hide automation
+            context.add_init_script("""
+                // Overwrite the `navigator.webdriver` property
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => false
+                });
+
+                // Overwrite the `navigator.plugins` property
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [1, 2, 3, 4, 5]
+                });
+
+                // Overwrite the `navigator.languages` property
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['en-US', 'en']
+                });
+
+                // Chrome runtime
+                window.chrome = {
+                    runtime: {}
+                };
+
+                // Permissions
+                const originalQuery = window.navigator.permissions.query;
+                window.navigator.permissions.query = (parameters) => (
+                    parameters.name === 'notifications' ?
+                        Promise.resolve({ state: Notification.permission }) :
+                        originalQuery(parameters)
+                );
+            """)
+
+            # Load cookies if available
             if cookie_file:
                 cookies = _load_cookies_from_file(cookie_file, platform_key)
                 playwright_cookies = []
@@ -1462,34 +1549,41 @@ def _method_playwright(url: str, platform_key: str, cookie_file: str = None) -> 
                 if playwright_cookies:
                     try:
                         context.add_cookies(playwright_cookies)
-                    except Exception:
-                        pass
+                        logging.debug(f"✓ Loaded {len(playwright_cookies)} cookies")
+                    except Exception as e:
+                        logging.debug(f"Cookie loading failed: {e}")
 
             page = context.new_page()
 
+            # ENHANCED: Human-like page loading
             base_url_map = {
                 'tiktok': 'https://www.tiktok.com/',
-                'instagram': 'https://www.instagram.com/'
+                'instagram': 'https://www.instagram.com/',
+                'youtube': 'https://www.youtube.com/'
             }
             seed_url = base_url_map.get(platform_key, url)
 
+            # Visit homepage first (more human-like)
             try:
-                page.goto(seed_url, timeout=30000)
-                time.sleep(1)
+                page.goto(seed_url, timeout=30000, wait_until='domcontentloaded')
+                time.sleep(random.uniform(1.0, 2.5))  # Random pause
             except Exception:
                 pass
 
-            page.goto(url, timeout=30000)
-            time.sleep(3)
+            # Now visit target URL
+            page.goto(url, timeout=30000, wait_until='domcontentloaded')
+            time.sleep(random.uniform(2.0, 4.0))  # Longer initial pause
 
             entries = []
 
+            # ENHANCED: Platform-specific extraction with human-like scrolling
             if platform_key == 'tiktok':
-                # Adaptive scrolling - scroll until no new content
                 previous_count = 0
                 no_change_count = 0
+                scroll_count = 0
+                max_scrolls = 50 if max_videos == 0 else min(50, max_videos // 5 + 5)
 
-                while no_change_count < 3:
+                while no_change_count < 3 and scroll_count < max_scrolls:
                     video_links = page.query_selector_all('a[href*="/video/"]')
                     current_count = len(video_links)
 
@@ -1498,22 +1592,35 @@ def _method_playwright(url: str, platform_key: str, cookie_file: str = None) -> 
                     else:
                         no_change_count = 0
 
+                    # ENHANCED: Human-like scrolling (variable distance)
+                    scroll_distance = random.randint(800, 1200)
+                    page.evaluate(f"window.scrollBy(0, {scroll_distance})")
+
+                    # ENHANCED: Random pauses (mimics reading)
+                    pause = random.uniform(1.5, 3.5)
+                    time.sleep(pause)
+
                     previous_count = current_count
-                    page.evaluate("window.scrollBy(0, 1000)")
-                    time.sleep(2)
+                    scroll_count += 1
+
+                    if max_videos > 0 and current_count >= max_videos:
+                        break
 
                 for link in video_links:
+                    if max_videos > 0 and len(entries) >= max_videos:
+                        break
                     if href := link.get_attribute('href'):
                         full_url = f"https://www.tiktok.com{href}" if not href.startswith('http') else href
                         entries.append({'url': full_url, 'title': 'TikTok Video', 'date': '00000000'})
 
             elif platform_key == 'instagram':
-                # Adaptive scrolling for Instagram
                 previous_count = 0
                 no_change_count = 0
+                scroll_count = 0
+                max_scrolls = 50 if max_videos == 0 else min(50, max_videos // 5 + 5)
 
-                while no_change_count < 3:
-                    post_links = page.query_selector_all('a[href*="/p/"], a[href*="/reel/"]')
+                while no_change_count < 3 and scroll_count < max_scrolls:
+                    post_links = page.query_selector_all('a[href*="/p/"], a[href*="/reel/"], a[href*="/tv/"]')
                     current_count = len(post_links)
 
                     if current_count == previous_count:
@@ -1521,23 +1628,81 @@ def _method_playwright(url: str, platform_key: str, cookie_file: str = None) -> 
                     else:
                         no_change_count = 0
 
+                    # ENHANCED: Human-like scrolling
+                    scroll_distance = random.randint(600, 1000)
+                    page.evaluate(f"window.scrollBy(0, {scroll_distance})")
+
+                    # ENHANCED: Random pauses
+                    pause = random.uniform(2.0, 4.0)
+                    time.sleep(pause)
+
                     previous_count = current_count
-                    page.evaluate("window.scrollBy(0, 1000)")
-                    time.sleep(2)
+                    scroll_count += 1
+
+                    if max_videos > 0 and current_count >= max_videos:
+                        break
 
                 for link in post_links:
+                    if max_videos > 0 and len(entries) >= max_videos:
+                        break
                     if href := link.get_attribute('href'):
                         full_url = f"https://www.instagram.com{href}" if not href.startswith('http') else href
                         entries.append({'url': full_url, 'title': 'Instagram Post', 'date': '00000000'})
 
+            elif platform_key == 'youtube':
+                # NEW: YouTube support
+                previous_count = 0
+                no_change_count = 0
+                scroll_count = 0
+                max_scrolls = 30 if max_videos == 0 else min(30, max_videos // 10 + 3)
+
+                while no_change_count < 3 and scroll_count < max_scrolls:
+                    # YouTube video links
+                    video_links = page.query_selector_all('a#video-title, a.yt-simple-endpoint[href*="/watch?v="]')
+                    current_count = len(video_links)
+
+                    if current_count == previous_count:
+                        no_change_count += 1
+                    else:
+                        no_change_count = 0
+
+                    # Human-like scrolling
+                    scroll_distance = random.randint(1000, 1500)
+                    page.evaluate(f"window.scrollBy(0, {scroll_distance})")
+                    pause = random.uniform(1.0, 2.5)
+                    time.sleep(pause)
+
+                    previous_count = current_count
+                    scroll_count += 1
+
+                    if max_videos > 0 and current_count >= max_videos:
+                        break
+
+                for link in video_links:
+                    if max_videos > 0 and len(entries) >= max_videos:
+                        break
+                    if href := link.get_attribute('href'):
+                        if '/watch?v=' in href:
+                            full_url = f"https://www.youtube.com{href}" if not href.startswith('http') else href
+                            # Clean URL (remove tracking params)
+                            full_url = full_url.split('&')[0]
+                            title = link.get_attribute('title') or 'YouTube Video'
+                            entries.append({'url': full_url, 'title': title[:100], 'date': '00000000'})
+
             context.close()
             browser.close()
+
+            if entries:
+                logging.debug(f"✓ Playwright extracted {len(entries)} links")
+            else:
+                logging.debug(f"⚠️ Playwright found 0 links")
+
             return entries
 
     except ImportError:
-        logging.debug("Playwright not installed")
+        logging.debug("❌ Playwright not installed (pip install playwright)")
     except Exception as e:
-        logging.debug(f"Method 7 (playwright) failed: {e}")
+        logging.debug(f"❌ Method 7 (playwright) failed: {str(e)[:100]}")
 
     return []
 
@@ -1781,9 +1946,9 @@ def extract_links_intelligent(
              lambda: _method_instaloader(url, platform_key, cookie_file, max_videos),
              platform_key == 'instagram'),
 
-            ("Method 7: Playwright",
-             lambda: _method_playwright(url, platform_key, cookie_file),
-             platform_key in ['tiktok', 'instagram']),
+            ("Method 7: Playwright (ENHANCED: Stealth + Proxy + Human Behavior)",
+             lambda: _method_playwright(url, platform_key, cookie_file, active_proxy, max_videos),
+             platform_key in ['tiktok', 'instagram', 'youtube']),
 
             ("Method 8: Selenium",
              lambda: _method_selenium(url, platform_key, max_videos, cookie_file),

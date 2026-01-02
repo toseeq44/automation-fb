@@ -37,17 +37,16 @@ def _detect_platform(url: str) -> str:
     return 'other'
 
 def _get_random_user_agent() -> str:
-    """Get random user agent to avoid detection"""
-    user_agents = [
-        # Real mobile browsers
-        'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
-        'Mozilla/5.0 (Linux; Android 13; SM-S901B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
-        'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36',
-        # TikTok app user agents (more realistic)
-        'com.zhiliaoapp.musically/2023405020 (Linux; U; Android 13; en_US; Pixel 7; Build/TP1A.220624.014; Cronet/TTNetVersion:7d6d3f56 2023-03-22 QuicVersion:47946a6c 2023-01-18)',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    ]
-    return random.choice(user_agents)
+    """
+    Get random user agent from shared pool to avoid detection.
+    Now uses the same 20+ user agents as Link Grabber for consistency.
+    """
+    try:
+        from modules.shared.user_agents import get_random_user_agent
+        return get_random_user_agent()
+    except ImportError:
+        # Fallback if shared module not available
+        return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 
 def _is_ip_block_error(error_text: str) -> bool:
     """Detect if error is due to IP blocking"""
@@ -490,6 +489,13 @@ class VideoDownloaderThread(QThread):
                 return False
 
             format_string = self.format_override or 'best'
+
+            # Get user agent (shared pool)
+            user_agent = _get_random_user_agent()
+
+            # Get current proxy
+            current_proxy = self._get_current_proxy()
+
             cmd = [
                 ytdlp_cmd,  # Use detected command instead of hardcoded 'yt-dlp'
                 '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
@@ -498,10 +504,20 @@ class VideoDownloaderThread(QThread):
                 '--restrict-filenames', '--no-warnings', '--retries', str(self.max_retries),
                 '--continue', '--no-check-certificate',
                 '--no-playlist',  # Don't download playlists
+                '--user-agent', user_agent,  # Random UA rotation
             ]
+
+            # Add proxy if available
+            if current_proxy:
+                cmd.extend(['--proxy', current_proxy])
+                self.progress.emit(f"   🌐 Proxy: {current_proxy.split('@')[-1][:20]}...")  # Hide credentials
+
             if cookie_file:
                 cmd.extend(['--cookies', cookie_file])
-                self.progress.emit(f"   🍪 Using cookies: {Path(cookie_file).name}")
+                self.progress.emit(f"   🍪 Cookies: {Path(cookie_file).name}")
+
+            self.progress.emit(f"   🎭 UA: {user_agent[:45]}...")
+
             cmd.append(url)
 
             self.progress.emit(f"   ⏳ Starting download...")

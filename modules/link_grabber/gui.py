@@ -50,9 +50,6 @@ class LinkGrabberPage(QWidget):
         # Store validated proxies
         self.validated_proxies = []
 
-        # Logs expanded state (default: expanded)
-        self.logs_expanded = True
-
         self.init_ui()
 
         # Load saved proxies after UI is initialized
@@ -470,27 +467,25 @@ class LinkGrabberPage(QWidget):
             color: #1ABC9C;
         """)
 
-        self.toggle_logs_btn = QPushButton("▼ Collapse")
-        self.toggle_logs_btn.setStyleSheet("""
+        maximize_btn = QPushButton("🔍 Maximize Output")
+        maximize_btn.setStyleSheet("""
             QPushButton {
-                background-color: #2C2F33;
-                color: #1ABC9C;
-                border: 2px solid #1ABC9C;
-                padding: 5px 15px;
-                border-radius: 5px;
+                background-color: #3498DB;
+                color: #F5F6F5;
+                border: none;
+                padding: 6px 12px;
+                border-radius: 4px;
                 font-size: 12px;
                 font-weight: bold;
             }
-            QPushButton:hover {
-                background-color: #1ABC9C;
-                color: #F5F6F5;
-            }
+            QPushButton:hover { background-color: #2980B9; }
+            QPushButton:pressed { background-color: #1F618D; }
         """)
-        self.toggle_logs_btn.clicked.connect(self.toggle_logs)
+        maximize_btn.clicked.connect(self.show_maximized_output)
 
         logs_header_row.addWidget(logs_header_label)
         logs_header_row.addStretch()
-        logs_header_row.addWidget(self.toggle_logs_btn)
+        logs_header_row.addWidget(maximize_btn)
         layout.addLayout(logs_header_row)
 
         self.log_area = QTextEdit()
@@ -603,20 +598,103 @@ class LinkGrabberPage(QWidget):
         except Exception as e:
             self.log_area.append(f"⚠️ Failed to save proxy settings: {str(e)[:50]}")
 
-    def toggle_logs(self):
-        """Toggle logs area between collapsed and expanded"""
-        if self.logs_expanded:
-            # Collapse
-            self.log_area.setMaximumHeight(80)  # Collapsed height (3-4 lines)
-            self.log_area.setMinimumHeight(80)
-            self.toggle_logs_btn.setText("▶ Expand")
-            self.logs_expanded = False
-        else:
-            # Expand
-            self.log_area.setMaximumHeight(400)  # Expanded height
-            self.log_area.setMinimumHeight(200)
-            self.toggle_logs_btn.setText("▼ Collapse")
-            self.logs_expanded = True
+    def show_maximized_output(self):
+        """Show activity logs in maximized window with copy and close buttons"""
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QTextEdit, QLabel, QPushButton, QApplication
+        from PyQt5.QtCore import Qt
+
+        # Create maximized dialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle("📋 Link Grabber Activity Logs - Full Output")
+        dialog.setWindowFlags(Qt.Window | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint)
+
+        # Set dialog size to 90% of screen
+        screen = QApplication.desktop().screenGeometry()
+        dialog.resize(int(screen.width() * 0.9), int(screen.height() * 0.9))
+
+        # Center dialog on screen
+        dialog.move((screen.width() - dialog.width()) // 2,
+                    (screen.height() - dialog.height()) // 2)
+
+        # Dark theme
+        dialog.setStyleSheet("""
+            QDialog {
+                background-color: #23272A;
+                color: #F5F6F5;
+            }
+        """)
+
+        # Layout
+        layout = QVBoxLayout()
+        layout.setContentsMargins(15, 15, 15, 15)
+        layout.setSpacing(10)
+
+        # Title
+        title = QLabel("📋 Link Grabber Activity Logs")
+        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #1ABC9C; margin-bottom: 10px;")
+        layout.addWidget(title)
+
+        # Full output text
+        output_text = QTextEdit()
+        output_text.setReadOnly(True)
+        output_text.setPlainText(self.log_area.toPlainText())  # Copy current log
+        output_text.setStyleSheet("""
+            QTextEdit {
+                background-color: #2C2F33;
+                color: #F5F6F5;
+                border: 2px solid #4B5057;
+                border-radius: 8px;
+                padding: 15px;
+                font-size: 14px;
+                font-family: 'Consolas', 'Courier New', monospace;
+            }
+        """)
+        layout.addWidget(output_text)
+
+        # Button bar
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+
+        # Copy All button
+        copy_btn = QPushButton("📋 Copy All")
+        copy_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3498DB;
+                color: #F5F6F5;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 6px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #2980B9; }
+            QPushButton:pressed { background-color: #1F618D; }
+        """)
+        copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(output_text.toPlainText()))
+        button_layout.addWidget(copy_btn)
+
+        # Close button
+        close_btn = QPushButton("✖️ Close")
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #E74C3C;
+                color: #F5F6F5;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 6px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #C0392B; }
+            QPushButton:pressed { background-color: #A93226; }
+        """)
+        close_btn.clicked.connect(dialog.close)
+        button_layout.addWidget(close_btn)
+
+        layout.addLayout(button_layout)
+
+        dialog.setLayout(layout)
+        dialog.exec_()
 
     def validate_proxy(self, proxy_num):
         """Validate proxy and update status"""

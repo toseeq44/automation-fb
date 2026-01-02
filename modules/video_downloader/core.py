@@ -768,6 +768,10 @@ class VideoDownloaderThread(QThread):
             start_time = datetime.now()
             self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] 🔄 Method 3: yt-dlp with Cookies")
 
+            # Get user agent and proxy
+            user_agent = _get_random_user_agent()
+            current_proxy = self._get_current_proxy()
+
             format_string = self.format_override or 'best'
             ydl_opts = {
                 'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
@@ -780,13 +784,21 @@ class VideoDownloaderThread(QThread):
                 'nocheckcertificate': True,
                 'restrictfilenames': True,
                 'progress_hooks': [self._progress_hook],
+                'http_headers': {'User-Agent': user_agent},  # UA rotation
             }
+
+            # Add proxy if available
+            if current_proxy:
+                ydl_opts['proxy'] = current_proxy
+                self.progress.emit(f"   🌐 Proxy: {current_proxy.split('@')[-1][:20]}...")
 
             if cookie_file:
                 ydl_opts['cookiefile'] = cookie_file
-                self.progress.emit(f"   🍪 Using: {Path(cookie_file).name}")
+                self.progress.emit(f"   🍪 Cookies: {Path(cookie_file).name}")
             else:
                 self.progress.emit(f"   ⚠️ No cookies (may fail for private content)")
+
+            self.progress.emit(f"   🎭 UA: {user_agent[:45]}...")
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
@@ -874,6 +886,10 @@ class VideoDownloaderThread(QThread):
                     self.progress.emit(f"   ⚠️ yt-dlp not found, skipping")
                     continue
 
+                # Get UA and proxy
+                user_agent = _get_random_user_agent()
+                current_proxy = self._get_current_proxy()
+
                 cmd = [
                     ytdlp_cmd,  # Use detected command
                     '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
@@ -882,8 +898,16 @@ class VideoDownloaderThread(QThread):
                     '--no-playlist',
                     '--restrict-filenames',
                     '--no-warnings',
-                    url
+                    '--user-agent', user_agent,
                 ]
+
+                # Add proxy
+                if current_proxy:
+                    cmd.extend(['--proxy', current_proxy])
+                    self.progress.emit(f"   🌐 Proxy: {current_proxy.split('@')[-1][:20]}...")
+
+                self.progress.emit(f"   🎭 UA: {user_agent[:45]}...")
+                cmd.append(url)
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, encoding='utf-8', errors='replace')
 
                 if result.returncode == 0:
@@ -1075,6 +1099,15 @@ class VideoDownloaderThread(QThread):
     def _method4_alternative_formats(self, url, output_path, cookie_file=None):
         try:
             self.progress.emit("🔄 Method 4: Alternative formats")
+
+            # Get UA and proxy once for this method
+            user_agent = _get_random_user_agent()
+            current_proxy = self._get_current_proxy()
+
+            if current_proxy:
+                self.progress.emit(f"   🌐 Proxy: {current_proxy.split('@')[-1][:20]}...")
+            self.progress.emit(f"   🎭 UA: {user_agent[:45]}...")
+
             format_options = ['best[ext=mp4]', 'bestvideo+bestaudio', 'best']
             if self.format_override and self.format_override not in format_options:
                 format_options.insert(0, self.format_override)
@@ -1089,7 +1122,10 @@ class VideoDownloaderThread(QThread):
                         'format': fmt,
                         'quiet': True, 'no_warnings': True, 'retries': self.max_retries,
                         'continuedl': True, 'nocheckcertificate': True, 'restrictfilenames': True,
+                        'http_headers': {'User-Agent': user_agent},
                     }
+                    if current_proxy:
+                        ydl_opts['proxy'] = current_proxy
                     if cookie_file: ydl_opts['cookiefile'] = cookie_file
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                         ydl.download([url])
@@ -1113,6 +1149,10 @@ class VideoDownloaderThread(QThread):
                 self.progress.emit(f"   ⚠️ yt-dlp not found, skipping")
                 return False
 
+            # Get UA and proxy
+            user_agent = _get_random_user_agent()
+            current_proxy = self._get_current_proxy()
+
             format_string = self.format_override or 'best'
             cmd = [
                 ytdlp_cmd,  # Use detected command
@@ -1120,11 +1160,20 @@ class VideoDownloaderThread(QThread):
                 '-f', format_string,
                 '--force-ipv4', '--no-warnings', '--geo-bypass',
                 '--retries', str(self.max_retries), '--ignore-errors', '--continue',
-                '--restrict-filenames', '--no-check-certificate'
+                '--restrict-filenames', '--no-check-certificate',
+                '--user-agent', user_agent,
             ]
+
+            # Add proxy
+            if current_proxy:
+                cmd.extend(['--proxy', current_proxy])
+                self.progress.emit(f"   🌐 Proxy: {current_proxy.split('@')[-1][:20]}...")
+
             if cookie_file:
                 cmd.extend(['--cookies', cookie_file])
-                self.progress.emit(f"🍪 Using cookies: {Path(cookie_file).name}")
+                self.progress.emit(f"   🍪 Cookies: {Path(cookie_file).name}")
+
+            self.progress.emit(f"   🎭 UA: {user_agent[:45]}...")
             cmd.append(url)
             result = subprocess.run(
                 cmd,
@@ -1293,13 +1342,58 @@ class VideoDownloaderThread(QThread):
                     self.video_complete.emit(url)
                 else:
                     self.progress.emit(f"❌ [{processed}/{total}] ALL METHODS FAILED")
+                    # Track failed URL with reason
+                    reason = "All download methods failed"
+                    self.failed_urls.append((url, reason))
                 pct = int((processed / total) * 100)
                 self.progress_percent.emit(pct)
             self.progress.emit("\n" + "="*60)
             self.progress.emit("📊 FINAL REPORT:")
-            self.progress.emit(f"✅ Successfully downloaded: {self.success_count}")
+            self.progress.emit(f"✅ Successfully downloaded: {self.success_count}/{total}")
             self.progress.emit(f"⏭️ Skipped (already done): {self.skipped_count}")
-            self.progress.emit(f"❌ Failed: {total - self.success_count - self.skipped_count}")
+            failed_count = total - self.success_count - self.skipped_count
+            self.progress.emit(f"❌ Failed: {failed_count}")
+
+            # Calculate success rate
+            if total > 0:
+                success_rate = (self.success_count / total * 100)
+                self.progress.emit(f"📈 Success Rate: {success_rate:.1f}%")
+
+                # Success rate assessment
+                if success_rate >= 95:
+                    self.progress.emit("🎉 EXCELLENT! Almost all videos downloaded!")
+                elif success_rate >= 80:
+                    self.progress.emit("👍 GOOD! Most videos downloaded successfully")
+                elif success_rate >= 50:
+                    self.progress.emit("⚠️ NEEDS IMPROVEMENT - Check failed downloads below")
+                else:
+                    self.progress.emit("❌ CRITICAL - Many downloads failed")
+
+            # Enhanced Failed URLs Report
+            if self.failed_urls:
+                self.progress.emit("\n" + "━"*60)
+                self.progress.emit(f"❌ FAILED DOWNLOADS - Detailed Report ({len(self.failed_urls)} videos):")
+                self.progress.emit("━"*60)
+
+                for idx, (failed_url, reason) in enumerate(self.failed_urls[:10], 1):  # Show first 10
+                    self.progress.emit(f"\n{idx}. {failed_url[:65]}...")
+                    self.progress.emit(f"   💔 Reason: {reason}")
+
+                    # Suggest solutions based on common issues
+                    if 'cookie' in reason.lower():
+                        self.progress.emit(f"   💡 Solution: Update cookies file")
+                    elif 'private' in reason.lower():
+                        self.progress.emit(f"   💡 Solution: Check if video is private/deleted")
+                    elif 'proxy' in reason.lower() or 'ip block' in reason.lower():
+                        self.progress.emit(f"   💡 Solution: Add/change proxy in Link Grabber")
+                    else:
+                        self.progress.emit(f"   💡 Solution: Try different quality or enable VPN")
+
+                if len(self.failed_urls) > 10:
+                    self.progress.emit(f"\n... and {len(self.failed_urls) - 10} more failed downloads")
+
+                self.progress.emit("\n" + "━"*60)
+
             self.progress.emit("="*60)
 
             # Update history.json for bulk mode

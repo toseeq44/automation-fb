@@ -1458,10 +1458,27 @@ def _method_playwright(url: str, platform_key: str, cookie_file: str = None, pro
             }
 
             # ENHANCED: Use bundled Chromium if available
-            chromium_path = Path(__file__).parent.parent.parent / 'bin' / 'chromium'
-            if chromium_path.exists():
+            # Check multiple possible locations (Windows: .exe, Linux/Mac: no extension)
+            base_path = Path(__file__).parent.parent.parent / 'bin'
+            chromium_paths = [
+                base_path / 'chromium' / 'chromium.exe',  # Windows (in chromium folder) ✅ Your setup
+                base_path / 'chromium.exe',                # Windows (direct)
+                base_path / 'chromium' / 'chrome.exe',     # Windows (alternative name)
+                base_path / 'chromium',                    # Linux/Mac (no extension)
+            ]
+
+            chromium_path = None
+            for path in chromium_paths:
+                if path.exists() and path.is_file():
+                    chromium_path = path
+                    logging.debug(f"✓ Found bundled Chromium: {chromium_path}")
+                    break
+
+            if chromium_path:
                 launch_options['executable_path'] = str(chromium_path)
-                logging.debug(f"✓ Using bundled Chromium: {chromium_path}")
+                logging.debug(f"✅ Using bundled Chromium from bin/ folder")
+            else:
+                logging.debug(f"⚠️ Bundled Chromium not found, using system Chromium (auto-download)")
 
             # ENHANCED: Add proxy if available
             if proxy:

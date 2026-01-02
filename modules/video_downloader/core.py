@@ -116,12 +116,18 @@ class VideoDownloaderThread(QThread):
             format_override = quality_to_format(quality_pref)
         self.format_override = format_override
 
-        # Proxy configuration (for IP block bypass)
-        self.proxy_url = self.options.get('proxy_url', os.environ.get('HTTPS_PROXY', ''))
+        # Proxy configuration (for IP block bypass) - ENHANCED
+        # Priority: Options → Link Grabber config → Environment variable
+        self.proxies = self._load_proxies_from_config()
+        self.current_proxy_index = 0
+        self.proxy_url = self.options.get('proxy_url', os.environ.get('HTTPS_PROXY', ''))  # Legacy support
 
         # Rate limiting (to avoid triggering IP blocks)
         self.last_request_times = {}  # domain -> timestamp
         self.rate_limit_delay = self.options.get('rate_limit_delay', 2.5)  # seconds between requests
+
+        # Failed URLs tracking (for detailed error reporting)
+        self.failed_urls = []  # [(url, reason)]
 
         # Bulk mode support
         self.bulk_mode_data = bulk_mode_data
@@ -179,6 +185,115 @@ class VideoDownloaderThread(QThread):
 
         normalized = normalize_url(url)
         return normalized in self.downloaded_links
+
+    def _load_proxies_from_config(self) -> list:
+        """
+        Load proxy settings from Link Grabber's config file.
+
+        Priority:
+        1. Link Grabber config (config/proxy_settings.json)
+        2. Empty list (no proxies)
+
+        Returns:
+            list: List of parsed proxy URLs ready to use
+        """
+        try:
+            from modules.config.paths import get_config_dir
+            import json
+
+            config_file = get_config_dir() / "proxy_settings.json"
+
+            if not config_file.exists():
+                return []
+
+            with open(config_file, 'r', encoding='utf-8') as f:
+                settings = json.load(f)
+
+            proxies = []
+
+            # Load proxy1
+            proxy1 = settings.get('proxy1', '').strip()
+            if proxy1:
+                parsed = self._parse_proxy_format(proxy1)
+                if parsed:
+                    proxies.append(parsed)
+
+            # Load proxy2
+            proxy2 = settings.get('proxy2', '').strip()
+            if proxy2:
+                parsed = self._parse_proxy_format(proxy2)
+                if parsed:
+                    proxies.append(parsed)
+
+            return proxies
+
+        except Exception:
+            return []
+
+    def _parse_proxy_format(self, proxy: str) -> str:
+        """
+        Parse and convert proxy format to standard format.
+        Copied from Link Grabber for consistency.
+
+        Supports 3 formats:
+        1. ip:port                        → http://ip:port
+        2. user:pass@ip:port              → http://user:pass@ip:port
+        3. ip:port:user:pass (provider)   → http://user:pass@ip:port
+
+        Args:
+            proxy: Proxy string in any supported format
+
+        Returns:
+            Standardized proxy URL (http://...)
+        """
+        try:
+            proxy = proxy.strip()
+
+            # If already has protocol, return as-is
+            if proxy.startswith('http://') or proxy.startswith('https://') or proxy.startswith('socks'):
+                return proxy
+
+            # Check for @ symbol (standard format: user:pass@ip:port)
+            if '@' in proxy:
+                return f"http://{proxy}"
+
+            # Split by colon to check format
+            parts = proxy.split(':')
+
+            if len(parts) == 4:
+                # Format: ip:port:user:pass (provider format)
+                ip, port, user, password = parts
+                return f"http://{user}:{password}@{ip}:{port}"
+
+            elif len(parts) == 2:
+                # Format: ip:port (no auth)
+                return f"http://{proxy}"
+
+            else:
+                return ""
+
+        except Exception:
+            return ""
+
+    def _get_current_proxy(self) -> Optional[str]:
+        """
+        Get current proxy from the pool.
+
+        Returns:
+            str: Current proxy URL or None if no proxies available
+        """
+        if not self.proxies:
+            return None
+
+        return self.proxies[self.current_proxy_index]
+
+    def _rotate_proxy(self):
+        """Switch to next proxy in the pool (circular rotation)"""
+        if len(self.proxies) > 1:
+            self.current_proxy_index = (self.current_proxy_index + 1) % len(self.proxies)
+            self.progress.emit(f"   🔄 Switched to proxy {self.current_proxy_index + 1}/{len(self.proxies)}")
+            return True
+        return False
 
     def _apply_rate_limit(self, domain: str):
         """Apply rate limiting to avoid triggering IP blocks"""

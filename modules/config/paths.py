@@ -102,25 +102,41 @@ def get_bundled_resource_path(relative_path: str) -> Path:
 
 def find_ytdlp_executable() -> str:
     """
-    Find yt-dlp executable with smart fallback logic.
+    Find yt-dlp executable with enhanced smart fallback logic.
 
     Priority:
-        1. Bundled with EXE: OneSoul/_internal/yt-dlp.exe
-        2. System PATH: yt-dlp or yt-dlp.exe
-        3. Common install locations (Windows)
-        4. None (will use Python library API as final fallback)
+        1. Bundled with EXE: OneSoul/_internal/yt-dlp.exe (MOST RELIABLE)
+        2. User's C Drive: C:\yt-dlp\ (USER MANAGED - NEW!)
+        3. System PATH: yt-dlp or yt-dlp.exe
+        4. Common install locations (Windows)
+        5. None (will use Python library API as final fallback)
 
     Returns:
         str: Path to yt-dlp executable or 'yt-dlp' for system command
         None: If not found (caller should use Python API)
     """
-    # Priority 1: Bundled with application
+    # Priority 1: Bundled with application (EXE mode)
     if getattr(sys, 'frozen', False):
         bundled_ytdlp = get_bundled_resource_path('yt-dlp.exe')
         if bundled_ytdlp.exists():
             return str(bundled_ytdlp)
 
-    # Priority 2: System PATH (try command directly)
+    # Priority 2: User's C Drive locations (NEW - User managed installations)
+    if sys.platform == 'win32':
+        c_drive_locations = [
+            Path('C:/yt-dlp/yt-dlp.exe'),          # Primary C drive location
+            Path('C:/yt-dlp/bin/yt-dlp.exe'),      # Alternative bin folder
+            Path('C:/yt-dlp.exe'),                 # Root C drive
+        ]
+
+        for location in c_drive_locations:
+            try:
+                if location.exists() and location.is_file():
+                    return str(location)
+            except Exception:
+                continue
+
+    # Priority 3: System PATH (try command directly)
     import shutil
     system_ytdlp = shutil.which('yt-dlp')
     if system_ytdlp:
@@ -131,7 +147,7 @@ def find_ytdlp_executable() -> str:
     if system_ytdlp_exe:
         return system_ytdlp_exe
 
-    # Priority 3: Common Windows install locations
+    # Priority 4: Common Windows install locations
     if sys.platform == 'win32':
         common_locations = [
             Path(os.environ.get('LOCALAPPDATA', '')) / 'Programs' / 'Python' / 'Python312' / 'Scripts' / 'yt-dlp.exe',
@@ -144,8 +160,11 @@ def find_ytdlp_executable() -> str:
         ]
 
         for location in common_locations:
-            if location.exists():
-                return str(location)
+            try:
+                if location.exists():
+                    return str(location)
+            except Exception:
+                continue
 
     # Not found - caller should use Python yt_dlp library
     return None

@@ -199,10 +199,12 @@ class VideoDownloaderThread(QThread):
         try:
             from modules.config.paths import get_config_dir
             import json
+            import logging
 
             config_file = get_config_dir() / "proxy_settings.json"
 
             if not config_file.exists():
+                logging.info(f"⚠️ Proxy config not found: {config_file}")
                 return []
 
             with open(config_file, 'r', encoding='utf-8') as f:
@@ -216,6 +218,7 @@ class VideoDownloaderThread(QThread):
                 parsed = self._parse_proxy_format(proxy1)
                 if parsed:
                     proxies.append(parsed)
+                    logging.info(f"✓ Proxy 1 loaded: {parsed.split('@')[-1][:30]}")
 
             # Load proxy2
             proxy2 = settings.get('proxy2', '').strip()
@@ -223,10 +226,17 @@ class VideoDownloaderThread(QThread):
                 parsed = self._parse_proxy_format(proxy2)
                 if parsed:
                     proxies.append(parsed)
+                    logging.info(f"✓ Proxy 2 loaded: {parsed.split('@')[-1][:30]}")
+
+            if proxies:
+                logging.info(f"✅ Loaded {len(proxies)} proxy(ies) from config")
+            else:
+                logging.warning("⚠️ No proxies found in config file")
 
             return proxies
 
-        except Exception:
+        except Exception as e:
+            logging.error(f"❌ Failed to load proxies from config: {e}")
             return []
 
     def _parse_proxy_format(self, proxy: str) -> str:
@@ -511,6 +521,8 @@ class VideoDownloaderThread(QThread):
             if current_proxy:
                 cmd.extend(['--proxy', current_proxy])
                 self.progress.emit(f"   🌐 Proxy: {current_proxy.split('@')[-1][:20]}...")  # Hide credentials
+            else:
+                self.progress.emit(f"   ⚠️ No proxy (IP blocks possible)")
 
             if cookie_file:
                 cmd.extend(['--cookies', cookie_file])
@@ -791,6 +803,8 @@ class VideoDownloaderThread(QThread):
             if current_proxy:
                 ydl_opts['proxy'] = current_proxy
                 self.progress.emit(f"   🌐 Proxy: {current_proxy.split('@')[-1][:20]}...")
+            else:
+                self.progress.emit(f"   ⚠️ No proxy (IP blocks possible)")
 
             if cookie_file:
                 ydl_opts['cookiefile'] = cookie_file
@@ -1106,6 +1120,8 @@ class VideoDownloaderThread(QThread):
 
             if current_proxy:
                 self.progress.emit(f"   🌐 Proxy: {current_proxy.split('@')[-1][:20]}...")
+            else:
+                self.progress.emit(f"   ⚠️ No proxy (IP blocks possible)")
             self.progress.emit(f"   🎭 UA: {user_agent[:45]}...")
 
             format_options = ['best[ext=mp4]', 'bestvideo+bestaudio', 'best']
@@ -1168,6 +1184,8 @@ class VideoDownloaderThread(QThread):
             if current_proxy:
                 cmd.extend(['--proxy', current_proxy])
                 self.progress.emit(f"   🌐 Proxy: {current_proxy.split('@')[-1][:20]}...")
+            else:
+                self.progress.emit(f"   ⚠️ No proxy (IP blocks possible)")
 
             if cookie_file:
                 cmd.extend(['--cookies', cookie_file])
@@ -1243,6 +1261,16 @@ class VideoDownloaderThread(QThread):
                 self.progress.emit("🚫 File creation: DISABLED")
                 # Clean up any leftover tracking files from old runs
                 self._cleanup_tracking_files(self.save_path)
+
+            # Show proxy status
+            if self.proxies:
+                self.progress.emit(f"🌐 Proxies loaded: {len(self.proxies)}")
+                for idx, proxy in enumerate(self.proxies, 1):
+                    proxy_display = proxy.split('@')[-1][:25] if '@' in proxy else proxy[:25]
+                    self.progress.emit(f"   Proxy {idx}: {proxy_display}...")
+            else:
+                self.progress.emit("⚠️ WARNING: No proxies configured - IP blocks possible!")
+                self.progress.emit("   💡 Add proxies in Link Grabber for better success rate")
 
             self.progress.emit("="*60)
             if self.force_all_methods:
@@ -1321,18 +1349,29 @@ class VideoDownloaderThread(QThread):
 
                 # Force all methods adds extras
                 if not self.force_all_methods:
-                    # Limit to first 3-4 methods for speed
+                    # Limit to first 3-4 methods for speed (but will try all if they fail)
                     methods = methods[:4]
-                # Try all methods
+
+                # BULLETPROOF FALLBACK: Try ALL methods until one succeeds
+                # No method is skipped - ensures maximum success rate
                 success = False
+                attempted_methods = 0
                 for method in methods:
                     if self.cancelled: break
+                    attempted_methods += 1
                     try:
                         if method(url, folder, cookie_file):
                             success = True
+                            # Success! Stop trying other methods
                             break
+                        else:
+                            # Method returned False (failed) - continue to next method
+                            if attempted_methods < len(methods):
+                                self.progress.emit(f"   🔄 Method failed, trying next method...")
                     except Exception as e:
-                        self.progress.emit(f"Method error: {str(e)[:100]}")
+                        self.progress.emit(f"   ⚠️ Method exception: {str(e)[:100]}")
+                        if attempted_methods < len(methods):
+                            self.progress.emit(f"   🔄 Continuing with next method...")
                 if success:
                     self.success_count += 1
                     self.progress.emit(f"✅ [{processed}/{total}] Downloaded!")

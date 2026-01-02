@@ -100,6 +100,114 @@ def _detect_platform_key(url: str) -> str:
     return 'unknown'
 
 
+def _validate_cookie_file(cookie_file: str, max_age_days: int = 14) -> dict:
+    """
+    ENHANCED: Validate cookie file for freshness and format validity
+
+    Checks:
+    1. File exists and has content
+    2. File age (freshness) - warns if older than max_age_days
+    3. Valid Netscape format
+    4. Contains non-expired cookies
+
+    Args:
+        cookie_file: Path to cookie file
+        max_age_days: Maximum age in days before warning (default 14)
+
+    Returns:
+        dict with:
+        - valid: bool (overall validity)
+        - fresh: bool (file age <= max_age_days)
+        - age_days: int (file age in days)
+        - total_cookies: int (total lines)
+        - expired_cookies: int (count of expired cookies)
+        - warnings: list[str] (validation warnings)
+    """
+    result = {
+        'valid': False,
+        'fresh': True,
+        'age_days': 0,
+        'total_cookies': 0,
+        'expired_cookies': 0,
+        'warnings': []
+    }
+
+    try:
+        from datetime import datetime, timedelta
+        import time
+
+        cookie_path = Path(cookie_file)
+
+        # Check 1: File exists and has content
+        if not cookie_path.exists():
+            result['warnings'].append(f"❌ Cookie file not found: {cookie_file}")
+            return result
+
+        file_size = cookie_path.stat().st_size
+        if file_size < 10:
+            result['warnings'].append(f"⚠️ Cookie file too small ({file_size} bytes)")
+            return result
+
+        # Check 2: File freshness (modification time)
+        mod_time = cookie_path.stat().st_mtime
+        file_age = datetime.now() - datetime.fromtimestamp(mod_time)
+        result['age_days'] = file_age.days
+
+        if file_age.days > max_age_days:
+            result['fresh'] = False
+            result['warnings'].append(
+                f"⚠️ Cookie file is {file_age.days} days old (older than {max_age_days} days)"
+            )
+            result['warnings'].append(f"   💡 Consider refreshing cookies for better success rate")
+
+        # Check 3: Valid Netscape format and cookie expiration
+        current_timestamp = int(time.time())
+
+        with open(cookie_file, 'r', encoding='utf-8', errors='ignore') as f:
+            lines = f.readlines()
+
+        cookie_lines = [l for l in lines if l.strip() and not l.strip().startswith('#')]
+        result['total_cookies'] = len(cookie_lines)
+
+        if result['total_cookies'] == 0:
+            result['warnings'].append(f"⚠️ No cookies found in file (only comments/blank lines)")
+            return result
+
+        # Check cookie expiration dates
+        expired_count = 0
+        for line in cookie_lines:
+            parts = line.strip().split('\t')
+            if len(parts) >= 5:  # Valid Netscape format has 7 fields, but 5 minimum
+                try:
+                    expires = int(parts[4])  # Expiration timestamp
+                    if expires > 0 and expires < current_timestamp:
+                        expired_count += 1
+                except (ValueError, IndexError):
+                    continue
+
+        result['expired_cookies'] = expired_count
+
+        if expired_count > 0:
+            expiry_pct = (expired_count / result['total_cookies']) * 100
+            if expiry_pct > 50:
+                result['warnings'].append(
+                    f"⚠️ {expired_count}/{result['total_cookies']} cookies expired ({expiry_pct:.0f}%)"
+                )
+                result['warnings'].append(f"   💡 Cookie refresh recommended")
+
+        # All checks passed
+        result['valid'] = True
+
+        # Add success message if fresh and minimal warnings
+        if result['fresh'] and len(result['warnings']) == 0:
+            logging.debug(f"✓ Cookie validation passed: {result['total_cookies']} cookies, {result['age_days']} days old")
+
+    except Exception as e:
+        result['warnings'].append(f"❌ Cookie validation error: {str(e)[:100]}")
+
+    return result
+
+
 def _find_cookie_file(cookies_dir: Path, platform_key: str) -> typing.Optional[str]:
     """Find cookie file - prioritize chrome_cookies.txt master file"""
     try:
@@ -335,32 +443,123 @@ def _save_links_to_file(creator_name: str, links: typing.List[dict], creator_fol
 
 # ============ ENHANCED FEATURES (2026 Upgrade) ============
 
+def _get_chrome120_headers() -> list:
+    """
+    ENHANCED: Return realistic Chrome 120 headers for better platform compatibility
+
+    These headers make yt-dlp look more like a real browser, helping to avoid detection.
+    Based on actual Chrome 120 on Windows 10.
+
+    Returns:
+        list: Command line arguments to add headers to yt-dlp
+    """
+    headers = []
+
+    # Accept header (what content types browser accepts)
+    headers.extend(['--add-header', 'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7'])
+
+    # Accept-Language (browser language preference)
+    headers.extend(['--add-header', 'Accept-Language:en-US,en;q=0.9'])
+
+    # Accept-Encoding (supported compression methods)
+    headers.extend(['--add-header', 'Accept-Encoding:gzip, deflate, br'])
+
+    # Sec-Ch-Ua (Chrome client hints - brand and version)
+    headers.extend(['--add-header', 'Sec-Ch-Ua:"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"'])
+
+    # Sec-Ch-Ua-Mobile (desktop browser, not mobile)
+    headers.extend(['--add-header', 'Sec-Ch-Ua-Mobile:?0'])
+
+    # Sec-Ch-Ua-Platform (operating system)
+    headers.extend(['--add-header', 'Sec-Ch-Ua-Platform:"Windows"'])
+
+    # Sec-Fetch-Dest (what type of resource is being fetched)
+    headers.extend(['--add-header', 'Sec-Fetch-Dest:document'])
+
+    # Sec-Fetch-Mode (how the request was initiated)
+    headers.extend(['--add-header', 'Sec-Fetch-Mode:navigate'])
+
+    # Sec-Fetch-Site (relationship between origin and target)
+    headers.extend(['--add-header', 'Sec-Fetch-Site:none'])
+
+    # Sec-Fetch-User (user-initiated navigation)
+    headers.extend(['--add-header', 'Sec-Fetch-User:?1'])
+
+    # Upgrade-Insecure-Requests (browser supports HTTPS upgrades)
+    headers.extend(['--add-header', 'Upgrade-Insecure-Requests:1'])
+
+    # DNT (Do Not Track header)
+    headers.extend(['--add-header', 'DNT:1'])
+
+    return headers
+
+
 def _parse_proxy_format(proxy: str) -> str:
     """
-    Parse and convert proxy format to standard format
+    ENHANCED: Parse and convert proxy format to standard format with URL encoding
 
-    Supports 3 formats:
+    Supports ALL 5 formats:
     1. ip:port                                    → http://ip:port
     2. user:pass@ip:port                          → http://user:pass@ip:port
     3. ip:port:user:pass (provider format)        → http://user:pass@ip:port
+    4. socks5://user:pass@ip:port                 → socks5://user:pass@ip:port
+    5. With URL encoding for special chars        → http://user:P%40ss@ip:port
+
+    Special features:
+    - Automatically detects and preserves SOCKS5 protocol
+    - URL-encodes passwords with special characters (:@#%&= etc.)
+    - Handles all common provider formats
+    - Backward compatible with existing proxies
 
     Args:
         proxy: Proxy string in any supported format
 
     Returns:
-        Standardized proxy URL (http://...)
+        Standardized proxy URL with proper encoding
     """
     try:
+        from urllib.parse import quote
+
         proxy = proxy.strip()
 
-        # If already has protocol, return as-is
-        if proxy.startswith('http://') or proxy.startswith('https://'):
-            return proxy
+        # If already has protocol (http/https/socks), parse and encode credentials
+        if proxy.startswith('http://') or proxy.startswith('https://') or proxy.startswith('socks'):
+            # Extract protocol
+            if proxy.startswith('socks5://'):
+                protocol = 'socks5://'
+                rest = proxy[10:]
+            elif proxy.startswith('socks4://'):
+                protocol = 'socks4://'
+                rest = proxy[10:]
+            elif proxy.startswith('https://'):
+                protocol = 'https://'
+                rest = proxy[8:]
+            else:
+                protocol = 'http://'
+                rest = proxy[7:]
+
+            # Check if has credentials
+            if '@' in rest:
+                creds, server = rest.split('@', 1)
+                if ':' in creds:
+                    user, password = creds.split(':', 1)
+                    # URL encode password for special characters
+                    password_encoded = quote(password, safe='')
+                    return f"{protocol}{user}:{password_encoded}@{server}"
+
+            return proxy  # Already formatted, return as-is
 
         # Check for @ symbol (standard format: user:pass@ip:port)
         if '@' in proxy:
-            # Format: user:pass@ip:port (already standard)
-            return f"http://{proxy}"
+            # Format: user:pass@ip:port
+            creds, server = proxy.split('@', 1)
+            if ':' in creds:
+                user, password = creds.split(':', 1)
+                # URL encode password for special characters
+                password_encoded = quote(password, safe='')
+                return f"http://{user}:{password_encoded}@{server}"
+            else:
+                return f"http://{proxy}"
 
         # Split by colon to check format
         parts = proxy.split(':')
@@ -368,7 +567,9 @@ def _parse_proxy_format(proxy: str) -> str:
         if len(parts) == 4:
             # Format: ip:port:user:pass (provider format)
             ip, port, user, password = parts
-            return f"http://{user}:{password}@{ip}:{port}"
+            # URL encode password for special characters
+            password_encoded = quote(password, safe='')
+            return f"http://{user}:{password_encoded}@{ip}:{port}"
 
         elif len(parts) == 2:
             # Format: ip:port (no authentication)
@@ -376,11 +577,11 @@ def _parse_proxy_format(proxy: str) -> str:
 
         else:
             # Unknown format, try as-is
-            logging.warning(f"Unknown proxy format: {proxy}, using as-is")
+            logging.warning(f"⚠️ Unknown proxy format (parts={len(parts)}): {proxy[:30]}..., using as-is")
             return f"http://{proxy}"
 
     except Exception as e:
-        logging.error(f"Failed to parse proxy format: {e}")
+        logging.error(f"❌ Failed to parse proxy format: {e}")
         return f"http://{proxy}"
 
 
@@ -507,7 +708,9 @@ def _get_random_user_agent() -> str:
 
 def _apply_rate_limit(platform_key: str, custom_delay: float = None):
     """
-    Apply rate limit delay based on platform
+    ENHANCED: Apply intelligent rate limit delay based on platform
+
+    Uses platform-specific delays to mimic human behavior and avoid detection.
 
     Args:
         platform_key: Platform name (youtube, instagram, etc.)
@@ -518,23 +721,32 @@ def _apply_rate_limit(platform_key: str, custom_delay: float = None):
             time.sleep(custom_delay)
             return
 
-        from .config import get_rate_limit, DELAY_CONFIG
+        from .config import DELAY_CONFIG
         import random
 
-        # Get platform-specific rate limit
-        rate_limit = get_rate_limit(platform_key)
+        # ENHANCED: Use platform-specific delays if available
+        platform_delays = DELAY_CONFIG.get('platform_delays', {})
 
-        # Add random jitter (human-like)
-        min_delay = max(rate_limit, DELAY_CONFIG['before_request_min'])
-        max_delay = DELAY_CONFIG['before_request_max']
+        if platform_key in platform_delays:
+            # Platform-specific delay range
+            min_delay, max_delay = platform_delays[platform_key]
+            logging.debug(f"Using platform-specific delay for {platform_key}: {min_delay}-{max_delay}s")
+        else:
+            # General delay range
+            min_delay = DELAY_CONFIG['before_request_min']
+            max_delay = DELAY_CONFIG['before_request_max']
+            logging.debug(f"Using general delay for {platform_key}: {min_delay}-{max_delay}s")
+
+        # Add random jitter (human-like behavior)
         delay = random.uniform(min_delay, max_delay)
 
-        logging.debug(f"Rate limit: waiting {delay:.1f}s for {platform_key}")
+        logging.debug(f"⏱️ Rate limit: waiting {delay:.2f}s for {platform_key}")
         time.sleep(delay)
 
     except Exception as e:
         # Fallback: 2-3 second delay
         import random
+        logging.warning(f"Rate limit fallback due to error: {e}")
         time.sleep(random.uniform(2, 3))
 
 
@@ -669,6 +881,9 @@ def _execute_ytdlp_dual(url: str, options: dict, proxy: str = None, user_agent: 
         ytdlp_path = _get_ytdlp_binary_path()
 
         cmd = [ytdlp_path, '--dump-json', '--flat-playlist', '--ignore-errors', '--no-warnings']
+
+        # ENHANCED: Add realistic Chrome 120 headers to avoid detection
+        cmd.extend(_get_chrome120_headers())
 
         # Add proxy
         if proxy:
@@ -806,9 +1021,12 @@ def _method_ytdlp_enhanced(
 
 
 def _method_ytdlp_dump_json(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, cookie_browser: str = None, proxy: str = None, user_agent: str = None) -> typing.List[dict]:
-    """METHOD 1: yt-dlp --dump-json (WITH DATES) - PRIMARY METHOD + Proxy Support"""
+    """METHOD 1: yt-dlp --dump-json (WITH DATES) - PRIMARY METHOD + Proxy + Chrome Headers"""
     try:
         cmd = ['yt-dlp', '--dump-json', '--flat-playlist', '--ignore-errors', '--no-warnings']
+
+        # ENHANCED: Add realistic Chrome 120 headers to avoid detection
+        cmd.extend(_get_chrome120_headers())
 
         # Cookie handling: browser OR file (2025 approach)
         if cookie_browser:
@@ -875,10 +1093,13 @@ def _method_ytdlp_dump_json(url: str, platform_key: str, cookie_file: str = None
 
 
 def _method_ytdlp_get_url(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, cookie_browser: str = None, proxy: str = None) -> typing.List[dict]:
-    """METHOD 2: yt-dlp --get-url (FAST, NO DATES) - SIMPLIFIED LIKE BATCH SCRIPT + Proxy Support"""
+    """METHOD 2: yt-dlp --get-url (FAST, NO DATES) - SIMPLIFIED + Proxy + Chrome Headers"""
     try:
         # SIMPLE COMMAND like the working batch script: yt-dlp URL --flat-playlist --get-url
         cmd = ['yt-dlp', '--flat-playlist', '--get-url', '--ignore-errors']
+
+        # ENHANCED: Add realistic Chrome 120 headers to avoid detection
+        cmd.extend(_get_chrome120_headers())
 
         # Cookie handling: browser OR file
         if cookie_browser:
@@ -936,11 +1157,14 @@ def _method_ytdlp_get_url(url: str, platform_key: str, cookie_file: str = None, 
 
 
 def _method_ytdlp_with_retry(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, cookie_browser: str = None, proxy: str = None) -> typing.List[dict]:
-    """METHOD 3: yt-dlp with retries (PERSISTENT) + Proxy Support"""
+    """METHOD 3: yt-dlp with retries (PERSISTENT) + Proxy + Chrome Headers"""
     try:
         cmd = ['yt-dlp', '--dump-json', '--flat-playlist', '--ignore-errors',
                '--retries', '10', '--fragment-retries', '10', '--extractor-retries', '5',
                '--socket-timeout', '30']
+
+        # ENHANCED: Add realistic Chrome 120 headers to avoid detection
+        cmd.extend(_get_chrome120_headers())
 
         # Cookie handling: browser OR file
         if cookie_browser:
@@ -995,7 +1219,7 @@ def _method_ytdlp_with_retry(url: str, platform_key: str, cookie_file: str = Non
 
 
 def _method_ytdlp_user_agent(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, cookie_browser: str = None, proxy: str = None) -> typing.List[dict]:
-    """METHOD 4: yt-dlp with different user agent (ANTI-BLOCK) + Proxy Support"""
+    """METHOD 4: yt-dlp with different user agent (ANTI-BLOCK) + Proxy + Chrome Headers"""
     user_agents = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0",
         "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Safari/604.1",
@@ -1006,6 +1230,9 @@ def _method_ytdlp_user_agent(url: str, platform_key: str, cookie_file: str = Non
         try:
             cmd = ['yt-dlp', '--dump-json', '--flat-playlist', '--ignore-errors',
                    '--user-agent', ua]
+
+            # ENHANCED: Add realistic Chrome 120 headers to avoid detection
+            cmd.extend(_get_chrome120_headers())
 
             # Cookie handling: browser OR file
             if cookie_browser:
@@ -1481,6 +1708,15 @@ def extract_links_intelligent(
         if cookie_file and progress_callback:
             cookie_name = Path(cookie_file).name
             progress_callback(f"🍪 Using cookies: {cookie_name}")
+
+            # ENHANCED: Validate cookie freshness and quality
+            validation = _validate_cookie_file(cookie_file, max_age_days=14)
+            if validation['warnings']:
+                for warning in validation['warnings']:
+                    progress_callback(f"   {warning}")
+            else:
+                # Show cookie stats if valid and fresh
+                progress_callback(f"   ✓ {validation['total_cookies']} cookies, {validation['age_days']} days old")
 
         # If we've materialized a cookie file, stop passing cookie_browser to yt-dlp.
         # yt-dlp's --cookies-from-browser mode ignores manual files and was causing 0 results

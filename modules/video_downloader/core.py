@@ -48,6 +48,166 @@ def _get_random_user_agent() -> str:
         # Fallback if shared module not available
         return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 
+def _get_chrome120_headers() -> list:
+    """
+    ENHANCED: Return realistic Chrome 120 headers for better platform compatibility
+    Synced with Link Grabber for consistency.
+
+    These headers make yt-dlp look more like a real browser, helping to avoid detection.
+    Based on actual Chrome 120 on Windows 10.
+
+    Returns:
+        list: Command line arguments to add headers to yt-dlp
+    """
+    headers = []
+
+    # Accept header (what content types browser accepts)
+    headers.extend(['--add-header', 'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7'])
+
+    # Accept-Language (browser language preference)
+    headers.extend(['--add-header', 'Accept-Language:en-US,en;q=0.9'])
+
+    # Accept-Encoding (supported compression methods)
+    headers.extend(['--add-header', 'Accept-Encoding:gzip, deflate, br'])
+
+    # Sec-Ch-Ua (Chrome client hints - brand and version)
+    headers.extend(['--add-header', 'Sec-Ch-Ua:"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"'])
+
+    # Sec-Ch-Ua-Mobile (desktop browser, not mobile)
+    headers.extend(['--add-header', 'Sec-Ch-Ua-Mobile:?0'])
+
+    # Sec-Ch-Ua-Platform (operating system)
+    headers.extend(['--add-header', 'Sec-Ch-Ua-Platform:"Windows"'])
+
+    # Sec-Fetch-Dest (what type of resource is being fetched)
+    headers.extend(['--add-header', 'Sec-Fetch-Dest:document'])
+
+    # Sec-Fetch-Mode (how the request was initiated)
+    headers.extend(['--add-header', 'Sec-Fetch-Mode:navigate'])
+
+    # Sec-Fetch-Site (relationship between origin and target)
+    headers.extend(['--add-header', 'Sec-Fetch-Site:none'])
+
+    # Sec-Fetch-User (user-initiated navigation)
+    headers.extend(['--add-header', 'Sec-Fetch-User:?1'])
+
+    # Upgrade-Insecure-Requests (browser supports HTTPS upgrades)
+    headers.extend(['--add-header', 'Upgrade-Insecure-Requests:1'])
+
+    # DNT (Do Not Track header)
+    headers.extend(['--add-header', 'DNT:1'])
+
+    return headers
+
+def _validate_cookie_file(cookie_file: str, max_age_days: int = 14) -> dict:
+    """
+    ENHANCED: Validate cookie file for freshness and format validity
+    Synced with Link Grabber for consistency.
+
+    Checks:
+    1. File exists and has content
+    2. File age (freshness) - warns if older than max_age_days
+    3. Valid Netscape format
+    4. Contains non-expired cookies
+
+    Args:
+        cookie_file: Path to cookie file
+        max_age_days: Maximum age in days before warning (default 14)
+
+    Returns:
+        dict with:
+        - valid: bool (overall validity)
+        - fresh: bool (file age <= max_age_days)
+        - age_days: int (file age in days)
+        - total_cookies: int (total lines)
+        - expired_cookies: int (count of expired cookies)
+        - warnings: list[str] (validation warnings)
+    """
+    result = {
+        'valid': False,
+        'fresh': True,
+        'age_days': 0,
+        'total_cookies': 0,
+        'expired_cookies': 0,
+        'warnings': []
+    }
+
+    try:
+        import time
+        import logging
+
+        cookie_path = Path(cookie_file)
+
+        # Check 1: File exists and has content
+        if not cookie_path.exists():
+            result['warnings'].append(f"❌ Cookie file not found: {cookie_file}")
+            return result
+
+        file_size = cookie_path.stat().st_size
+        if file_size < 10:
+            result['warnings'].append(f"⚠️ Cookie file too small ({file_size} bytes)")
+            return result
+
+        # Check 2: File freshness (modification time)
+        mod_time = cookie_path.stat().st_mtime
+        file_age = datetime.now() - datetime.fromtimestamp(mod_time)
+        result['age_days'] = file_age.days
+
+        if file_age.days > max_age_days:
+            result['fresh'] = False
+            result['warnings'].append(
+                f"⚠️ Cookie file is {file_age.days} days old (older than {max_age_days} days)"
+            )
+            result['warnings'].append(f"   💡 Consider refreshing cookies for better success rate")
+
+        # Check 3: Valid Netscape format and cookie expiration
+        current_timestamp = int(time.time())
+
+        with open(cookie_file, 'r', encoding='utf-8', errors='ignore') as f:
+            lines = f.readlines()
+
+        cookie_lines = [l for l in lines if l.strip() and not l.strip().startswith('#')]
+        result['total_cookies'] = len(cookie_lines)
+
+        if result['total_cookies'] == 0:
+            result['warnings'].append(f"⚠️ No cookies found in file (only comments/blank lines)")
+            return result
+
+        # Check cookie expiration dates
+        expired_count = 0
+        for line in cookie_lines:
+            parts = line.strip().split('\t')
+            if len(parts) >= 5:  # Valid Netscape format has 7 fields, but 5 minimum
+                try:
+                    expires = int(parts[4])  # Expiration timestamp
+                    if expires > 0 and expires < current_timestamp:
+                        expired_count += 1
+                except (ValueError, IndexError):
+                    continue
+
+        result['expired_cookies'] = expired_count
+
+        if expired_count > 0:
+            expiry_pct = (expired_count / result['total_cookies']) * 100
+            if expiry_pct > 50:
+                result['warnings'].append(
+                    f"⚠️ {expired_count}/{result['total_cookies']} cookies expired ({expiry_pct:.0f}%)"
+                )
+                result['warnings'].append(f"   💡 Cookie refresh recommended")
+
+        # All checks passed
+        result['valid'] = True
+
+        # Add success message if fresh and minimal warnings
+        if result['fresh'] and len(result['warnings']) == 0:
+            logging.debug(f"✓ Cookie validation passed: {result['total_cookies']} cookies, {result['age_days']} days old")
+
+    except Exception as e:
+        result['warnings'].append(f"❌ Cookie validation error: {str(e)[:100]}")
+
+    return result
+
+
 def _is_ip_block_error(error_text: str) -> bool:
     """Detect if error is due to IP blocking"""
     if not error_text:
@@ -241,30 +401,71 @@ class VideoDownloaderThread(QThread):
 
     def _parse_proxy_format(self, proxy: str) -> str:
         """
-        Parse and convert proxy format to standard format.
-        Copied from Link Grabber for consistency.
+        ENHANCED: Parse and convert proxy format to standard format with URL encoding
+        Synced with Link Grabber for consistency.
 
-        Supports 3 formats:
-        1. ip:port                        → http://ip:port
-        2. user:pass@ip:port              → http://user:pass@ip:port
-        3. ip:port:user:pass (provider)   → http://user:pass@ip:port
+        Supports ALL 5 formats:
+        1. ip:port                                    → http://ip:port
+        2. user:pass@ip:port                          → http://user:pass@ip:port
+        3. ip:port:user:pass (provider format)        → http://user:pass@ip:port
+        4. socks5://user:pass@ip:port                 → socks5://user:pass@ip:port
+        5. With URL encoding for special chars        → http://user:P%40ss@ip:port
+
+        Special features:
+        - Automatically detects and preserves SOCKS5 protocol
+        - URL-encodes passwords with special characters (:@#%&= etc.)
+        - Handles all common provider formats
+        - Backward compatible with existing proxies
 
         Args:
             proxy: Proxy string in any supported format
 
         Returns:
-            Standardized proxy URL (http://...)
+            Standardized proxy URL with proper encoding
         """
         try:
+            from urllib.parse import quote
+
             proxy = proxy.strip()
 
-            # If already has protocol, return as-is
+            # If already has protocol (http/https/socks), parse and encode credentials
             if proxy.startswith('http://') or proxy.startswith('https://') or proxy.startswith('socks'):
-                return proxy
+                # Extract protocol
+                if proxy.startswith('socks5://'):
+                    protocol = 'socks5://'
+                    rest = proxy[10:]
+                elif proxy.startswith('socks4://'):
+                    protocol = 'socks4://'
+                    rest = proxy[10:]
+                elif proxy.startswith('https://'):
+                    protocol = 'https://'
+                    rest = proxy[8:]
+                else:
+                    protocol = 'http://'
+                    rest = proxy[7:]
+
+                # Check if has credentials
+                if '@' in rest:
+                    creds, server = rest.split('@', 1)
+                    if ':' in creds:
+                        user, password = creds.split(':', 1)
+                        # URL encode password for special characters
+                        password_encoded = quote(password, safe='')
+                        return f"{protocol}{user}:{password_encoded}@{server}"
+
+                return proxy  # Already formatted, return as-is
 
             # Check for @ symbol (standard format: user:pass@ip:port)
             if '@' in proxy:
-                return f"http://{proxy}"
+                # Format: user:pass@ip:port
+                creds, server = proxy.split('@', 1)
+                if ':' in creds:
+                    user, password = creds.split(':', 1)
+                    # URL encode password for special characters
+                    password_encoded = quote(password, safe='')
+                    return f"http://{user}:{password_encoded}@{server}"
+                else:
+                    return f"http://{proxy}"
 
             # Split by colon to check format
             parts = proxy.split(':')
@@ -272,16 +473,21 @@ class VideoDownloaderThread(QThread):
             if len(parts) == 4:
                 # Format: ip:port:user:pass (provider format)
                 ip, port, user, password = parts
-                return f"http://{user}:{password}@{ip}:{port}"
+                # URL encode password for special characters
+                password_encoded = quote(password, safe='')
+                return f"http://{user}:{password_encoded}@{ip}:{port}"
 
             elif len(parts) == 2:
-                # Format: ip:port (no auth)
+                # Format: ip:port (no authentication)
                 return f"http://{proxy}"
 
             else:
+                # Unknown format, return empty to skip
+                logging.warning(f"⚠️ Unknown proxy format (parts={len(parts)}): {proxy[:30]}...")
                 return ""
 
-        except Exception:
+        except Exception as e:
+            logging.error(f"❌ Failed to parse proxy format: {e}")
             return ""
 
     def _get_current_proxy(self) -> Optional[str]:
@@ -517,6 +723,9 @@ class VideoDownloaderThread(QThread):
                 '--user-agent', user_agent,  # Random UA rotation
             ]
 
+            # ENHANCED: Add realistic Chrome 120 headers to avoid detection
+            cmd.extend(_get_chrome120_headers())
+
             # Add proxy if available
             if current_proxy:
                 cmd.extend(['--proxy', current_proxy])
@@ -696,12 +905,11 @@ class VideoDownloaderThread(QThread):
                         '--restrict-filenames',
                         '--no-warnings',
                         '--retries', str(self.max_retries),
-                        # Enhanced headers for better bot evasion
-                        '--add-header', 'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                        '--add-header', 'Accept-Language:en-US,en;q=0.9',
-                        '--add-header', 'Accept-Encoding:gzip, deflate, br',
-                        '--add-header', 'Referer:https://www.tiktok.com/',
                     ]
+
+                    # ENHANCED: Add realistic Chrome 120 headers + TikTok-specific referer
+                    cmd.extend(_get_chrome120_headers())
+                    cmd.extend(['--add-header', 'Referer:https://www.tiktok.com/'])
 
                     # Add proxy if requested
                     if use_proxy and self.proxy_url:
@@ -914,6 +1122,9 @@ class VideoDownloaderThread(QThread):
                     '--no-warnings',
                     '--user-agent', user_agent,
                 ]
+
+                # ENHANCED: Add realistic Chrome 120 headers to avoid detection
+                cmd.extend(_get_chrome120_headers())
 
                 # Add proxy
                 if current_proxy:
@@ -1179,6 +1390,9 @@ class VideoDownloaderThread(QThread):
                 '--restrict-filenames', '--no-check-certificate',
                 '--user-agent', user_agent,
             ]
+
+            # ENHANCED: Add realistic Chrome 120 headers to avoid detection
+            cmd.extend(_get_chrome120_headers())
 
             # Add proxy
             if current_proxy:

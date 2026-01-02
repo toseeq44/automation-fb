@@ -75,14 +75,31 @@ RETRY_CONFIG = {
 }
 
 # ============================================================================
-# DELAY SETTINGS (Anti-Bot Delays)
+# DELAY SETTINGS (Anti-Bot Delays) - ENHANCED 2026
 # ============================================================================
 
 DELAY_CONFIG = {
-    'before_request_min': 2,     # Minimum delay before request (seconds)
-    'before_request_max': 5,     # Maximum delay before request (seconds)
+    # General delays (applied to all platforms unless overridden)
+    'before_request_min': 1.5,   # Minimum delay before request (seconds)
+    'before_request_max': 4.0,   # Maximum delay before request (seconds)
     'after_fail_min': 5,         # Minimum delay after failed attempt
     'after_fail_max': 10,        # Maximum delay after failed attempt
+
+    # Platform-specific delay ranges (for stricter platforms)
+    'platform_delays': {
+        'instagram': (2.0, 5.0),    # Instagram is strict about bot detection
+        'tiktok': (2.5, 6.0),       # TikTok is very aggressive with rate limiting
+        'youtube': (1.0, 3.0),      # YouTube is more tolerant
+        'facebook': (2.0, 5.0),     # Facebook has bot detection
+        'twitter': (1.5, 4.0),      # Twitter/X moderate detection
+    },
+
+    # Human-like pause patterns (simulate reading/thinking)
+    'human_patterns': {
+        'short_pause': (0.5, 1.5),  # Quick glance
+        'medium_pause': (2.0, 4.0), # Reading content
+        'long_pause': (5.0, 8.0),   # Thinking/decision making
+    }
 }
 
 # ============================================================================

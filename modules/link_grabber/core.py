@@ -918,8 +918,8 @@ def _method_ytdlp_get_url(url: str, platform_key: str, cookie_file: str = None, 
     return []
 
 
-def _method_ytdlp_with_retry(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, cookie_browser: str = None) -> typing.List[dict]:
-    """METHOD 3: yt-dlp with retries (PERSISTENT)"""
+def _method_ytdlp_with_retry(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, cookie_browser: str = None, proxy: str = None) -> typing.List[dict]:
+    """METHOD 3: yt-dlp with retries (PERSISTENT) + Proxy Support"""
     try:
         cmd = ['yt-dlp', '--dump-json', '--flat-playlist', '--ignore-errors',
                '--retries', '10', '--fragment-retries', '10', '--extractor-retries', '5',
@@ -930,6 +930,12 @@ def _method_ytdlp_with_retry(url: str, platform_key: str, cookie_file: str = Non
             cmd.extend(['--cookies-from-browser', cookie_browser])
         elif cookie_file:
             cmd.extend(['--cookies', cookie_file])
+
+        # Add proxy if available
+        if proxy:
+            proxy_url = proxy if proxy.startswith('http') else f"http://{proxy}"
+            cmd.extend(['--proxy', proxy_url])
+            logging.debug(f"Method 3: Using proxy {proxy_url.split('@')[-1][:20]}...")
 
         if max_videos > 0:
             cmd.extend(['--playlist-end', str(max_videos)])
@@ -971,8 +977,8 @@ def _method_ytdlp_with_retry(url: str, platform_key: str, cookie_file: str = Non
     return []
 
 
-def _method_ytdlp_user_agent(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, cookie_browser: str = None) -> typing.List[dict]:
-    """METHOD 4: yt-dlp with different user agent (ANTI-BLOCK)"""
+def _method_ytdlp_user_agent(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, cookie_browser: str = None, proxy: str = None) -> typing.List[dict]:
+    """METHOD 4: yt-dlp with different user agent (ANTI-BLOCK) + Proxy Support"""
     user_agents = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0",
         "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Safari/604.1",
@@ -989,6 +995,12 @@ def _method_ytdlp_user_agent(url: str, platform_key: str, cookie_file: str = Non
                 cmd.extend(['--cookies-from-browser', cookie_browser])
             elif cookie_file:
                 cmd.extend(['--cookies', cookie_file])
+
+            # Add proxy if available
+            if proxy:
+                proxy_url = proxy if proxy.startswith('http') else f"http://{proxy}"
+                cmd.extend(['--proxy', proxy_url])
+                logging.debug(f"Method 4: Using proxy {proxy_url.split('@')[-1][:20]}... with UA: {ua[:40]}")
 
             if max_videos > 0:
                 cmd.extend(['--playlist-end', str(max_videos)])
@@ -1109,8 +1121,8 @@ def _method_instaloader(url: str, platform_key: str, cookie_file: str = None, ma
     return []
 
 
-def _method_gallery_dl(url: str, platform_key: str, cookie_file: str = None) -> typing.List[dict]:
-    """METHOD 6: gallery-dl (INSTAGRAM/TIKTOK)"""
+def _method_gallery_dl(url: str, platform_key: str, cookie_file: str = None, proxy: str = None) -> typing.List[dict]:
+    """METHOD 6: gallery-dl (INSTAGRAM/TIKTOK) + Proxy Support"""
     if platform_key not in ['instagram', 'tiktok']:
         return []
 
@@ -1119,6 +1131,12 @@ def _method_gallery_dl(url: str, platform_key: str, cookie_file: str = None) -> 
 
         if cookie_file:
             cmd.extend(['--cookies', cookie_file])
+
+        # Add proxy if available
+        if proxy:
+            proxy_url = proxy if proxy.startswith('http') else f"http://{proxy}"
+            cmd.extend(['--proxy', proxy_url])
+            logging.debug(f"Method 6 (gallery-dl): Using proxy {proxy_url.split('@')[-1][:20]}...")
 
         cmd.append(url)
 
@@ -1495,15 +1513,15 @@ def extract_links_intelligent(
              True),
 
             ("Method 3: yt-dlp with retries",
-             lambda: _method_ytdlp_with_retry(url, platform_key, cookie_file, max_videos, cookie_browser),
+             lambda: _method_ytdlp_with_retry(url, platform_key, cookie_file, max_videos, cookie_browser, active_proxy),
              True),
 
             ("Method 4: yt-dlp with user agent",
-             lambda: _method_ytdlp_user_agent(url, platform_key, cookie_file, max_videos, cookie_browser),
+             lambda: _method_ytdlp_user_agent(url, platform_key, cookie_file, max_videos, cookie_browser, active_proxy),
              True),
 
             ("Method 6: gallery-dl",
-             lambda: _method_gallery_dl(url, platform_key, cookie_file),
+             lambda: _method_gallery_dl(url, platform_key, cookie_file, active_proxy),
              platform_key in ['instagram', 'tiktok']),
 
             ("Method 5: Instaloader",
@@ -1610,6 +1628,10 @@ def extract_links_intelligent(
             else:
                 if progress_callback:
                     progress_callback(f"⚠️ {method_name} → 0 links")
+
+                    # If this was the learned "best" method and it failed, inform user we'll try others
+                    if method_name == best_method_name and best_method_name:
+                        progress_callback(f"   🔄 Best method didn't work, continuing with other methods...")
 
         # Cleanup temp cookies
         for temp_cookie_file in temp_cookie_files:

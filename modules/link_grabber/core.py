@@ -806,7 +806,7 @@ def _method_ytdlp_enhanced(
 
 
 def _method_ytdlp_dump_json(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, cookie_browser: str = None, proxy: str = None, user_agent: str = None) -> typing.List[dict]:
-    """METHOD 1: yt-dlp --dump-json (WITH DATES) - PRIMARY METHOD"""
+    """METHOD 1: yt-dlp --dump-json (WITH DATES) - PRIMARY METHOD + Proxy Support"""
     try:
         cmd = ['yt-dlp', '--dump-json', '--flat-playlist', '--ignore-errors', '--no-warnings']
 
@@ -815,6 +815,17 @@ def _method_ytdlp_dump_json(url: str, platform_key: str, cookie_file: str = None
             cmd.extend(['--cookies-from-browser', cookie_browser])
         elif cookie_file:
             cmd.extend(['--cookies', cookie_file])
+
+        # Add proxy if available (CRITICAL for IP blocks)
+        if proxy:
+            proxy_url = proxy if proxy.startswith('http') else f"http://{proxy}"
+            cmd.extend(['--proxy', proxy_url])
+            logging.debug(f"Method 1: Using proxy {proxy_url.split('@')[-1][:20]}...")
+
+        # Add user agent if provided
+        if user_agent:
+            cmd.extend(['--user-agent', user_agent])
+            logging.debug(f"Method 1: Using UA {user_agent[:40]}...")
 
         if max_videos > 0:
             cmd.extend(['--playlist-end', str(max_videos)])
@@ -863,17 +874,23 @@ def _method_ytdlp_dump_json(url: str, platform_key: str, cookie_file: str = None
     return []
 
 
-def _method_ytdlp_get_url(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, cookie_browser: str = None) -> typing.List[dict]:
-    """METHOD 2: yt-dlp --get-url (FAST, NO DATES) - SIMPLIFIED LIKE BATCH SCRIPT"""
+def _method_ytdlp_get_url(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, cookie_browser: str = None, proxy: str = None) -> typing.List[dict]:
+    """METHOD 2: yt-dlp --get-url (FAST, NO DATES) - SIMPLIFIED LIKE BATCH SCRIPT + Proxy Support"""
     try:
         # SIMPLE COMMAND like the working batch script: yt-dlp URL --flat-playlist --get-url
-        cmd = ['yt-dlp', '--flat-playlist', '--get-url']
+        cmd = ['yt-dlp', '--flat-playlist', '--get-url', '--ignore-errors']
 
         # Cookie handling: browser OR file
         if cookie_browser:
             cmd.extend(['--cookies-from-browser', cookie_browser])
         elif cookie_file:
             cmd.extend(['--cookies', cookie_file])
+
+        # Add proxy if available (CRITICAL for IP blocks)
+        if proxy:
+            proxy_url = proxy if proxy.startswith('http') else f"http://{proxy}"
+            cmd.extend(['--proxy', proxy_url])
+            logging.debug(f"Method 2: Using proxy {proxy_url.split('@')[-1][:20]}...")
 
         if max_videos > 0:
             cmd.extend(['--playlist-end', str(max_videos)])
@@ -1505,11 +1522,11 @@ def extract_links_intelligent(
              use_enhancements),  # Only use if enhancements enabled
 
             ("Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)",
-             lambda: _method_ytdlp_get_url(url, platform_key, cookie_file, max_videos, cookie_browser),
+             lambda: _method_ytdlp_get_url(url, platform_key, cookie_file, max_videos, cookie_browser, active_proxy),
              True),
 
             ("Method 1: yt-dlp --dump-json (with dates)",
-             lambda: _method_ytdlp_dump_json(url, platform_key, cookie_file, max_videos, cookie_browser),
+             lambda: _method_ytdlp_dump_json(url, platform_key, cookie_file, max_videos, cookie_browser, active_proxy),
              True),
 
             ("Method 3: yt-dlp with retries",

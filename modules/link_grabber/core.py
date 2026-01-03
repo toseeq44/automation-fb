@@ -837,7 +837,7 @@ def _execute_ytdlp_dual(url: str, options: dict, proxy: str = None, user_agent: 
 
     # Add proxy and user agent to options
     if proxy:
-        options['proxy'] = f"http://{proxy}" if not proxy.startswith('http') else proxy
+        options['proxy'] = _parse_proxy_format(proxy)  # FIXED: Properly parse ip:port:user:pass format
     if user_agent:
         options['user_agent'] = user_agent
 
@@ -1059,7 +1059,7 @@ def _method_ytdlp_dump_json(url: str, platform_key: str, cookie_file: str = None
 
         # Add proxy if available (CRITICAL for IP blocks)
         if proxy:
-            proxy_url = proxy if proxy.startswith('http') else f"http://{proxy}"
+            proxy_url = _parse_proxy_format(proxy)  # FIXED: Properly parse ip:port:user:pass format
             cmd.extend(['--proxy', proxy_url])
             logging.debug(f"Method 1: Using proxy {proxy_url.split('@')[-1][:20]}...")
 
@@ -1143,7 +1143,7 @@ def _method_ytdlp_get_url(url: str, platform_key: str, cookie_file: str = None, 
 
         # Add proxy if available (CRITICAL for IP blocks)
         if proxy:
-            proxy_url = proxy if proxy.startswith('http') else f"http://{proxy}"
+            proxy_url = _parse_proxy_format(proxy)  # FIXED: Properly parse ip:port:user:pass format
             cmd.extend(['--proxy', proxy_url])
             logging.debug(f"Method 2: Using proxy {proxy_url.split('@')[-1][:20]}...")
 
@@ -1222,7 +1222,7 @@ def _method_ytdlp_with_retry(url: str, platform_key: str, cookie_file: str = Non
 
         # Add proxy if available
         if proxy:
-            proxy_url = proxy if proxy.startswith('http') else f"http://{proxy}"
+            proxy_url = _parse_proxy_format(proxy)  # FIXED: Properly parse ip:port:user:pass format
             cmd.extend(['--proxy', proxy_url])
             logging.debug(f"Method 3: Using proxy {proxy_url.split('@')[-1][:20]}...")
 
@@ -1458,7 +1458,7 @@ def _method_gallery_dl(url: str, platform_key: str, cookie_file: str = None, pro
 
         # Add proxy if available
         if proxy:
-            proxy_url = proxy if proxy.startswith('http') else f"http://{proxy}"
+            proxy_url = _parse_proxy_format(proxy)  # FIXED: Properly parse ip:port:user:pass format
             cmd.extend(['--proxy', proxy_url])
             logging.debug(f"Method 6 (gallery-dl): Using proxy {proxy_url.split('@')[-1][:20]}...")
 
@@ -1850,7 +1850,7 @@ def _method_selenium(
 
         # PROXY SUPPORT: Critical for IP blocking avoidance
         if proxy:
-            proxy_url = proxy if proxy.startswith('http') else f"http://{proxy}"
+            proxy_url = _parse_proxy_format(proxy)  # FIXED: Properly parse ip:port:user:pass format
             options.add_argument(f'--proxy-server={proxy_url}')
             if progress_callback:
                 progress_callback(f"🌐 Selenium: Using proxy {proxy_url.split('@')[-1][:30]}...")
@@ -2016,7 +2016,7 @@ def _method_old_batch_file(url: str, platform_key: str, cookie_file: str = None,
             cmd.extend(['--cookies', cookie_file])
 
         if proxy:
-            proxy_url = proxy if proxy.startswith('http') else f"http://{proxy}"
+            proxy_url = _parse_proxy_format(proxy)  # FIXED: Properly parse ip:port:user:pass format
             cmd.extend(['--proxy', proxy_url])
 
         if max_videos > 0:
@@ -2085,7 +2085,7 @@ def _method_old_dump_json(url: str, platform_key: str, cookie_file: str = None, 
             cmd.extend(['--cookies', cookie_file])
 
         if proxy:
-            proxy_url = proxy if proxy.startswith('http') else f"http://{proxy}"
+            proxy_url = _parse_proxy_format(proxy)  # FIXED: Properly parse ip:port:user:pass format
             cmd.extend(['--proxy', proxy_url])
 
         if max_videos > 0:

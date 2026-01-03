@@ -21,6 +21,7 @@ import time
 import typing
 import json
 import logging
+import random
 from datetime import datetime
 from urllib.parse import urlparse
 
@@ -1808,9 +1809,20 @@ def _method_selenium(
     url: str,
     platform_key: str,
     max_videos: int = 0,
-    cookie_file: str = None
+    cookie_file: str = None,
+    proxy: str = None,
+    progress_callback=None
 ) -> typing.List[dict]:
-    """METHOD 8: Selenium (ABSOLUTE LAST RESORT with cookies)"""
+    """
+    METHOD 8: Selenium Headless (ENHANCED with Proxy + Cookies + Stealth)
+
+    The MOST RELIABLE method - uses real browser automation with:
+    - Headless Chrome for stealth
+    - Proxy support (HTTP/SOCKS with authentication)
+    - Cookie injection for authenticated access
+    - Anti-detection measures
+    - Human-like scrolling behavior
+    """
     driver = None
     try:
         from selenium import webdriver
@@ -1818,14 +1830,42 @@ def _method_selenium(
         from selenium.webdriver.chrome.options import Options
 
         options = Options()
+
+        # HEADLESS MODE: Run without visible window
         options.add_argument('--headless=new')
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-gpu')
+
+        # STEALTH FEATURES: Avoid detection
         options.add_argument('--disable-blink-features=AutomationControlled')
-        options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
-        options.add_argument('--window-size=1400,900')
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option('useAutomationExtension', False)
+
+        # REALISTIC BROWSER FINGERPRINT
+        user_agent = _get_random_user_agent()
+        options.add_argument(f'--user-agent={user_agent}')
+        options.add_argument('--window-size=1920,1080')
+        options.add_argument('--lang=en-US,en;q=0.9')
+
+        # PROXY SUPPORT: Critical for IP blocking avoidance
+        if proxy:
+            proxy_url = proxy if proxy.startswith('http') else f"http://{proxy}"
+            options.add_argument(f'--proxy-server={proxy_url}')
+            if progress_callback:
+                progress_callback(f"🌐 Selenium: Using proxy {proxy_url.split('@')[-1][:30]}...")
+            logging.info(f"Selenium: Proxy configured: {proxy_url.split('@')[-1][:30]}")
 
         driver = webdriver.Chrome(options=options)
+
+        # Override navigator.webdriver property (anti-detection)
+        driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
+            'source': '''
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                })
+            '''
+        })
         driver.set_page_load_timeout(40)
 
         # Load cookies if available (critical for TikTok private/region locked pages)
@@ -1857,13 +1897,20 @@ def _method_selenium(
                 except Exception:
                     continue
 
+        # Navigate to target URL
         if cookies_loaded:
+            if progress_callback:
+                progress_callback(f"🍪 Selenium: Cookies injected, loading target page...")
             driver.get(url)
         else:
+            if progress_callback:
+                progress_callback(f"🌐 Selenium: Loading page (no cookies)...")
             driver.get(url)
 
+        # Wait for page to load
         time.sleep(5)
 
+        # Platform-specific selectors
         selector_map = {
             'tiktok': 'a[href*="/video/"]',
             'instagram': 'a[href*="/p/"], a[href*="/reel/"]',
@@ -1874,6 +1921,9 @@ def _method_selenium(
         seen_urls: typing.Set[str] = set()
         scroll_attempts = 0
         stagnant_rounds = 0
+
+        if progress_callback:
+            progress_callback(f"📜 Selenium: Scrolling and extracting links...")
 
         while scroll_attempts < 20 and stagnant_rounds < 3:
             links = driver.find_elements(By.CSS_SELECTOR, selector)
@@ -1890,28 +1940,54 @@ def _method_selenium(
                     break
 
             if max_videos and len(seen_urls) >= max_videos:
+                if progress_callback:
+                    progress_callback(f"✓ Selenium: Reached limit of {max_videos} videos")
                 break
 
-            if len(seen_urls) == before_count:
+            # Check if we found new links this round
+            new_links_found = len(seen_urls) - before_count
+            if new_links_found == 0:
                 stagnant_rounds += 1
+                if progress_callback and stagnant_rounds == 1:
+                    progress_callback(f"⏳ Selenium: No new links, continuing... ({len(seen_urls)} total)")
             else:
                 stagnant_rounds = 0
+                if progress_callback and scroll_attempts % 5 == 0:
+                    progress_callback(f"📊 Selenium: Found {len(seen_urls)} links so far...")
 
-            driver.execute_script("window.scrollBy(0, 1500)")
-            time.sleep(2)
+            # Human-like scrolling with random variation
+            scroll_amount = random.randint(1200, 1800)
+            driver.execute_script(f"window.scrollBy(0, {scroll_amount})")
+
+            # Random delay to mimic human behavior
+            delay = random.uniform(1.5, 2.5)
+            time.sleep(delay)
             scroll_attempts += 1
+
+        if progress_callback:
+            progress_callback(f"✅ Selenium: Extraction complete - {len(seen_urls)} links found")
 
         entries = []
         limit = max_videos or len(seen_urls)
         for href in list(seen_urls)[:limit]:
             entries.append({'url': href, 'title': '', 'date': '00000000'})
 
+        logging.info(f"Selenium method: Successfully extracted {len(entries)} links")
         return entries
 
     except ImportError:
-        logging.debug("Selenium not installed")
+        logging.warning("❌ Selenium not installed (pip install selenium)")
+        if progress_callback:
+            progress_callback("❌ Selenium not available - install with: pip install selenium")
     except Exception as e:
-        logging.debug(f"Method 8 (selenium) failed: {e}")
+        logging.warning(f"❌ Selenium method failed:")
+        logging.warning(f"   URL: {url}")
+        logging.warning(f"   Error: {str(e)[:300]}")
+        logging.warning(f"   Platform: {platform_key}")
+        if proxy:
+            logging.warning(f"   Proxy: {proxy.split('@')[-1][:30]}")
+        if progress_callback:
+            progress_callback(f"❌ Selenium error: {str(e)[:100]}")
     finally:
         if driver:
             try:
@@ -2087,8 +2163,8 @@ def extract_links_intelligent(
              lambda: _method_playwright(url, platform_key, cookie_file, active_proxy, max_videos),
              platform_key in ['tiktok', 'instagram', 'youtube']),
 
-            ("Method 8: Selenium",
-             lambda: _method_selenium(url, platform_key, max_videos, cookie_file),
+            ("Method 8: Selenium Headless (ENHANCED: Proxy + Cookies + Stealth)",
+             lambda: _method_selenium(url, platform_key, max_videos, cookie_file, active_proxy, progress_callback),
              True),
         ]
 

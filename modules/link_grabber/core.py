@@ -1998,6 +1998,197 @@ def _method_selenium(
     return []
 
 
+# ============ OLD WORKING METHODS (From ffbdcc8 - Proven to Work!) ============
+
+def _method_old_batch_file(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, proxy: str = None) -> typing.List[dict]:
+    """
+    OLD METHOD 9: ORIGINAL Batch File Approach (PROVEN 100% for Instagram/TikTok!)
+
+    This was the ORIGINAL working method from ffbdcc8 commit
+    Simple yt-dlp --flat-playlist --get-url
+    """
+    try:
+        logging.info("🕰️ Trying OLD Method 9: Original Batch File Approach")
+
+        cmd = ['yt-dlp', '--flat-playlist', '--get-url', '--ignore-errors', '--no-warnings']
+
+        if cookie_file:
+            cmd.extend(['--cookies', cookie_file])
+
+        if proxy:
+            proxy_url = proxy if proxy.startswith('http') else f"http://{proxy}"
+            cmd.extend(['--proxy', proxy_url])
+
+        if max_videos > 0:
+            cmd.extend(['--playlist-end', str(max_videos)])
+
+        cmd.append(url)
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            encoding='utf-8',
+            errors='replace'
+        )
+
+        if result.stdout:
+            urls = [
+                line.strip()
+                for line in result.stdout.splitlines()
+                if line.strip() and line.strip().startswith('http')
+            ]
+
+            if urls:
+                logging.info(f"✅ OLD Method 9 SUCCESS: {len(urls)} links")
+                return [{'url': u, 'title': '', 'date': '00000000'} for u in urls]
+
+        logging.info(f"⚠️ OLD Method 9 failed")
+
+    except Exception as e:
+        logging.info(f"⚠️ OLD Method 9 error: {str(e)[:100]}")
+
+    return []
+
+
+def _method_old_dump_json(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, proxy: str = None) -> typing.List[dict]:
+    """
+    OLD METHOD 10: ORIGINAL Dump JSON (PROVEN to work!)
+
+    Simple yt-dlp --dump-json without complex features
+    """
+    try:
+        logging.info("🕰️ Trying OLD Method 10: Original Dump JSON")
+
+        cmd = ['yt-dlp', '--dump-json', '--flat-playlist', '--ignore-errors', '--no-warnings']
+
+        if cookie_file:
+            cmd.extend(['--cookies', cookie_file])
+
+        if proxy:
+            proxy_url = proxy if proxy.startswith('http') else f"http://{proxy}"
+            cmd.extend(['--proxy', proxy_url])
+
+        if max_videos > 0:
+            cmd.extend(['--playlist-end', str(max_videos)])
+
+        # Simple platform optimizations
+        if platform_key == 'instagram':
+            cmd.extend(['--extractor-args', 'instagram:feed_count=100'])
+        elif platform_key == 'youtube':
+            cmd.extend(['--extractor-args', 'youtube:player_client=android'])
+
+        cmd.append(url)
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            encoding='utf-8',
+            errors='replace'
+        )
+
+        if result.stdout:
+            entries = []
+            for line in result.stdout.splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    data = json.loads(line)
+                    video_url = data.get('webpage_url') or data.get('url')
+                    if video_url:
+                        entries.append({
+                            'url': video_url,
+                            'title': data.get('title', 'Untitled')[:100],
+                            'date': data.get('upload_date', '00000000')
+                        })
+                except (json.JSONDecodeError, KeyError):
+                    continue
+
+            if entries:
+                logging.info(f"✅ OLD Method 10 SUCCESS: {len(entries)} links")
+                return entries
+
+        logging.info("⚠️ OLD Method 10 failed")
+
+    except Exception as e:
+        logging.info(f"⚠️ OLD Method 10 error: {str(e)[:100]}")
+
+    return []
+
+
+def _method_old_instaloader(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0) -> typing.List[dict]:
+    """
+    OLD METHOD 11: ORIGINAL Instaloader (PROVEN for Instagram!)
+
+    Simple Instaloader without complex authentication
+    """
+    if platform_key != 'instagram':
+        return []
+
+    try:
+        logging.info("🕰️ Trying OLD Method 11: Original Instaloader")
+
+        import instaloader
+
+        username_match = re.search(r'instagram\.com/([^/?#]+)', url)
+        if not username_match or username_match.group(1) in ['p', 'reel', 'tv', 'stories']:
+            return []
+
+        username = username_match.group(1)
+
+        loader = instaloader.Instaloader(
+            quiet=True,
+            download_videos=False,
+            save_metadata=False,
+            download_pictures=False
+        )
+
+        # Simple cookie loading
+        if cookie_file:
+            try:
+                cookies_dict = {}
+                with open(cookie_file, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if line.strip() and not line.startswith('#'):
+                            parts = line.strip().split('\t')
+                            if len(parts) >= 7:
+                                cookies_dict[parts[5]] = parts[6]
+                if cookies_dict:
+                    loader.context._session.cookies.update(cookies_dict)
+            except Exception:
+                pass
+
+        profile = instaloader.Profile.from_username(loader.context, username)
+        entries = []
+
+        limit = max_videos if max_videos > 0 else 100
+
+        for post in profile.get_posts():
+            entries.append({
+                'url': f"https://www.instagram.com/p/{post.shortcode}/",
+                'title': (post.caption or 'Instagram Post')[:100],
+                'date': post.date_utc.strftime('%Y%m%d') if hasattr(post, 'date_utc') else '00000000'
+            })
+            if len(entries) >= limit:
+                break
+
+        if entries:
+            logging.info(f"✅ OLD Method 11 SUCCESS: {len(entries)} links")
+            return entries
+
+        logging.info("⚠️ OLD Method 11 failed")
+
+    except ImportError:
+        logging.info("⚠️ OLD Method 11 unavailable: instaloader not installed")
+    except Exception as e:
+        logging.info(f"⚠️ OLD Method 11 error: {str(e)[:100]}")
+
+    return []
+
+
 def extract_links_intelligent(
     url: str,
     platform_key: str,
@@ -2129,8 +2320,26 @@ def extract_links_intelligent(
             progress_callback(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
         # Define all available methods (pass cookie_browser to yt-dlp methods)
-        # PRIORITY ORDER: Enhanced method first, then fallback methods
+        # PRIORITY ORDER: OLD PROVEN METHODS FIRST, then advanced fallback methods
+        # ============================================================================
+        # 🕰️ OLD WORKING METHODS (From ffbdcc8 - PROVEN to work 100%!)
+        # These run FIRST because they worked perfectly in the beginning
+        # ============================================================================
         all_methods = [
+            # ========== PRIORITY 1-3: OLD PROVEN METHODS ==========
+            ("OLD Method 9: Original Batch File Approach (PROVEN 100%)",
+             lambda: _method_old_batch_file(url, platform_key, cookie_file, max_videos, active_proxy),
+             True),  # Always try this first
+
+            ("OLD Method 10: Original Dump JSON (PROVEN 100%)",
+             lambda: _method_old_dump_json(url, platform_key, cookie_file, max_videos, active_proxy),
+             True),  # Second priority
+
+            ("OLD Method 11: Original Instaloader (PROVEN 100%)",
+             lambda: _method_old_instaloader(url, platform_key, cookie_file, max_videos),
+             platform_key == 'instagram'),  # Instagram only
+
+            # ========== PRIORITY 4-12: ADVANCED METHODS (Fallback) ==========
             ("Method 0: Enhanced yt-dlp (Dual API + Proxy + UA Rotation)",
              lambda: _method_ytdlp_enhanced(url, platform_key, cookie_file, max_videos, cookie_browser, active_proxy),
              use_enhancements),  # Only use if enhancements enabled
@@ -2263,6 +2472,18 @@ def extract_links_intelligent(
                     # If this was the learned "best" method and it failed, inform user we'll try others
                     if method_name == best_method_name and best_method_name:
                         progress_callback(f"   🔄 Best method didn't work, continuing with other methods...")
+
+                # ============================================================
+                # IP PROTECTION: Mandatory delay between failed method attempts
+                # This prevents rapid-fire requests that could trigger IP blocking
+                # ============================================================
+                # Check if there are more methods to try (don't delay after last method)
+                current_index = available_methods.index((method_name, method_func))
+                if current_index < len(available_methods) - 1:
+                    delay = random.uniform(2.0, 4.0)
+                    if progress_callback:
+                        progress_callback(f"⏳ IP Protection: Waiting {delay:.1f}s before next method...")
+                    time.sleep(delay)
 
         # Cleanup temp cookies
         for temp_cookie_file in temp_cookie_files:

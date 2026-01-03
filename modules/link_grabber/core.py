@@ -795,6 +795,8 @@ def _get_ytdlp_binary_path() -> str:
         # PRIORITY 3: User's custom locations (common installation directories)
         user_locations = [
             r"C:\yt-dlp\yt-dlp.exe",  # Recommended location
+            r"C:\Users\Fast Computers\automation\bin\yt-dlp.exe",  # User's automation folder
+            os.path.join(os.getcwd(), 'bin', 'yt-dlp.exe'),  # Current working directory bin folder
             os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Programs', 'yt-dlp', 'yt-dlp.exe'),
             os.path.join(os.environ.get('APPDATA', ''), 'yt-dlp', 'yt-dlp.exe'),
             os.path.join(Path.home(), 'yt-dlp', 'yt-dlp.exe'),
@@ -806,7 +808,19 @@ def _get_ytdlp_binary_path() -> str:
             try:
                 expanded = os.path.expandvars(location)
                 if os.path.exists(expanded):
-                    logging.info(f"✓ Using user's yt-dlp: {expanded}")
+                    # Get version of this yt-dlp
+                    try:
+                        ver_result = subprocess.run(
+                            [expanded, '--version'],
+                            capture_output=True,
+                            timeout=5,
+                            text=True,
+                            errors='ignore'
+                        )
+                        version = ver_result.stdout.strip() if ver_result.returncode == 0 else "unknown"
+                        logging.info(f"✓ Using user's yt-dlp: {expanded} (v{version})")
+                    except:
+                        logging.info(f"✓ Using user's yt-dlp: {expanded}")
                     return expanded
             except:
                 continue

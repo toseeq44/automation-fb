@@ -1435,6 +1435,17 @@ def _method_instaloader(url: str, platform_key: str, cookie_file: str = None, ma
                 'date': post.date_utc.strftime('%Y%m%d') if post.date_utc else '00000000'
             })
 
+            # IP PROTECTION: Add delay between post fetches to avoid rate limiting
+            # Instagram allows ~1-2 requests per second, so we use 1.5-3 second delay
+            if idx > 1 and idx % 5 == 0:  # Every 5 posts, add a longer delay
+                delay = random.uniform(3.0, 5.0)
+                logging.debug(f"   Instaloader: Fetched {idx} posts, waiting {delay:.1f}s (IP protection)...")
+                time.sleep(delay)
+            else:
+                # Regular delay between posts
+                delay = random.uniform(1.5, 2.5)
+                time.sleep(delay)
+
             # Progress logging every 50 posts
             if idx % 50 == 0:
                 logging.info(f"📥 Extracted {idx} Instagram posts...")
@@ -2216,12 +2227,24 @@ def _method_old_instaloader(url: str, platform_key: str, cookie_file: str = None
 
         limit = max_videos if max_videos > 0 else 100
 
-        for post in profile.get_posts():
+        for idx, post in enumerate(profile.get_posts()):
             entries.append({
                 'url': f"https://www.instagram.com/p/{post.shortcode}/",
                 'title': (post.caption or 'Instagram Post')[:100],
                 'date': post.date_utc.strftime('%Y%m%d') if hasattr(post, 'date_utc') else '00000000'
             })
+
+            # IP PROTECTION: Add delay between post fetches to avoid rate limiting
+            # Instagram allows ~1-2 requests per second, so we use 1.5-3 second delay
+            if idx > 0 and idx % 5 == 0:  # Every 5 posts, add a longer delay
+                delay = random.uniform(3.0, 5.0)
+                logging.debug(f"   Instaloader: Fetched {idx+1} posts, waiting {delay:.1f}s (IP protection)...")
+                time.sleep(delay)
+            else:
+                # Regular delay between posts
+                delay = random.uniform(1.5, 2.5)
+                time.sleep(delay)
+
             if len(entries) >= limit:
                 break
 

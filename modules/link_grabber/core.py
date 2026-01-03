@@ -2024,6 +2024,10 @@ def _method_old_batch_file(url: str, platform_key: str, cookie_file: str = None,
 
         cmd.append(url)
 
+        # DEBUG: Log the actual command being run
+        logging.info(f"🔧 OLD Method 9 command: {' '.join(cmd[:8])}... (full command logged)")
+        logging.debug(f"   Full command: {' '.join(cmd)}")
+
         result = subprocess.run(
             cmd,
             capture_output=True,
@@ -2032,6 +2036,9 @@ def _method_old_batch_file(url: str, platform_key: str, cookie_file: str = None,
             encoding='utf-8',
             errors='replace'
         )
+
+        # DEBUG: Log exit code
+        logging.debug(f"   Exit code: {result.returncode}")
 
         if result.stdout:
             urls = [
@@ -2043,11 +2050,22 @@ def _method_old_batch_file(url: str, platform_key: str, cookie_file: str = None,
             if urls:
                 logging.info(f"✅ OLD Method 9 SUCCESS: {len(urls)} links")
                 return [{'url': u, 'title': '', 'date': '00000000'} for u in urls]
+            else:
+                # Stdout exists but no URLs found
+                logging.warning(f"⚠️ OLD Method 9: Stdout exists but no URLs found")
+                logging.warning(f"   Stdout preview: {result.stdout[:300]}")
+        else:
+            # No stdout at all
+            logging.warning(f"⚠️ OLD Method 9: No stdout output")
 
-        logging.info(f"⚠️ OLD Method 9 failed")
+        # CRITICAL: Log stderr to see the REAL error
+        if result.stderr:
+            logging.warning(f"❌ OLD Method 9 STDERR: {result.stderr[:500]}")
+
+        logging.info(f"⚠️ OLD Method 9 failed - see stderr above for details")
 
     except Exception as e:
-        logging.info(f"⚠️ OLD Method 9 error: {str(e)[:100]}")
+        logging.warning(f"❌ OLD Method 9 EXCEPTION: {str(e)[:200]}")
 
     return []
 
@@ -2081,6 +2099,10 @@ def _method_old_dump_json(url: str, platform_key: str, cookie_file: str = None, 
 
         cmd.append(url)
 
+        # DEBUG: Log the actual command being run
+        logging.info(f"🔧 OLD Method 10 command: {' '.join(cmd[:8])}... (full command logged)")
+        logging.debug(f"   Full command: {' '.join(cmd)}")
+
         result = subprocess.run(
             cmd,
             capture_output=True,
@@ -2089,6 +2111,9 @@ def _method_old_dump_json(url: str, platform_key: str, cookie_file: str = None, 
             encoding='utf-8',
             errors='replace'
         )
+
+        # DEBUG: Log exit code
+        logging.debug(f"   Exit code: {result.returncode}")
 
         if result.stdout:
             entries = []
@@ -2110,11 +2135,22 @@ def _method_old_dump_json(url: str, platform_key: str, cookie_file: str = None, 
             if entries:
                 logging.info(f"✅ OLD Method 10 SUCCESS: {len(entries)} links")
                 return entries
+            else:
+                # Stdout exists but no valid JSON entries
+                logging.warning(f"⚠️ OLD Method 10: Stdout exists but no valid JSON entries")
+                logging.warning(f"   Stdout preview: {result.stdout[:300]}")
+        else:
+            # No stdout at all
+            logging.warning(f"⚠️ OLD Method 10: No stdout output")
 
-        logging.info("⚠️ OLD Method 10 failed")
+        # CRITICAL: Log stderr to see the REAL error
+        if result.stderr:
+            logging.warning(f"❌ OLD Method 10 STDERR: {result.stderr[:500]}")
+
+        logging.info("⚠️ OLD Method 10 failed - see stderr above for details")
 
     except Exception as e:
-        logging.info(f"⚠️ OLD Method 10 error: {str(e)[:100]}")
+        logging.warning(f"❌ OLD Method 10 EXCEPTION: {str(e)[:200]}")
 
     return []
 
@@ -2178,13 +2214,16 @@ def _method_old_instaloader(url: str, platform_key: str, cookie_file: str = None
         if entries:
             logging.info(f"✅ OLD Method 11 SUCCESS: {len(entries)} links")
             return entries
-
-        logging.info("⚠️ OLD Method 11 failed")
+        else:
+            logging.warning("⚠️ OLD Method 11: No posts found from profile")
 
     except ImportError:
-        logging.info("⚠️ OLD Method 11 unavailable: instaloader not installed")
+        logging.warning("❌ OLD Method 11 unavailable: instaloader not installed")
     except Exception as e:
-        logging.info(f"⚠️ OLD Method 11 error: {str(e)[:100]}")
+        # Log full exception details for debugging
+        logging.warning(f"❌ OLD Method 11 EXCEPTION: {type(e).__name__}: {str(e)[:300]}")
+        import traceback
+        logging.debug(f"   Full traceback: {traceback.format_exc()[:500]}")
 
     return []
 

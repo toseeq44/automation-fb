@@ -872,7 +872,11 @@ def _execute_ytdlp_dual(url: str, options: dict, proxy: str = None, user_agent: 
                     return entries
 
     except Exception as e:
-        logging.debug(f"Python API failed: {e}")
+        logging.warning(f"❌ yt-dlp Python API failed:")
+        logging.warning(f"   URL: {url}")
+        logging.warning(f"   Error: {str(e)[:300]}")
+        logging.warning(f"   Proxy: {options.get('proxy', 'None')}")
+        logging.warning(f"   User-Agent: {options.get('user_agent', 'Default')[:50]}")
 
     # ===== APPROACH 2: Binary Subprocess (Fallback) =====
     try:
@@ -933,9 +937,20 @@ def _execute_ytdlp_dual(url: str, options: dict, proxy: str = None, user_agent: 
             if entries:
                 logging.debug(f"✓ Binary success: {len(entries)} links")
                 return entries
+            else:
+                # No entries found - log detailed error info
+                logging.warning(f"❌ yt-dlp binary returned 0 results:")
+                logging.warning(f"   Command: {' '.join(cmd)}")
+                logging.warning(f"   Exit code: {result.returncode}")
+                if result.stdout:
+                    logging.warning(f"   Stdout: {result.stdout[:500]}")
+                if result.stderr:
+                    logging.warning(f"   Stderr: {result.stderr[:500]}")
 
     except Exception as e:
-        logging.debug(f"Binary fallback failed: {e}")
+        logging.warning(f"❌ yt-dlp binary exception:")
+        logging.warning(f"   URL: {url}")
+        logging.warning(f"   Error: {str(e)[:300]}")
 
     return entries
 
@@ -1011,11 +1026,18 @@ def _method_ytdlp_enhanced(
             # Sort by date (newest first)
             entries.sort(key=lambda x: x.get('date', '00000000'), reverse=True)
             logging.debug(f"Enhanced yt-dlp: {len(entries)} links extracted")
-
-        return entries
+            return entries
+        else:
+            # No results from dual approach
+            logging.warning(f"❌ Method 0 (Enhanced) returned 0 results:")
+            logging.warning(f"   URL: {url}")
+            logging.warning(f"   Both Python API and binary fallback failed")
+            return []
 
     except Exception as e:
-        logging.debug(f"Enhanced yt-dlp method failed: {e}")
+        logging.warning(f"❌ Method 0 (Enhanced) exception:")
+        logging.warning(f"   URL: {url}")
+        logging.warning(f"   Error: {str(e)[:300]}")
 
     return []
 
@@ -1085,9 +1107,20 @@ def _method_ytdlp_dump_json(url: str, platform_key: str, cookie_file: str = None
             # Sort by date (newest first)
             entries.sort(key=lambda x: x.get('date', '00000000'), reverse=True)
             return entries
+        else:
+            # No results - log detailed error info
+            logging.warning(f"❌ Method 1 (--dump-json) returned 0 results:")
+            logging.warning(f"   Command: {' '.join(cmd)}")
+            logging.warning(f"   Exit code: {result.returncode}")
+            if result.stdout:
+                logging.warning(f"   Stdout: {result.stdout[:500]}")
+            if result.stderr:
+                logging.warning(f"   Stderr: {result.stderr[:500]}")
 
     except Exception as e:
-        logging.debug(f"Method 1 (yt-dlp --dump-json) failed: {e}")
+        logging.warning(f"❌ Method 1 (--dump-json) exception:")
+        logging.warning(f"   URL: {url}")
+        logging.warning(f"   Error: {str(e)[:300]}")
 
     return []
 
@@ -1148,10 +1181,24 @@ def _method_ytdlp_get_url(url: str, platform_key: str, cookie_file: str = None, 
                 logging.info(f"Found {len(urls)} URLs before filtering")
                 return [{'url': u, 'title': '', 'date': '00000000'} for u in urls]
             else:
-                logging.warning(f"No http URLs found in output. Raw output: {result.stdout[:200]}")
+                logging.warning(f"❌ Method 2 (--get-url) returned 0 results:")
+                logging.warning(f"   Command: {' '.join(cmd)}")
+                logging.warning(f"   Exit code: {result.returncode}")
+                logging.warning(f"   Raw output: {result.stdout[:500]}")
+                if result.stderr:
+                    logging.warning(f"   Stderr: {result.stderr[:500]}")
+        else:
+            # result.stdout is empty
+            logging.warning(f"❌ Method 2 (--get-url) returned empty output:")
+            logging.warning(f"   Command: {' '.join(cmd)}")
+            logging.warning(f"   Exit code: {result.returncode}")
+            if result.stderr:
+                logging.warning(f"   Stderr: {result.stderr[:500]}")
 
     except Exception as e:
-        logging.error(f"Method 2 (yt-dlp --get-url) exception: {e}")
+        logging.warning(f"❌ Method 2 (--get-url) exception:")
+        logging.warning(f"   URL: {url}")
+        logging.warning(f"   Error: {str(e)[:300]}")
 
     return []
 
@@ -1209,11 +1256,30 @@ def _method_ytdlp_with_retry(url: str, platform_key: str, cookie_file: str = Non
                 except:
                     continue
 
-            entries.sort(key=lambda x: x.get('date', '00000000'), reverse=True)
-            return entries
+            if entries:
+                entries.sort(key=lambda x: x.get('date', '00000000'), reverse=True)
+                return entries
+            else:
+                # No results - log detailed error info
+                logging.warning(f"❌ Method 3 (with retry) returned 0 results:")
+                logging.warning(f"   Command: {' '.join(cmd)}")
+                logging.warning(f"   Exit code: {result.returncode}")
+                if result.stdout:
+                    logging.warning(f"   Stdout: {result.stdout[:500]}")
+                if result.stderr:
+                    logging.warning(f"   Stderr: {result.stderr[:500]}")
+        else:
+            # result.stdout is empty
+            logging.warning(f"❌ Method 3 (with retry) returned empty output:")
+            logging.warning(f"   Command: {' '.join(cmd)}")
+            logging.warning(f"   Exit code: {result.returncode}")
+            if result.stderr:
+                logging.warning(f"   Stderr: {result.stderr[:500]}")
 
     except Exception as e:
-        logging.debug(f"Method 3 (yt-dlp with retry) failed: {e}")
+        logging.warning(f"❌ Method 3 (with retry) exception:")
+        logging.warning(f"   URL: {url}")
+        logging.warning(f"   Error: {str(e)[:300]}")
 
     return []
 
@@ -1280,10 +1346,23 @@ def _method_ytdlp_user_agent(url: str, platform_key: str, cookie_file: str = Non
                 if entries:
                     entries.sort(key=lambda x: x.get('date', '00000000'), reverse=True)
                     return entries
+                else:
+                    # No results with this UA - log and try next
+                    logging.debug(f"Method 4: No results with UA: {ua[:40]}")
+            else:
+                # Empty stdout - log and try next
+                logging.debug(f"Method 4: Empty output with UA: {ua[:40]}")
+                if result.stderr:
+                    logging.debug(f"   Stderr: {result.stderr[:300]}")
 
-        except Exception:
+        except Exception as e:
+            logging.debug(f"Method 4: Exception with UA {ua[:40]}: {str(e)[:200]}")
             continue
 
+    # All user agents failed
+    logging.warning(f"❌ Method 4 (user agent rotation) failed:")
+    logging.warning(f"   Tried {len(user_agents)} different user agents")
+    logging.warning(f"   URL: {url}")
     return []
 
 
@@ -1667,15 +1746,16 @@ def _method_playwright(url: str, platform_key: str, cookie_file: str = None, pro
                         entries.append({'url': full_url, 'title': 'Instagram Post', 'date': '00000000'})
 
             elif platform_key == 'youtube':
-                # NEW: YouTube support
+                # FIXED: YouTube support with SIMPLE selector (matches Selenium)
                 previous_count = 0
                 no_change_count = 0
                 scroll_count = 0
                 max_scrolls = 30 if max_videos == 0 else min(30, max_videos // 10 + 3)
 
                 while no_change_count < 3 and scroll_count < max_scrolls:
-                    # YouTube video links
-                    video_links = page.query_selector_all('a#video-title, a.yt-simple-endpoint[href*="/watch?v="]')
+                    # FIXED: Use same simple selector as Selenium (PROVEN TO WORK!)
+                    # Finds: /watch?v= (regular videos) AND /shorts/ (shorts)
+                    video_links = page.query_selector_all('a[href*="/watch?v="], a[href*="/shorts/"]')
                     current_count = len(video_links)
 
                     if current_count == previous_count:
@@ -1699,11 +1779,11 @@ def _method_playwright(url: str, platform_key: str, cookie_file: str = None, pro
                     if max_videos > 0 and len(entries) >= max_videos:
                         break
                     if href := link.get_attribute('href'):
-                        if '/watch?v=' in href:
+                        if '/watch?v=' in href or '/shorts/' in href:
                             full_url = f"https://www.youtube.com{href}" if not href.startswith('http') else href
-                            # Clean URL (remove tracking params)
-                            full_url = full_url.split('&')[0]
-                            title = link.get_attribute('title') or 'YouTube Video'
+                            # Clean URL (remove tracking & playlist params)
+                            full_url = full_url.split('&')[0].split('?list=')[0]
+                            title = link.get_attribute('title') or link.get_attribute('aria-label') or 'YouTube Video'
                             entries.append({'url': full_url, 'title': title[:100], 'date': '00000000'})
 
             context.close()
@@ -1787,7 +1867,7 @@ def _method_selenium(
         selector_map = {
             'tiktok': 'a[href*="/video/"]',
             'instagram': 'a[href*="/p/"], a[href*="/reel/"]',
-            'youtube': 'a[href*="/watch?v="]'
+            'youtube': 'a[href*="/watch?v="], a[href*="/shorts/"]'  # FIXED: Added Shorts support
         }
         selector = selector_map.get(platform_key, 'a')
 
@@ -1914,12 +1994,52 @@ def extract_links_intelligent(
         active_proxy = proxy_list[0] if proxy_list else None  # Use first proxy if available
         use_enhancements = options.get('use_enhancements', True)  # Enable enhancements by default
 
+        # FIXED: Auto-append /videos or /shorts to YouTube URLs if needed
+        original_url = url
+        if platform_key == 'youtube' and '@' in url:
+            # Check if URL already has a tab suffix
+            if not any(suffix in url for suffix in ['/videos', '/shorts', '/streams', '/playlists', '/community', '/channels', '/about']):
+                # No tab specified - try /videos first (most common)
+                url = f"{url.rstrip('/')}/videos"
+                if progress_callback:
+                    progress_callback(f"📝 YouTube URL normalized:")
+                    progress_callback(f"   From: {original_url}")
+                    progress_callback(f"   To: {url}")
+                    progress_callback(f"   💡 Tip: Use /@username/videos or /@username/shorts for direct access")
+
+        # Check yt-dlp version and log it
+        ytdlp_version = "Unknown"
+        ytdlp_location = "Unknown"
+        try:
+            # Try to get version from Python module
+            import yt_dlp
+            ytdlp_version = yt_dlp.version.__version__
+            ytdlp_location = "Python module"
+        except:
+            # Try to get version from binary
+            try:
+                ytdlp_path = _get_ytdlp_binary_path()
+                result = subprocess.run(
+                    [ytdlp_path, '--version'],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    encoding='utf-8',
+                    errors='replace'
+                )
+                if result.stdout:
+                    ytdlp_version = result.stdout.strip().split()[0]
+                    ytdlp_location = ytdlp_path if ytdlp_path != 'yt-dlp' else "System PATH"
+            except:
+                pass
+
         # Show configuration summary
         if progress_callback:
             progress_callback(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
             progress_callback(f"📊 Extraction Configuration:")
             progress_callback(f"   • Creator: @{creator}")
             progress_callback(f"   • Platform: {platform_key.title()}")
+            progress_callback(f"   • yt-dlp: v{ytdlp_version} ({ytdlp_location})")
             if active_proxy:
                 progress_callback(f"   • Proxy: {active_proxy} ✓")
             if cookie_file:

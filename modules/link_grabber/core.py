@@ -341,6 +341,75 @@ def _load_cookies_from_file(cookie_file: str, platform_key: str) -> typing.List[
     return cookies
 
 
+def _apply_instaloader_session(loader, cookie_file: str, platform_key: str, proxy: str = None) -> int:
+    """Configure Instaloader session with cookies, proxy, and user agent."""
+    try:
+        loader.context._session.headers.update({'User-Agent': _get_random_user_agent()})
+    except Exception:
+        pass
+
+    if proxy:
+        try:
+            proxy_url = _parse_proxy_format(proxy)
+            loader.context._session.proxies = {'http': proxy_url, 'https': proxy_url}
+        except Exception:
+            pass
+
+    if not cookie_file:
+        return 0
+
+    try:
+        cookies = _load_cookies_from_file(cookie_file, platform_key)
+        for cookie in cookies:
+            loader.context._session.cookies.set(
+                cookie.get('name', ''),
+                cookie.get('value', ''),
+                domain=cookie.get('domain'),
+                path=cookie.get('path', '/') or '/',
+                secure=bool(cookie.get('secure', False)),
+                expires=cookie.get('expires'),
+            )
+        return len(cookies)
+    except Exception:
+        return 0
+
+
+def _get_instagram_expected_count(url: str, cookie_file: str, proxy: str = None) -> typing.Optional[int]:
+    """Best-effort expected post count for Instagram profiles."""
+    try:
+        import instaloader
+    except Exception:
+        return None
+
+    try:
+        username_match = re.search(r'instagram\.com/([^/?#]+)', url, flags=re.IGNORECASE)
+        if not username_match or username_match.group(1) in ['p', 'reel', 'tv', 'stories']:
+            return None
+
+        username = username_match.group(1)
+
+        loader = instaloader.Instaloader(
+            quiet=True,
+            download_videos=False,
+            download_pictures=False,
+            download_video_thumbnails=False,
+            download_geotags=False,
+            download_comments=False,
+            save_metadata=False,
+            compress_json=False
+        )
+
+        _apply_instaloader_session(loader, cookie_file, 'instagram', proxy)
+        profile = instaloader.Profile.from_username(loader.context, username)
+        count = getattr(profile, 'mediacount', None)
+        if isinstance(count, int) and count > 0:
+            return count
+    except Exception:
+        return None
+
+    return None
+
+
 def _normalize_url(url: str) -> str:
     """Normalize URL for duplicate detection"""
     try:
@@ -613,10 +682,17 @@ def _validate_proxy(proxy: str, timeout: int = 10) -> dict:
 
     try:
         import requests
-        from requests.packages.urllib3.exceptions import InsecureRequestWarning
-
-        # Suppress SSL warnings for proxy testing
-        requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+        # Suppress SSL warnings for proxy testing (requests no longer exposes packages.urllib3 reliably)
+        try:
+            import urllib3
+            from urllib3.exceptions import InsecureRequestWarning
+            urllib3.disable_warnings(InsecureRequestWarning)
+        except Exception:
+            try:
+                from requests.packages.urllib3.exceptions import InsecureRequestWarning
+                requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+            except Exception:
+                pass
 
         # Parse proxy format (handles all 3 formats)
         proxy_url = _parse_proxy_format(proxy)
@@ -1030,7 +1106,10 @@ def _method_ytdlp_enhanced(
 
         # Platform-specific optimizations
         if platform_key == 'instagram':
-            options['extractor_args'] = {'instagram': {'feed_count': 100}}
+            from .config import get_instagram_feed_count
+            feed_count = get_instagram_feed_count(max_videos)
+            if feed_count > 0:
+                options['extractor_args'] = {'instagram': {'feed_count': feed_count}}
         elif platform_key == 'youtube':
             options['extractor_args'] = {'youtube': {'player_client': 'android'}}
 
@@ -1087,7 +1166,10 @@ def _method_ytdlp_dump_json(url: str, platform_key: str, cookie_file: str = None
 
         # Platform-specific optimizations
         if platform_key == 'instagram':
-            cmd.extend(['--extractor-args', 'instagram:feed_count=100'])
+            from .config import get_instagram_feed_count
+            feed_count = get_instagram_feed_count(max_videos)
+            if feed_count > 0:
+                cmd.extend(['--extractor-args', f'instagram:feed_count={feed_count}'])
         elif platform_key == 'youtube':
             cmd.extend(['--extractor-args', 'youtube:player_client=android'])
 
@@ -1163,6 +1245,12 @@ def _method_ytdlp_get_url(url: str, platform_key: str, cookie_file: str = None, 
 
         if max_videos > 0:
             cmd.extend(['--playlist-end', str(max_videos)])
+
+        if platform_key == 'instagram':
+            from .config import get_instagram_feed_count
+            feed_count = get_instagram_feed_count(max_videos)
+            if feed_count > 0:
+                cmd.extend(['--extractor-args', f'instagram:feed_count={feed_count}'])
 
         cmd.append(url)
 
@@ -1242,6 +1330,12 @@ def _method_ytdlp_with_retry(url: str, platform_key: str, cookie_file: str = Non
 
         if max_videos > 0:
             cmd.extend(['--playlist-end', str(max_videos)])
+
+        if platform_key == 'instagram':
+            from .config import get_instagram_feed_count
+            feed_count = get_instagram_feed_count(max_videos)
+            if feed_count > 0:
+                cmd.extend(['--extractor-args', f'instagram:feed_count={feed_count}'])
 
         cmd.append(url)
 
@@ -1330,6 +1424,12 @@ def _method_ytdlp_user_agent(url: str, platform_key: str, cookie_file: str = Non
             if max_videos > 0:
                 cmd.extend(['--playlist-end', str(max_videos)])
 
+            if platform_key == 'instagram':
+                from .config import get_instagram_feed_count
+                feed_count = get_instagram_feed_count(max_videos)
+                if feed_count > 0:
+                    cmd.extend(['--extractor-args', f'instagram:feed_count={feed_count}'])
+
             cmd.append(url)
 
             result = subprocess.run(
@@ -1381,7 +1481,7 @@ def _method_ytdlp_user_agent(url: str, platform_key: str, cookie_file: str = Non
     return []
 
 
-def _method_instaloader(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0) -> typing.List[dict]:
+def _method_instaloader(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, proxy: str = None) -> typing.List[dict]:
     """METHOD 5: Instaloader (INSTAGRAM SPECIALIST) - No artificial limits"""
     if platform_key != 'instagram':
         return []
@@ -1406,54 +1506,63 @@ def _method_instaloader(url: str, platform_key: str, cookie_file: str = None, ma
             compress_json=False
         )
 
-        # Load cookies if available
-        if cookie_file:
-            try:
-                cookies_dict = {}
-                with open(cookie_file, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        if line.strip() and not line.startswith('#'):
-                            parts = line.strip().split('\t')
-                            if len(parts) >= 7:
-                                cookies_dict[parts[5]] = parts[6]
-                if cookies_dict:
-                    loader.context._session.cookies.update(cookies_dict)
-                    logging.info(f"✅ Loaded {len(cookies_dict)} cookies for Instagram")
-            except Exception as e:
-                logging.debug(f"Cookie loading failed: {e}")
+        cookies_loaded = _apply_instaloader_session(loader, cookie_file, platform_key, proxy)
+        if cookies_loaded:
+            logging.info(f"Loaded {cookies_loaded} cookies for Instagram")
 
         profile = instaloader.Profile.from_username(loader.context, username)
         logging.info(f"📊 Instagram profile: @{username} ({profile.mediacount} posts)")
 
         entries = []
+        seen_shortcodes = set()
+        target_count = max_videos if max_videos > 0 else 0
+        max_attempts = 3
+        attempt = 0
 
-        # Respect max_videos from GUI (0 = unlimited)
-        for idx, post in enumerate(profile.get_posts(), 1):
-            entries.append({
-                'url': f"https://www.instagram.com/p/{post.shortcode}/",
-                'title': (post.caption or 'Instagram Post')[:100],
-                'date': post.date_utc.strftime('%Y%m%d') if post.date_utc else '00000000'
-            })
+        while attempt < max_attempts:
+            try:
+                for idx, post in enumerate(profile.get_posts(), 1):
+                    shortcode = getattr(post, 'shortcode', None)
+                    if not shortcode or shortcode in seen_shortcodes:
+                        continue
+                    seen_shortcodes.add(shortcode)
+                    entries.append({
+                        'url': f"https://www.instagram.com/p/{shortcode}/",
+                        'title': (post.caption or 'Instagram Post')[:100],
+                        'date': post.date_utc.strftime('%Y%m%d') if post.date_utc else '00000000'
+                    })
 
-            # IP PROTECTION: Add delay between post fetches to avoid rate limiting
-            # Instagram allows ~1-2 requests per second, so we use 1.5-3 second delay
-            if idx > 1 and idx % 5 == 0:  # Every 5 posts, add a longer delay
-                delay = random.uniform(3.0, 5.0)
-                logging.debug(f"   Instaloader: Fetched {idx} posts, waiting {delay:.1f}s (IP protection)...")
-                time.sleep(delay)
-            else:
-                # Regular delay between posts
-                delay = random.uniform(1.5, 2.5)
-                time.sleep(delay)
+                    # IP PROTECTION: Add delay between post fetches to avoid rate limiting
+                    # Instagram allows ~1-2 requests per second, so we use 1.5-3 second delay
+                    if idx > 1 and idx % 5 == 0:  # Every 5 posts, add a longer delay
+                        delay = random.uniform(3.0, 5.0)
+                        logging.debug(f"   Instaloader: Fetched {idx} posts, waiting {delay:.1f}s (IP protection)...")
+                        time.sleep(delay)
+                    else:
+                        # Regular delay between posts
+                        delay = random.uniform(1.5, 2.5)
+                        time.sleep(delay)
 
-            # Progress logging every 50 posts
-            if idx % 50 == 0:
-                logging.info(f"📥 Extracted {idx} Instagram posts...")
+                    # Progress logging every 50 posts
+                    if idx % 50 == 0:
+                        logging.info(f"Extracted {idx} Instagram posts...")
 
-            # Only break if limit is specified (0 means unlimited)
-            if max_videos > 0 and len(entries) >= max_videos:
-                logging.info(f"✅ Reached Instagram limit of {max_videos} posts")
-                break
+                    # Only break if limit is specified (0 means unlimited)
+                    if target_count > 0 and len(entries) >= target_count:
+                        logging.info(f"Reached Instagram limit of {target_count} posts")
+                        break
+
+                break  # Completed without error
+
+            except Exception as e:
+                attempt += 1
+                if attempt >= max_attempts:
+                    logging.error(f"Instaloader stopped after {attempt} attempts: {e}")
+                    break
+                cooldown = min(60, 10 * attempt)
+                logging.warning(f"Instaloader retry {attempt}/{max_attempts} after error: {str(e)[:120]}")
+                logging.warning(f"Cooling down for {cooldown}s before retry...")
+                time.sleep(cooldown)
 
         # Sort by date (newest first)
         entries.sort(key=lambda x: x.get('date', '00000000'), reverse=True)
@@ -2047,6 +2156,12 @@ def _method_old_batch_file(url: str, platform_key: str, cookie_file: str = None,
         if max_videos > 0:
             cmd.extend(['--playlist-end', str(max_videos)])
 
+        if platform_key == 'instagram':
+            from .config import get_instagram_feed_count
+            feed_count = get_instagram_feed_count(max_videos)
+            if feed_count > 0:
+                cmd.extend(['--extractor-args', f'instagram:feed_count={feed_count}'])
+
         cmd.append(url)
 
         # DEBUG: Log the actual command being run
@@ -2118,7 +2233,10 @@ def _method_old_dump_json(url: str, platform_key: str, cookie_file: str = None, 
 
         # Simple platform optimizations
         if platform_key == 'instagram':
-            cmd.extend(['--extractor-args', 'instagram:feed_count=100'])
+            from .config import get_instagram_feed_count
+            feed_count = get_instagram_feed_count(max_videos)
+            if feed_count > 0:
+                cmd.extend(['--extractor-args', f'instagram:feed_count={feed_count}'])
         elif platform_key == 'youtube':
             cmd.extend(['--extractor-args', 'youtube:player_client=android'])
 
@@ -2180,7 +2298,7 @@ def _method_old_dump_json(url: str, platform_key: str, cookie_file: str = None, 
     return []
 
 
-def _method_old_instaloader(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0) -> typing.List[dict]:
+def _method_old_instaloader(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, proxy: str = None) -> typing.List[dict]:
     """
     OLD METHOD 11: ORIGINAL Instaloader (PROVEN for Instagram!)
 
@@ -2207,46 +2325,40 @@ def _method_old_instaloader(url: str, platform_key: str, cookie_file: str = None
             download_pictures=False
         )
 
-        # Simple cookie loading
-        if cookie_file:
-            try:
-                cookies_dict = {}
-                with open(cookie_file, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        if line.strip() and not line.startswith('#'):
-                            parts = line.strip().split('\t')
-                            if len(parts) >= 7:
-                                cookies_dict[parts[5]] = parts[6]
-                if cookies_dict:
-                    loader.context._session.cookies.update(cookies_dict)
-            except Exception:
-                pass
+        _apply_instaloader_session(loader, cookie_file, platform_key, proxy)
 
         profile = instaloader.Profile.from_username(loader.context, username)
         entries = []
+        seen_shortcodes = set()
+        target_count = max_videos if max_videos > 0 else 0
 
-        limit = max_videos if max_videos > 0 else 100
+        try:
+            for idx, post in enumerate(profile.get_posts(), 1):
+                shortcode = getattr(post, 'shortcode', None)
+                if not shortcode or shortcode in seen_shortcodes:
+                    continue
+                seen_shortcodes.add(shortcode)
+                entries.append({
+                    'url': f"https://www.instagram.com/p/{shortcode}/",
+                    'title': (post.caption or 'Instagram Post')[:100],
+                    'date': post.date_utc.strftime('%Y%m%d') if hasattr(post, 'date_utc') else '00000000'
+                })
 
-        for idx, post in enumerate(profile.get_posts()):
-            entries.append({
-                'url': f"https://www.instagram.com/p/{post.shortcode}/",
-                'title': (post.caption or 'Instagram Post')[:100],
-                'date': post.date_utc.strftime('%Y%m%d') if hasattr(post, 'date_utc') else '00000000'
-            })
+                # IP PROTECTION: Add delay between post fetches to avoid rate limiting
+                # Instagram allows ~1-2 requests per second, so we use 1.5-3 second delay
+                if idx > 0 and idx % 5 == 0:  # Every 5 posts, add a longer delay
+                    delay = random.uniform(3.0, 5.0)
+                    logging.debug(f"   Instaloader: Fetched {idx+1} posts, waiting {delay:.1f}s (IP protection)...")
+                    time.sleep(delay)
+                else:
+                    # Regular delay between posts
+                    delay = random.uniform(1.5, 2.5)
+                    time.sleep(delay)
 
-            # IP PROTECTION: Add delay between post fetches to avoid rate limiting
-            # Instagram allows ~1-2 requests per second, so we use 1.5-3 second delay
-            if idx > 0 and idx % 5 == 0:  # Every 5 posts, add a longer delay
-                delay = random.uniform(3.0, 5.0)
-                logging.debug(f"   Instaloader: Fetched {idx+1} posts, waiting {delay:.1f}s (IP protection)...")
-                time.sleep(delay)
-            else:
-                # Regular delay between posts
-                delay = random.uniform(1.5, 2.5)
-                time.sleep(delay)
-
-            if len(entries) >= limit:
-                break
+                if target_count > 0 and len(entries) >= target_count:
+                    break
+        except Exception as e:
+            logging.warning(f"OLD Method 11 interrupted: {str(e)[:200]}")
 
         if entries:
             logging.info(f"✅ OLD Method 11 SUCCESS: {len(entries)} links")
@@ -2336,6 +2448,14 @@ def extract_links_intelligent(
         proxy_list = options.get('proxies', []) or []
         active_proxy = proxy_list[0] if proxy_list else None  # Use first proxy if available
         use_enhancements = options.get('use_enhancements', True)  # Enable enhancements by default
+        from .config import get_exhaustive_mode
+        exhaustive_mode = force_all_methods or get_exhaustive_mode()
+
+        expected_count = None
+        if platform_key == 'instagram' and exhaustive_mode:
+            expected_count = _get_instagram_expected_count(url, cookie_file, active_proxy)
+
+        target_count = max_videos if max_videos > 0 else (expected_count or 0)
 
         # FIXED: Auto-append /videos or /shorts to YouTube URLs if needed
         original_url = url
@@ -2391,6 +2511,8 @@ def extract_links_intelligent(
                 progress_callback(f"   • Limit: {max_videos} videos")
             else:
                 progress_callback(f"   • Limit: All videos (unlimited)")
+            if expected_count:
+                progress_callback(f"   Expected posts: {expected_count}")
             if use_enhancements:
                 progress_callback(f"   • Enhancements: Enabled (Dual yt-dlp + UA Rotation)")
             progress_callback(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -2412,7 +2534,7 @@ def extract_links_intelligent(
              True),  # Second priority
 
             ("OLD Method 11: Original Instaloader (PROVEN 100%)",
-             lambda: _method_old_instaloader(url, platform_key, cookie_file, max_videos),
+             lambda: _method_old_instaloader(url, platform_key, cookie_file, max_videos, active_proxy),
              platform_key == 'instagram'),  # Instagram only
 
             # ========== PRIORITY 4-12: ADVANCED METHODS (Fallback) ==========
@@ -2441,7 +2563,7 @@ def extract_links_intelligent(
              platform_key in ['instagram', 'tiktok']),
 
             ("Method 5: Instaloader",
-             lambda: _method_instaloader(url, platform_key, cookie_file, max_videos),
+             lambda: _method_instaloader(url, platform_key, cookie_file, max_videos, active_proxy),
              platform_key == 'instagram'),
 
             ("Method 7: Playwright (ENHANCED: Stealth + Proxy + Human Behavior)",
@@ -2539,7 +2661,12 @@ def extract_links_intelligent(
                 if progress_callback:
                     progress_callback(f"✅ {method_name} → {added} links in {time_taken:.1f}s")
 
-                if not force_all_methods:
+                if target_count > 0 and len(entries) >= target_count:
+                    if progress_callback:
+                        progress_callback(f"Target reached: {len(entries)}/{target_count} links")
+                    break
+
+                if not exhaustive_mode:
                     break  # Stop on first success
             else:
                 if progress_callback:

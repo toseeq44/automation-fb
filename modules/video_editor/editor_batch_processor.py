@@ -653,6 +653,27 @@ class EditorBatchWorker(QThread):
             self.log_message.emit(f"💥 Conversion error: {type(e).__name__}: {str(e)}", "error")
             return False
 
+
+    def _detect_audio_stream(self, source_path: str, ffmpeg_path: str) -> Optional[bool]:
+        """Return True if an audio stream is present, False if not, None if unknown."""
+        try:
+            import subprocess
+
+            result = subprocess.run(
+                [ffmpeg_path, '-i', source_path],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            probe_output = (result.stderr or "") + (result.stdout or "")
+            if "Audio:" in probe_output:
+                return True
+            if "Video:" in probe_output:
+                return False
+        except Exception as exc:
+            logger.debug(f"Audio detection failed for {source_path}: {exc}")
+        return None
+
     def _process_with_simple_edit(self, source_path: str, dest_path: str) -> bool:
         """
         Process video with simple default edits using FFmpeg:
@@ -672,8 +693,8 @@ class EditorBatchWorker(QThread):
             logger.info(f"   🎬 _process_with_simple_edit() starting")
             logger.info(f"      Source: {source_path}")
             logger.info(f"      Dest: {dest_path}")
-            logger.info(f"      Applying: Mirror + Edge blur + 110% zoom + Voice preservation + Metadata removal")
-            self.log_message.emit(f"🎨 Professional edits: Mirror, Edge blur, 110% zoom, Voice preserved", "info")
+            logger.info(f"      Applying: Edge blur + 110% zoom + Voice preservation + Metadata removal")
+            self.log_message.emit(f"🎨 Professional edits: Edge blur, 110% zoom, Voice preserved", "info")
 
             # Check if in-place editing (source == destination)
             is_inplace = os.path.normpath(source_path) == os.path.normpath(dest_path)
@@ -722,14 +743,13 @@ class EditorBatchWorker(QThread):
             # Build FFmpeg command with PROFESSIONAL FILTERS:
             #
             # VIDEO FILTERS (Complex filter graph):
-            # 1. Horizontal flip (MIRROR - left to right)
-            # 2. Create blurred background layer (heavily blurred full video)
-            # 3. Scale main video to 97% (creates 3% border space on all sides)
-            # 4. Overlay sharp video on blurred background = TRANSPARENT BLUR EDGES
-            # 5. Final 110% zoom with even dimensions
+            # 1. Create blurred background layer (heavily blurred full video)
+            # 2. Scale main video to 97% (creates 3% border space on all sides)
+            # 3. Overlay sharp video on blurred background = TRANSPARENT BLUR EDGES
+            # 4. Final 110% zoom with even dimensions
             #
             # AUDIO PROCESSING (PROFESSIONAL - Adobe Premiere Pro style):
-            # CRITICAL: Audio explicitly mapped using -map 0:a (required with -filter_complex)
+            # Audio processing is applied only when an audio stream is detected.
             #
             # Professional 6-stage audio chain (DAW-quality):
             # 1. FFT Noise Reduction (afftdn) - Removes background music/noise
@@ -741,11 +761,11 @@ class EditorBatchWorker(QThread):
             #
             # Result: Clean voice isolation + music removal + pitch change
 
-            # Complex filter for MIRROR + EDGE BLUR effect
+            # Complex filter for EDGE BLUR effect
             video_filter_complex = (
                 "[0:v]split=2[main][bg];"  # Split input into 2 streams
                 "[bg]scale=iw:ih,gblur=sigma=20[blurred];"  # Heavy blur for background
-                "[main]hflip,scale=iw*0.97:ih*0.97[scaled];"  # MIRROR (hflip) + Scale to 97%
+                "[main]scale=iw*0.97:ih*0.97[scaled];"  # Scale to 97%
                 "[blurred][scaled]overlay=(W-w)/2:(H-h)/2[overlay];"  # Overlay centered
                 "[overlay]scale='trunc(iw*1.1/2)*2:trunc(ih*1.1/2)*2'[out]"  # 110% zoom, even dimensions
             )
@@ -795,26 +815,45 @@ class EditorBatchWorker(QThread):
             # Get FFmpeg path (handles bundled exe mode)
             ffmpeg_path = get_ffmpeg_path()
             logger.info(f"      Using FFmpeg: {ffmpeg_path}")
+            audio_state = self._detect_audio_stream(source_path, ffmpeg_path)
+            has_audio = audio_state is True
 
             cmd = [
                 ffmpeg_path,
                 '-i', source_path,
-                '-filter_complex', video_filter_complex,  # Mirror + Edge blur + Zoom
-                '-map', '[out]',  # Map output video
-                '-map', '0:a',  # EXPLICITLY map audio stream
-                '-af', audio_filters,  # PROFESSIONAL audio processing chain
+                '-filter_complex', video_filter_complex,  # Edge blur + Zoom
+                '-map', '[out]'  # Map output video
+            ]
+
+            if has_audio:
+                cmd += [
+                    '-map', '0:a?',  # Optional audio stream
+                    '-af', audio_filters,  # PROFESSIONAL audio processing chain
+                    '-c:a', 'aac',
+                    '-b:a', '192k'  # High quality audio bitrate
+                ]
+
+            cmd += [
                 '-c:v', 'libx264',
-                '-c:a', 'aac',
-                '-b:a', '192k',  # High quality audio bitrate
                 *crf_preset,
                 '-map_metadata', '-1',  # Remove all metadata
                 '-y',  # Overwrite output
                 actual_output
             ]
 
-            logger.info(f"      Video: Mirror + Edge blur + 110% zoom")
-            logger.info(f"      Audio: Professional (noise reduction + voice isolation + pitch shift + music removal)")
-            self.log_message.emit(f"🎬 Pro editing: Mirror + Edge blur + Voice isolation + Music removal + Pitch shift", "info")
+            logger.info(f"      Video: Edge blur + 110% zoom")
+            if has_audio:
+                logger.info("      Audio: Professional (noise reduction + voice isolation + pitch shift + music removal)")
+                self.log_message.emit(
+                    "🎬 Pro editing: Edge blur + Voice isolation + Music removal + Pitch shift",
+                    "info"
+                )
+            else:
+                logger.info("      Audio: None detected (exporting silent video)")
+                self.log_message.emit(
+                    "🎬 Pro editing: Edge blur (no audio stream found)",
+                    "info"
+                )
 
             # Run FFmpeg
             result = subprocess.run(

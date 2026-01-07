@@ -38,6 +38,26 @@ if os.path.exists('presets') and os.path.isdir('presets'):
 else:
     print("⚠️  WARNING: presets directory not found")
 
+# Check for MediaPipe models (for AR features)
+try:
+    import mediapipe
+    import site
+    # Find MediaPipe installation path
+    mp_path = None
+    for site_path in site.getsitepackages():
+        potential_path = os.path.join(site_path, 'mediapipe', 'modules')
+        if os.path.exists(potential_path):
+            mp_path = potential_path
+            break
+
+    if mp_path:
+        optional_datas.append((mp_path, 'mediapipe/modules'))
+        print("✓ MediaPipe models found - AR features will be available")
+    else:
+        print("⚠️  WARNING: MediaPipe models not found - AR features may not work")
+except ImportError:
+    print("⚠️  WARNING: MediaPipe not installed - AR features disabled")
+
 a = Analysis(
     ['main.py'],
     pathex=['.'],
@@ -107,6 +127,16 @@ a = Analysis(
         'opencv-python',
         'cv2',
         'psutil',
+
+        # AR Face Effects (NEW - MediaPipe)
+        'mediapipe',
+        'mediapipe.python',
+        'mediapipe.python.solutions',
+        'mediapipe.python.solutions.face_mesh',
+        'mediapipe.python.solutions.drawing_utils',
+        'mediapipe.python.solutions.drawing_styles',
+        'google.protobuf',  # Required by MediaPipe
+        'protobuf',
         
         # License system
         'json',

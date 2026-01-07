@@ -124,6 +124,7 @@ class OperationLibrary:
     CATEGORY_EFFECTS = "Effects"
     CATEGORY_TRANSFORM = "Transform"
     CATEGORY_METADATA = "Metadata"
+    CATEGORY_AR_EFFECTS = "AR Effects"  # NEW: AI-powered face effects
 
     def __init__(self):
         """Initialize operation library"""
@@ -393,6 +394,83 @@ class OperationLibrary:
                            description='Filter intensity/strength')
             ],
             icon='🎨'
+        ))
+
+        # ==================== AR EFFECTS (NEW) ====================
+
+        self.register(OperationDef(
+            name='face_beautify',
+            display_name='Face Beautification',
+            category=self.CATEGORY_AR_EFFECTS,
+            description='AI-powered skin smoothing and face enhancement (like Instagram/TikTok)',
+            parameters=[
+                ParameterDef('intensity', 'float', required=True, default=0.5, min_val=0.0, max_val=1.0,
+                           description='Beautification intensity (0.0 = off, 1.0 = maximum)')
+            ],
+            icon='✨'
+        ))
+
+        self.register(OperationDef(
+            name='eye_enhancement',
+            display_name='Eye Enhancement',
+            category=self.CATEGORY_AR_EFFECTS,
+            description='Sharpen and brighten eyes automatically',
+            parameters=[
+                ParameterDef('intensity', 'float', required=True, default=0.3, min_val=0.0, max_val=1.0,
+                           description='Enhancement intensity')
+            ],
+            icon='👁️'
+        ))
+
+        self.register(OperationDef(
+            name='teeth_whitening',
+            display_name='Teeth Whitening',
+            category=self.CATEGORY_AR_EFFECTS,
+            description='Automatically whiten teeth in video',
+            parameters=[
+                ParameterDef('intensity', 'float', required=True, default=0.3, min_val=0.0, max_val=1.0,
+                           description='Whitening intensity')
+            ],
+            icon='🦷'
+        ))
+
+        self.register(OperationDef(
+            name='auto_crop_face',
+            display_name='Auto Crop to Face',
+            category=self.CATEGORY_AR_EFFECTS,
+            description='Automatically crop video to keep face centered (perfect for TikTok/Reels)',
+            parameters=[
+                ParameterDef('aspect_ratio', 'str', required=True, default='9:16',
+                           choices=['9:16', '16:9', '1:1', '4:5'],
+                           description='Target aspect ratio'),
+                ParameterDef('margin', 'float', required=True, default=0.3, min_val=0.0, max_val=1.0,
+                           description='Margin around face (0.0 = tight crop, 1.0 = loose crop)')
+            ],
+            icon='📱'
+        ))
+
+        self.register(OperationDef(
+            name='blur_background',
+            display_name='Blur Background (Portrait Mode)',
+            category=self.CATEGORY_AR_EFFECTS,
+            description='Blur background while keeping face sharp (DSLR portrait effect)',
+            parameters=[
+                ParameterDef('blur_strength', 'int', required=True, default=15, min_val=1, max_val=51,
+                           description='Blur strength (higher = more blur)')
+            ],
+            icon='🎭'
+        ))
+
+        self.register(OperationDef(
+            name='show_face_landmarks',
+            display_name='Show Face Landmarks (Debug)',
+            category=self.CATEGORY_AR_EFFECTS,
+            description='Draw face detection landmarks on video (for testing/debugging)',
+            parameters=[
+                ParameterDef('show_full_mesh', 'bool', required=True, default=False,
+                           description='Show full 468-point mesh (True) or key points only (False)')
+            ],
+            icon='🔍'
         ))
 
         logger.info(f"OperationLibrary initialized with {len(self.operations)} operations")

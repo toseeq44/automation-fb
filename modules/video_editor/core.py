@@ -24,6 +24,17 @@ except ImportError:
 
 from modules.logging.logger import get_logger
 
+# AR Engine import (lazy load to avoid dependency issues)
+AR_ENGINE_AVAILABLE = False
+try:
+    from modules.video_editor.ar_engine import AREngine
+    import cv2
+    import numpy as np
+    AR_ENGINE_AVAILABLE = True
+except ImportError:
+    AREngine = None
+    logger.warning("AR Engine not available. Install mediapipe and opencv-python for AR features.")
+
 logger = get_logger(__name__)
 
 
@@ -98,6 +109,15 @@ class VideoEditor:
         self.original_path = video_path
         self.project = VideoProject()
         self.temp_files = []  # Track temporary files for cleanup
+
+        # Initialize AR engine (lazy load)
+        self.ar_engine = None
+        if AR_ENGINE_AVAILABLE:
+            try:
+                self.ar_engine = AREngine()
+                logger.info("AR Engine initialized successfully")
+            except Exception as e:
+                logger.warning(f"Failed to initialize AR Engine: {e}")
 
         if not MOVIEPY_AVAILABLE:
             raise ImportError("MoviePy is not installed. Install with: pip install moviepy")
@@ -993,11 +1013,137 @@ class VideoEditor:
         img.save(output_path)
         logger.info(f"Frame saved: {output_path} at {time}s")
 
+    # ==================== AR EFFECTS (NEW) ====================
+
+    def _apply_ar_effect_to_video(self, ar_function, **kwargs):
+        """
+        Helper method to apply AR effect frame-by-frame to video
+
+        Args:
+            ar_function: AR Engine function to apply
+            **kwargs: Arguments to pass to AR function
+        """
+        if not self.video:
+            raise ValueError("No video loaded")
+
+        if not self.ar_engine:
+            raise ValueError("AR Engine not available. Install mediapipe and opencv-python")
+
+        def apply_to_frame(get_frame, t):
+            """Apply AR effect to a single frame"""
+            frame = get_frame(t)
+            # Apply AR effect
+            processed_frame = ar_function(frame, **kwargs)
+            return processed_frame if processed_frame is not None else frame
+
+        # Apply to video
+        self.video = self.video.transform(apply_to_frame)
+        logger.info(f"AR effect applied: {ar_function.__name__}")
+
+    def face_beautify(self, intensity: float = 0.5):
+        """
+        Apply AI-powered face beautification (skin smoothing)
+
+        Args:
+            intensity: Beautification intensity (0.0 - 1.0)
+        """
+        logger.info(f"Applying face beautification (intensity={intensity})")
+        self._apply_ar_effect_to_video(self.ar_engine.apply_face_beautification, intensity=intensity)
+        self.project.add_to_history({'operation': 'face_beautify', 'intensity': intensity})
+
+    def eye_enhancement(self, intensity: float = 0.3):
+        """
+        Enhance eyes (sharpen and brighten)
+
+        Args:
+            intensity: Enhancement intensity (0.0 - 1.0)
+        """
+        logger.info(f"Applying eye enhancement (intensity={intensity})")
+        self._apply_ar_effect_to_video(self.ar_engine.apply_eye_enhancement, intensity=intensity)
+        self.project.add_to_history({'operation': 'eye_enhancement', 'intensity': intensity})
+
+    def teeth_whitening(self, intensity: float = 0.3):
+        """
+        Whiten teeth automatically
+
+        Args:
+            intensity: Whitening intensity (0.0 - 1.0)
+        """
+        logger.info(f"Applying teeth whitening (intensity={intensity})")
+        self._apply_ar_effect_to_video(self.ar_engine.apply_teeth_whitening, intensity=intensity)
+        self.project.add_to_history({'operation': 'teeth_whitening', 'intensity': intensity})
+
+    def auto_crop_face(self, aspect_ratio: str = '9:16', margin: float = 0.3):
+        """
+        Automatically crop video to keep face centered (perfect for TikTok/Reels)
+
+        Args:
+            aspect_ratio: Target aspect ratio ('9:16', '16:9', '1:1', '4:5')
+            margin: Margin around face (0.0 - 1.0)
+        """
+        if not self.video:
+            raise ValueError("No video loaded")
+
+        if not self.ar_engine:
+            raise ValueError("AR Engine not available. Install mediapipe and opencv-python")
+
+        logger.info(f"Auto cropping to face (aspect_ratio={aspect_ratio}, margin={margin})")
+
+        # Parse aspect ratio
+        ratio_map = {
+            '9:16': (9, 16),
+            '16:9': (16, 9),
+            '1:1': (1, 1),
+            '4:5': (4, 5)
+        }
+        aspect_tuple = ratio_map.get(aspect_ratio, (9, 16))
+
+        def crop_to_face(get_frame, t):
+            """Crop frame to keep face centered"""
+            frame = get_frame(t)
+            cropped = self.ar_engine.auto_crop_to_face(frame, aspect_ratio=aspect_tuple, margin=margin)
+            return cropped if cropped is not None else frame
+
+        self.video = self.video.transform(crop_to_face)
+        logger.info(f"Auto crop to face completed")
+        self.project.add_to_history({'operation': 'auto_crop_face', 'aspect_ratio': aspect_ratio, 'margin': margin})
+
+    def blur_background(self, blur_strength: int = 15):
+        """
+        Blur background while keeping face sharp (portrait mode effect)
+
+        Args:
+            blur_strength: Blur strength (1-51, higher = more blur)
+        """
+        logger.info(f"Applying background blur (strength={blur_strength})")
+        self._apply_ar_effect_to_video(self.ar_engine.blur_background, blur_strength=blur_strength)
+        self.project.add_to_history({'operation': 'blur_background', 'blur_strength': blur_strength})
+
+    def show_face_landmarks(self, show_full_mesh: bool = False):
+        """
+        Draw face landmarks on video (for debugging/visualization)
+
+        Args:
+            show_full_mesh: If True, show all 468 landmarks; if False, show key points only
+        """
+        logger.info(f"Drawing face landmarks (full_mesh={show_full_mesh})")
+        self._apply_ar_effect_to_video(self.ar_engine.draw_face_landmarks, show_mesh=show_full_mesh)
+        self.project.add_to_history({'operation': 'show_face_landmarks', 'show_full_mesh': show_full_mesh})
+
+    # ==================== END AR EFFECTS ====================
+
     def cleanup(self):
         """Clean up resources and temporary files"""
         if self.video:
             try:
                 self.video.close()
+            except:
+                pass
+
+        # Clean up AR engine
+        if self.ar_engine:
+            try:
+                self.ar_engine.cleanup()
             except:
                 pass
 

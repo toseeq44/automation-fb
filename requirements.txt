@@ -31,6 +31,10 @@ pyautogui>=0.9.54         # Mouse and keyboard automation
 pygetwindow>=0.0.9        # Window management (cross-platform)
 psutil>=5.9.0             # Process management
 
+# AR Face Effects Dependencies (NEW - for professional video effects)
+mediapipe>=0.10.0         # Google's AR framework - 468 face landmarks tracking
+protobuf>=3.20.0          # Required by MediaPipe
+
 
 Flask
 Flask-Limiter

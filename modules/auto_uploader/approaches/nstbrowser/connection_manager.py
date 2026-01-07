@@ -155,7 +155,7 @@ class NSTConnectionManager:
                 self._is_connected = False
                 return False
 
-            total_profiles = response.get('data', {}).get('total', 0)
+            total_profiles = response.get('data', {}).get('totalDocs', 0)
             logger.info("[NSTConnection] ✓ Connection successful!")
             logger.info("[NSTConnection]   Total profiles available: %s", total_profiles)
             self._is_connected = True
@@ -220,8 +220,8 @@ class NSTConnectionManager:
                 logger.error("[NSTConnection]   Response code: %s", response.get('code') if response else 'N/A')
                 return None
 
-            profiles = response.get('data', {}).get('list', [])
-            total = response.get('data', {}).get('total', 0)
+            profiles = response.get('data', {}).get('docs', [])
+            total = response.get('data', {}).get('totalDocs', 0)
 
             logger.info("[NSTConnection] ✓ Retrieved %s profile(s) (total: %s)", len(profiles), total)
             return profiles

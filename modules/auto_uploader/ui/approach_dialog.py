@@ -32,6 +32,7 @@ class ApproachDialog(QDialog):
         ("free_automation", "Free Automation"),
         ("gologin", "GoLogin"),
         ("ix", "IX Browser"),
+        ("nstbrowser", "NSTbrowser"),
         ("vpn", "VPN"),
     ]
 
@@ -51,6 +52,7 @@ class ApproachDialog(QDialog):
         self._input_fields: Dict[str, Dict[str, QLineEdit]] = {}
         self._optional_fields: Dict[str, set[str]] = {
             "ix": {"api_url", "profile_id", "profile_name"},
+            "nstbrowser": {"base_url"},
         }
         self._free_fields: Dict[str, QLineEdit] = {}
         self._free_labels: Dict[str, str] = {
@@ -119,9 +121,15 @@ class ApproachDialog(QDialog):
                 "email": ("Account Email", False, ""),
                 "password": ("Account Password", True, ""),
             },
+            "nstbrowser": {
+                "base_url": ("API URL (optional)", False, "http://127.0.0.1:8848"),
+                "api_key": ("API Key", False, ""),
+                "email": ("Account Email", False, ""),
+                "password": ("Account Password", True, ""),
+            },
         }
 
-        for mode in ("gologin", "ix"):
+        for mode in ("gologin", "ix", "nstbrowser"):
             widget, fields = self._build_account_form(mode_field_map[mode])
             self._input_fields[mode] = fields
             self._stack.addWidget(widget)
@@ -209,7 +217,7 @@ class ApproachDialog(QDialog):
                     fields["password"].setText(secret["password"])
 
     def _on_approach_changed(self, index: int) -> None:
-        # 0 -> free, 1 -> gologin, 2 -> ix, 3 -> vpn
+        # 0 -> free, 1 -> gologin, 2 -> ix, 3 -> nstbrowser, 4 -> vpn
         self._stack.setCurrentIndex(index)
 
     def _persist_selection(self) -> None:

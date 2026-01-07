@@ -136,37 +136,48 @@ def main():
     if not is_valid:
         logger.warning(f"License validation failed: {message}", "License")
 
-        # Check if no license exists at all
+        # Show activation dialog for both no license and expired license
         if not license_info:
-            # Show activation dialog
             logger.info("No license found. Showing activation dialog.", "License")
-
-            activation_dialog = LicenseActivationDialog(license_manager)
-            result = activation_dialog.exec_()
-
-            if result != activation_dialog.Accepted:
-                # User cancelled activation
-                logger.info("User cancelled activation. Exiting.", "License")
-                QMessageBox.warning(
-                    None,
-                    "License Required",
-                    "OneSoul requires a valid license to run.\n\n"
-                    "Please activate a license or purchase one to continue."
-                )
-                sys.exit(0)
+            dialog_message = "No active license found. Please activate a license to continue."
         else:
             # License exists but invalid (expired or offline too long)
             logger.warning("License invalid or expired", "License")
-            QMessageBox.critical(
+            dialog_message = f"License Issue: {message}"
+            QMessageBox.warning(
                 None,
                 "License Expired",
                 f"{message}\n\n"
                 "Your license has expired or is invalid.\n"
-                "Please renew your subscription to continue using OneSoul.\n\n"
+                "Please activate a valid license to continue."
+            )
+
+        # Show activation dialog
+        activation_dialog = LicenseActivationDialog(license_manager)
+        result = activation_dialog.exec_()
+
+        if result != activation_dialog.Accepted:
+            # User cancelled activation
+            logger.info("User cancelled license activation. Exiting.", "License")
+            QMessageBox.warning(
+                None,
+                "License Required",
+                "OneSoul requires a valid license to run.\n\n"
                 "The application will now close."
             )
-            logger.info("License expired. Application exiting.", "License")
             sys.exit(0)
+        else:
+            # License activated successfully, validate again
+            is_valid, message, license_info = license_manager.validate_license()
+            if not is_valid:
+                logger.error("License activation succeeded but validation failed.", "License")
+                QMessageBox.critical(
+                    None,
+                    "Activation Error",
+                    "License activation completed but validation failed.\n"
+                    "Please restart the application."
+                )
+                sys.exit(0)
     else:
         logger.info(f"License validated successfully: {message}", "License")
         days_remaining = license_info.get('days_remaining', 0) if license_info else 0

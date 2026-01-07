@@ -6,10 +6,22 @@ Provides face detection, tracking, and AR filter application
 
 import cv2
 import numpy as np
-import mediapipe as mp
 from typing import Optional, Tuple, List, Dict, Any
 from pathlib import Path
 import sys
+
+# MediaPipe imports - compatible with 0.10.x
+try:
+    # Try new MediaPipe API (0.10.x)
+    from mediapipe.python.solutions import face_mesh as mp_face_mesh
+    from mediapipe.python.solutions import drawing_utils as mp_drawing
+    from mediapipe.python.solutions import drawing_styles as mp_drawing_styles
+except ImportError:
+    # Fallback to old API (pre 0.10.x)
+    import mediapipe as mp
+    mp_face_mesh = mp.solutions.face_mesh
+    mp_drawing = mp.solutions.drawing_utils
+    mp_drawing_styles = mp.solutions.drawing_styles
 
 from modules.logging.logger import get_logger
 
@@ -25,12 +37,8 @@ class AREngine:
 
     def __init__(self):
         """Initialize MediaPipe Face Mesh"""
-        self.mp_face_mesh = mp.solutions.face_mesh
-        self.mp_drawing = mp.solutions.drawing_utils
-        self.mp_drawing_styles = mp.solutions.drawing_styles
-
         # Initialize face mesh detector
-        self.face_mesh = self.mp_face_mesh.FaceMesh(
+        self.face_mesh = mp_face_mesh.FaceMesh(
             static_image_mode=False,
             max_num_faces=5,  # Support multiple faces
             refine_landmarks=True,

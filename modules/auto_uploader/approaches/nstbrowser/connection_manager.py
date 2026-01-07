@@ -147,11 +147,14 @@ class NSTConnectionManager:
             logger.debug("[NSTConnection] Raw response type: %s", type(response))
             logger.debug("[NSTConnection] Raw response: %s", response)
 
-            if response is None or response.get('code') != 0:
-                error_msg = response.get('message', 'Unknown error') if response else 'No response'
+            # NSTbrowser API returns code=200 for success (HTTP status code)
+            # Check for error flag or non-200 status
+            if response is None or response.get('err') or response.get('code') != 200:
+                error_msg = response.get('msg', 'Unknown error') if response else 'No response'
                 logger.error("[NSTConnection] Connection test failed!")
                 logger.error("[NSTConnection]   Error: %s", error_msg)
                 logger.error("[NSTConnection]   Response code: %s", response.get('code') if response else 'N/A')
+                logger.error("[NSTConnection]   Error flag: %s", response.get('err') if response else 'N/A')
                 self._is_connected = False
                 return False
 
@@ -213,11 +216,13 @@ class NSTConnectionManager:
             logger.debug("[NSTConnection] get_profile_list response type: %s", type(response))
             logger.debug("[NSTConnection] get_profile_list response: %s", response)
 
-            if response is None or response.get('code') != 0:
-                error_msg = response.get('message', 'Unknown error') if response else 'No response'
+            # NSTbrowser API returns code=200 for success (HTTP status code)
+            if response is None or response.get('err') or response.get('code') != 200:
+                error_msg = response.get('msg', 'Unknown error') if response else 'No response'
                 logger.error("[NSTConnection] Failed to get profiles!")
                 logger.error("[NSTConnection]   Error: %s", error_msg)
                 logger.error("[NSTConnection]   Response code: %s", response.get('code') if response else 'N/A')
+                logger.error("[NSTConnection]   Error flag: %s", response.get('err') if response else 'N/A')
                 return None
 
             profiles = response.get('data', {}).get('docs', [])

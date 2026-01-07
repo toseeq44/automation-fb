@@ -397,9 +397,14 @@ class PresetBuilderDialog(QDialog):
         params = {}
         for param_name, param_def in op_def.parameters.items():
             if param_def.default is not None:
+                # Use provided default
                 params[param_name] = param_def.default
             elif not param_def.required:
+                # Optional parameter without default - set to None
                 params[param_name] = None
+            else:
+                # Required parameter without default - generate sensible default
+                params[param_name] = self._generate_sensible_default(param_def)
 
         # Add to stack
         display_text = f"{op_def.icon or '•'} {op_def.display_name}"
@@ -409,6 +414,69 @@ class PresetBuilderDialog(QDialog):
         self.stack_list.addItem(stack_item)
 
         logger.info(f"Added operation to stack: {op_name}")
+
+    def _generate_sensible_default(self, param_def):
+        """
+        Generate sensible default value for required parameter without default
+
+        Args:
+            param_def: ParameterDef object
+
+        Returns:
+            Sensible default value based on parameter type and constraints
+        """
+        param_type = param_def.param_type
+
+        # If choices available, use first choice
+        if param_def.choices:
+            return param_def.choices[0]
+
+        # Type-based defaults
+        if param_type == 'bool':
+            return False
+
+        elif param_type == 'int':
+            # If min/max defined, use middle value, otherwise 0
+            if param_def.min_val is not None and param_def.max_val is not None:
+                return (param_def.min_val + param_def.max_val) // 2
+            elif param_def.min_val is not None:
+                return param_def.min_val
+            return 0
+
+        elif param_type == 'float':
+            # Special handling for common parameters
+            if 'volume' in param_def.name.lower():
+                return 1.0  # 100% volume
+            elif 'opacity' in param_def.name.lower() or 'alpha' in param_def.name.lower():
+                return 1.0  # 100% opacity
+            elif 'duration' in param_def.name.lower():
+                return 1.0  # 1 second
+            elif 'speed' in param_def.name.lower() or 'factor' in param_def.name.lower():
+                return 1.0  # Normal speed/factor
+
+            # If min/max defined, use middle value
+            if param_def.min_val is not None and param_def.max_val is not None:
+                return (param_def.min_val + param_def.max_val) / 2.0
+            elif param_def.min_val is not None:
+                # If only min defined, use min + 1 or min * 1.5
+                if param_def.min_val == 0:
+                    return 1.0
+                return param_def.min_val * 1.5
+            return 1.0
+
+        elif param_type == 'str':
+            return ''  # Empty string
+
+        elif param_type == 'tuple':
+            return (0, 0)  # Empty tuple/coords
+
+        elif param_type == 'list':
+            return []  # Empty list
+
+        else:
+            # Unknown type - return None and log warning
+            logger.warning(f"Unknown parameter type '{param_type}' for {param_def.name}, using None")
+            return None
 
     def on_stack_selection_changed(self, index: int):
         """Handle stack selection change"""

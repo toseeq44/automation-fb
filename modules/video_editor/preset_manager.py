@@ -534,6 +534,82 @@ class PresetManager:
             logger.error(f"Failed to delete preset '{name}': {e}")
             return False
 
+    def _validate_and_fix_params(self, editor, op_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Validate parameters and add missing required ones with sensible defaults
+
+        Args:
+            editor: VideoEditor instance
+            op_name: Operation name
+            params: Current parameters dict
+
+        Returns:
+            Fixed parameters dict
+        """
+        import inspect
+
+        if not hasattr(editor, op_name):
+            return params
+
+        method = getattr(editor, op_name)
+        sig = inspect.signature(method)
+
+        # Check each parameter in method signature
+        for param_name, param in sig.parameters.items():
+            # Skip 'self' parameter
+            if param_name == 'self':
+                continue
+
+            # If parameter is required (no default) and missing from params
+            if param.default == inspect.Parameter.empty and param_name not in params:
+                # Generate sensible default based on parameter name
+                default_value = self._generate_sensible_default_by_name(param_name)
+                params[param_name] = default_value
+                logger.warning(f"   ⚠️  Missing required parameter '{param_name}' for {op_name}, using default: {default_value}")
+
+        return params
+
+    def _generate_sensible_default_by_name(self, param_name: str) -> Any:
+        """
+        Generate sensible default value based on parameter name
+
+        Args:
+            param_name: Parameter name
+
+        Returns:
+            Sensible default value
+        """
+        param_lower = param_name.lower()
+
+        # Common patterns
+        if 'volume' in param_lower:
+            return 1.0  # 100% volume
+        elif 'opacity' in param_lower or 'alpha' in param_lower:
+            return 1.0  # 100% opacity
+        elif 'duration' in param_lower:
+            return 1.0  # 1 second
+        elif 'speed' in param_lower or 'factor' in param_lower or 'rate' in param_lower:
+            return 1.0  # Normal speed
+        elif 'width' in param_lower:
+            return 1920  # HD width
+        elif 'height' in param_lower:
+            return 1080  # HD height
+        elif 'x' in param_lower or 'y' in param_lower:
+            return 0  # Coordinate
+        elif 'angle' in param_lower or 'rotation' in param_lower:
+            return 0  # No rotation
+        elif 'color' in param_lower:
+            return 'black'  # Default color
+        elif 'text' in param_lower:
+            return ''  # Empty text
+        elif 'path' in param_lower:
+            return ''  # Empty path
+        elif 'enabled' in param_lower or 'enable' in param_lower:
+            return True  # Enabled by default
+        else:
+            # Generic defaults
+            return 1.0  # Most numeric parameters work with 1.0
+
     def apply_preset_to_video(self, preset: EditingPreset, video_path: str,
                              output_path: str, quality: str = 'high',
                              progress_callback=None) -> bool:
@@ -579,6 +655,9 @@ class PresetManager:
                     # Remove unsupported parameters
                     params.pop('width', None)
                     params.pop('height', None)
+
+                # Validate and fix missing required parameters
+                params = self._validate_and_fix_params(editor, op_name, params)
 
                 # Execute operation
                 try:

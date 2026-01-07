@@ -141,10 +141,10 @@ class OperationLibrary:
             category=self.CATEGORY_VIDEO,
             description='Trim video to specific time range',
             parameters=[
-                ParameterDef('start_time', 'float', required=True, min_val=0,
+                ParameterDef('start_time', 'float', required=True, default=0.0, min_val=0,
                            description='Start time in seconds'),
-                ParameterDef('end_time', 'float', required=True, min_val=0,
-                           description='End time in seconds')
+                ParameterDef('end_time', 'float', required=True, default=10.0, min_val=0,
+                           description='End time in seconds (edit this!)')
             ],
             icon='✂️'
         ))
@@ -192,8 +192,8 @@ class OperationLibrary:
             category=self.CATEGORY_VIDEO,
             description='Speed up or slow down video',
             parameters=[
-                ParameterDef('factor', 'float', required=True, min_val=0.1, max_val=10.0,
-                           description='Speed factor (e.g., 0.5 = 50% speed, 2.0 = 2x speed)')
+                ParameterDef('factor', 'float', required=True, default=1.0, min_val=0.1, max_val=10.0,
+                           description='Speed factor (1.0 = normal, 0.5 = 50% speed, 2.0 = 2x speed)')
             ],
             icon='⏩'
         ))
@@ -204,8 +204,8 @@ class OperationLibrary:
             category=self.CATEGORY_VIDEO,
             description='Merge two videos side-by-side with intelligent length matching',
             parameters=[
-                ParameterDef('secondary_video_path', 'str', required=True,
-                           description='Path to secondary video file'),
+                ParameterDef('secondary_video_path', 'str', required=True, default='',
+                           description='Path to secondary video file (must be specified)'),
                 ParameterDef('primary_position', 'str', required=False, default='right',
                            choices=['left', 'right'],
                            description='Position of primary video (left or right)'),
@@ -232,8 +232,8 @@ class OperationLibrary:
             category=self.CATEGORY_TRANSFORM,
             description='Rotate video by angle',
             parameters=[
-                ParameterDef('angle', 'float', required=True,
-                           description='Rotation angle in degrees')
+                ParameterDef('angle', 'float', required=True, default=90.0,
+                           description='Rotation angle in degrees (90 = quarter turn)')
             ],
             icon='🔄'
         ))
@@ -264,7 +264,7 @@ class OperationLibrary:
             category=self.CATEGORY_AUDIO,
             description='Adjust audio volume level',
             parameters=[
-                ParameterDef('volume', 'float', required=True, min_val=0.0, max_val=10.0,
+                ParameterDef('volume', 'float', required=True, default=1.0, min_val=0.0, max_val=10.0,
                            description='Volume multiplier (1.0 = 100%, 0.5 = 50%, 2.0 = 200%)')
             ],
             icon='🔊'
@@ -285,8 +285,8 @@ class OperationLibrary:
             category=self.CATEGORY_AUDIO,
             description='Replace video audio with new audio file',
             parameters=[
-                ParameterDef('audio_path', 'str', required=True,
-                           description='Path to audio file'),
+                ParameterDef('audio_path', 'str', required=True, default='',
+                           description='Path to audio file (must be specified)'),
                 ParameterDef('start_time', 'float', required=False, default=0, min_val=0,
                            description='Start time in seconds')
             ],
@@ -299,8 +299,8 @@ class OperationLibrary:
             category=self.CATEGORY_AUDIO,
             description='Mix additional audio with existing audio',
             parameters=[
-                ParameterDef('audio_path', 'str', required=True,
-                           description='Path to audio file'),
+                ParameterDef('audio_path', 'str', required=True, default='',
+                           description='Path to audio file (must be specified)'),
                 ParameterDef('volume', 'float', required=False, default=0.5, min_val=0.0, max_val=10.0,
                            description='Volume of mixed audio'),
                 ParameterDef('start_time', 'float', required=False, default=0, min_val=0,
@@ -317,8 +317,8 @@ class OperationLibrary:
             category=self.CATEGORY_TEXT_OVERLAY,
             description='Add text overlay to video',
             parameters=[
-                ParameterDef('text', 'str', required=True,
-                           description='Text content'),
+                ParameterDef('text', 'str', required=True, default='Sample Text',
+                           description='Text content (edit this!)'),
                 ParameterDef('position', 'tuple', required=False, default=('center', 'bottom'),
                            description='Text position (horizontal, vertical)'),
                 ParameterDef('fontsize', 'int', required=False, default=50, min_val=1,
@@ -341,8 +341,8 @@ class OperationLibrary:
             category=self.CATEGORY_TEXT_OVERLAY,
             description='Add watermark image to video',
             parameters=[
-                ParameterDef('image_path', 'str', required=True,
-                           description='Path to watermark image'),
+                ParameterDef('image_path', 'str', required=True, default='',
+                           description='Path to watermark image (must be specified)'),
                 ParameterDef('position', 'tuple', required=False, default=('right', 'bottom'),
                            description='Watermark position (horizontal, vertical)'),
                 ParameterDef('opacity', 'float', required=False, default=1.0, min_val=0.0, max_val=1.0,
@@ -385,7 +385,7 @@ class OperationLibrary:
             category=self.CATEGORY_EFFECTS,
             description='Apply visual filter/effect',
             parameters=[
-                ParameterDef('filter_name', 'str', required=True,
+                ParameterDef('filter_name', 'str', required=True, default='grayscale',
                            choices=['grayscale', 'sepia', 'vintage', 'cinematic',
                                    'vignette', 'blur', 'sharpen', 'negative'],
                            description='Filter to apply'),

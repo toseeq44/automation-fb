@@ -72,6 +72,107 @@ def _is_ip_block_error(error_text: str) -> bool:
 
     return any(indicator in clean_text for indicator in ip_block_indicators)
 
+def _parse_proxy_format(proxy: str) -> str:
+    """
+    Parse and convert proxy format to standard HTTP format.
+
+    Supports 3 formats:
+    1. ip:port                          → http://ip:port
+    2. user:pass@ip:port                → http://user:pass@ip:port
+    3. ip:port:user:pass (provider)     → http://user:pass@ip:port
+
+    Args:
+        proxy: Raw proxy string in any supported format
+
+    Returns:
+        str: Proxy URL in standard HTTP format
+    """
+    if not proxy:
+        return ''
+
+    proxy = proxy.strip()
+
+    # Already formatted with protocol
+    if proxy.startswith('http://') or proxy.startswith('https://') or proxy.startswith('socks'):
+        return proxy
+
+    # Format 2: user:pass@ip:port (standard)
+    if '@' in proxy:
+        return f"http://{proxy}"
+
+    # Split by colon to detect format
+    parts = proxy.split(':')
+
+    # Format 3: ip:port:user:pass (provider format - user's format!)
+    if len(parts) == 4:
+        ip, port, user, password = parts
+        return f"http://{user}:{password}@{ip}:{port}"
+
+    # Format 1: ip:port (no authentication)
+    elif len(parts) == 2:
+        return f"http://{proxy}"
+
+    # Unknown format - try as-is
+    else:
+        return f"http://{proxy}"
+
+def _load_proxies_from_config():
+    """
+    Load proxies from Link Grabber's saved configuration.
+
+    Returns list of proxies that can be used for downloads.
+    Uses the same config file that Link Grabber saves to.
+
+    Returns:
+        list: List of proxy URLs (max 2 as per user requirement)
+    """
+    try:
+        from modules.config.paths import get_config_dir
+        import json
+        import logging
+
+        config_file = get_config_dir() / "proxy_settings.json"
+
+        if not config_file.exists():
+            logging.debug("No proxy config found - will use direct connection")
+            return []
+
+        # Read Link Grabber's saved proxies
+        with open(config_file, 'r') as f:
+            settings = json.load(f)
+
+        proxies = []
+
+        # Get both proxies (max 2 as per user requirement)
+        proxy1 = settings.get('proxy1', '').strip()
+        proxy2 = settings.get('proxy2', '').strip()
+
+        # Parse and add proxy1
+        if proxy1:
+            parsed = _parse_proxy_format(proxy1)
+            if parsed:
+                proxies.append(parsed)
+                logging.info(f"✓ Loaded Proxy 1: {proxy1[:20]}...")
+
+        # Parse and add proxy2
+        if proxy2:
+            parsed = _parse_proxy_format(proxy2)
+            if parsed:
+                proxies.append(parsed)
+                logging.info(f"✓ Loaded Proxy 2: {proxy2[:20]}...")
+
+        if proxies:
+            logging.info(f"📡 Total {len(proxies)} proxy(ies) loaded from Link Grabber")
+        else:
+            logging.debug("No valid proxies found in config")
+
+        return proxies
+
+    except Exception as e:
+        import logging
+        logging.warning(f"Failed to load proxies from config: {e}")
+        return []
+
 # ===================== MAIN THREAD ====================
 class VideoDownloaderThread(QThread):
     progress = pyqtSignal(str)
@@ -117,7 +218,15 @@ class VideoDownloaderThread(QThread):
         self.format_override = format_override
 
         # Proxy configuration (for IP block bypass)
-        self.proxy_url = self.options.get('proxy_url', os.environ.get('HTTPS_PROXY', ''))
+        # ENHANCED: Load proxies from Link Grabber's saved config (automatic!)
+        self.available_proxies = _load_proxies_from_config()  # List of all available proxies
+        self.current_proxy_index = 0  # Track which proxy we're currently using
+
+        # Set initial proxy (try config first, then options, then environment)
+        if self.available_proxies:
+            self.proxy_url = self.available_proxies[0]  # Use first proxy from config
+        else:
+            self.proxy_url = self.options.get('proxy_url', os.environ.get('HTTPS_PROXY', ''))
 
         # Rate limiting (to avoid triggering IP blocks)
         self.last_request_times = {}  # domain -> timestamp
@@ -196,6 +305,74 @@ class VideoDownloaderThread(QThread):
             time.sleep(wait_time)
 
         self.last_request_times[domain] = time.time()
+
+    def _get_proxy_status_message(self, use_proxy=False) -> str:
+        """Get formatted proxy status message for logging"""
+        if not use_proxy or not self.proxy_url:
+            if self.available_proxies:
+                return "No proxy (available but not requested)"
+            else:
+                return "No proxy (IP blocks possible)"
+        else:
+            # Show partial proxy for privacy (hide credentials)
+            proxy_display = self.proxy_url
+            if '@' in proxy_display:
+                # Format: http://user:pass@ip:port → http://***:***@ip:port
+                parts = proxy_display.split('@')
+                if len(parts) == 2:
+                    proxy_display = f"{parts[0].split(':')[0]}://***:***@{parts[1]}"
+            return f"Using proxy: {proxy_display}"
+
+    def _try_download_with_auto_proxy_fallback(self, method, url, output_path, cookie_file=None):
+        """
+        Intelligent auto-fallback wrapper for download methods.
+
+        Strategy:
+        1. Try method with direct connection (fast, works most times)
+        2. If fails with IP block AND proxy available → retry with proxy
+        3. Return success/failure
+
+        This mimics anti-detection browsers: try normal first, switch to proxy if blocked.
+
+        Args:
+            method: Download method function to call
+            url: Video URL
+            output_path: Save directory
+            cookie_file: Optional cookie file path
+
+        Returns:
+            bool: True if download succeeded (direct or via proxy), False otherwise
+        """
+        # === STRATEGY 1: Try direct connection first ===
+        try:
+            result = method(url, output_path, cookie_file, use_proxy=False)
+            if result:
+                return True  # Success with direct connection!
+        except Exception as e:
+            # Method threw exception - treat as failure
+            import logging
+            logging.debug(f"Direct attempt exception: {e}")
+
+        # === STRATEGY 2: Auto-fallback to proxy if available ===
+        if self.available_proxies and self.proxy_url:
+            self.progress.emit("")
+            self.progress.emit("   ╔═══════════════════════════════════════════════╗")
+            self.progress.emit("   ║  🌐 AUTO-SWITCHING TO PROXY                   ║")
+            self.progress.emit("   ╚═══════════════════════════════════════════════╝")
+            self.progress.emit("   🔄 Direct connection failed, trying with proxy...")
+            self.progress.emit("")
+
+            try:
+                result = method(url, output_path, cookie_file, use_proxy=True)
+                if result:
+                    self.progress.emit("   🎉 SUCCESS via proxy!")
+                    return True
+            except Exception as e:
+                import logging
+                logging.debug(f"Proxy attempt exception: {e}")
+
+        # Both strategies failed
+        return False
 
     # Removed old timestamp logic - now using history.json only
 
@@ -325,25 +502,45 @@ class VideoDownloaderThread(QThread):
     # -----------------------
     # ==== Download Methods per Platform ====
 
-    def _method1_batch_file_approach(self, url, output_path, cookie_file=None):
+    def _method1_batch_file_approach(self, url, output_path, cookie_file=None, use_proxy=False):
         try:
             from datetime import datetime
             start_time = datetime.now()
             self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] 🚀 Method 1: YT-DLP Standard")
 
+            # Show proxy status
+            self.progress.emit(f"   {self._get_proxy_status_message(use_proxy)}")
+
+            # Smart yt-dlp detection
+            ytdlp_cmd = self._get_ytdlp_command()
+            if not ytdlp_cmd:
+                self.progress.emit(f"   ⚠️ yt-dlp not found, skipping")
+                return False
+
+            # Random user agent for better success
+            user_agent = _get_random_user_agent()
+            self.progress.emit(f"   🎭 UA: {user_agent[:50]}...")
+
             format_string = self.format_override or 'best'
             cmd = [
-                'yt-dlp',
+                ytdlp_cmd,
                 '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
                 '--rm-cache-dir',
                 '-f', format_string,
+                '--user-agent', user_agent,
                 '--restrict-filenames', '--no-warnings', '--retries', str(self.max_retries),
                 '--continue', '--no-check-certificate',
                 '--no-playlist',  # Don't download playlists
             ]
+
+            # Add proxy if enabled
+            if use_proxy and self.proxy_url:
+                cmd.extend(['--proxy', self.proxy_url])
+
             if cookie_file:
                 cmd.extend(['--cookies', cookie_file])
-                self.progress.emit(f"   🍪 Using cookies: {Path(cookie_file).name}")
+                self.progress.emit(f"   🍪 Cookies: {Path(cookie_file).name}")
+
             cmd.append(url)
 
             self.progress.emit(f"   ⏳ Starting download...")
@@ -580,11 +777,18 @@ class VideoDownloaderThread(QThread):
         self.progress.emit("   💡 Quick fix: Switch to different network (WiFi ↔ Mobile data)")
         self.progress.emit("")
 
-    def _method3_optimized_ytdlp(self, url, output_path, cookie_file=None):
+    def _method3_optimized_ytdlp(self, url, output_path, cookie_file=None, use_proxy=False):
         try:
             from datetime import datetime
             start_time = datetime.now()
             self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] 🔄 Method 3: yt-dlp with Cookies")
+
+            # Show proxy status
+            self.progress.emit(f"   {self._get_proxy_status_message(use_proxy)}")
+
+            # Random user agent
+            user_agent = _get_random_user_agent()
+            self.progress.emit(f"   🎭 UA: {user_agent[:50]}...")
 
             format_string = self.format_override or 'best'
             ydl_opts = {
@@ -598,11 +802,16 @@ class VideoDownloaderThread(QThread):
                 'nocheckcertificate': True,
                 'restrictfilenames': True,
                 'progress_hooks': [self._progress_hook],
+                'http_headers': {'User-Agent': user_agent},
             }
+
+            # Add proxy if enabled
+            if use_proxy and self.proxy_url:
+                ydl_opts['proxy'] = self.proxy_url
 
             if cookie_file:
                 ydl_opts['cookiefile'] = cookie_file
-                self.progress.emit(f"   🍪 Using: {Path(cookie_file).name}")
+                self.progress.emit(f"   🍪 Cookies: {Path(cookie_file).name}")
             else:
                 self.progress.emit(f"   ⚠️ No cookies (may fail for private content)")
 
@@ -627,7 +836,7 @@ class VideoDownloaderThread(QThread):
             self.progress.emit(f"   📝 Error: {error_msg[:200]}")
             return False
 
-    def _method_instagram_enhanced(self, url, output_path, cookie_file=None):
+    def _method_instagram_enhanced(self, url, output_path, cookie_file=None, use_proxy=False):
         """Enhanced Instagram downloader with cookie validation and multiple fallbacks"""
         try:
             if 'instagram.com' not in url.lower():
@@ -636,6 +845,13 @@ class VideoDownloaderThread(QThread):
             from datetime import datetime
             start_time = datetime.now()
             self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] 📸 Instagram Enhanced Method")
+            self.progress.emit(f"   {self._get_proxy_status_message(use_proxy)}")
+
+            # Smart yt-dlp detection
+            ytdlp_cmd = self._get_ytdlp_command()
+            if not ytdlp_cmd:
+                self.progress.emit(f"   ⚠️ yt-dlp not found, skipping")
+                return False
 
             # IMPROVED: Collect ALL available cookie files to try
             cookie_files_to_try = []
@@ -685,16 +901,27 @@ class VideoDownloaderThread(QThread):
 
                 # Try download with validated cookie
                 self.progress.emit(f"   📥 Attempting download...")
+
+                user_agent = _get_random_user_agent()
+                self.progress.emit(f"   🎭 UA: {user_agent[:50]}...")
+
                 cmd = [
-                    'yt-dlp',
+                    ytdlp_cmd,
                     '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
                     '--cookies', current_cookie_file,
+                    '--user-agent', user_agent,
                     '-f', 'best',
                     '--no-playlist',
                     '--restrict-filenames',
                     '--no-warnings',
-                    url
                 ]
+
+                # Add proxy if enabled
+                if use_proxy and self.proxy_url:
+                    cmd.extend(['--proxy', self.proxy_url])
+
+                cmd.append(url)
+
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, encoding='utf-8', errors='replace')
 
                 if result.returncode == 0:
@@ -883,9 +1110,14 @@ class VideoDownloaderThread(QThread):
             self.progress.emit(f"⚠️ youtube-dl error: {str(e)[:100]}")
             return False
 
-    def _method4_alternative_formats(self, url, output_path, cookie_file=None):
+    def _method4_alternative_formats(self, url, output_path, cookie_file=None, use_proxy=False):
         try:
             self.progress.emit("🔄 Method 4: Alternative formats")
+            self.progress.emit(f"   {self._get_proxy_status_message(use_proxy)}")
+
+            user_agent = _get_random_user_agent()
+            self.progress.emit(f"   🎭 UA: {user_agent[:50]}...")
+
             format_options = ['best[ext=mp4]', 'bestvideo+bestaudio', 'best']
             if self.format_override and self.format_override not in format_options:
                 format_options.insert(0, self.format_override)
@@ -900,7 +1132,10 @@ class VideoDownloaderThread(QThread):
                         'format': fmt,
                         'quiet': True, 'no_warnings': True, 'retries': self.max_retries,
                         'continuedl': True, 'nocheckcertificate': True, 'restrictfilenames': True,
+                        'http_headers': {'User-Agent': user_agent},
                     }
+                    if use_proxy and self.proxy_url:
+                        ydl_opts['proxy'] = self.proxy_url
                     if cookie_file: ydl_opts['cookiefile'] = cookie_file
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                         ydl.download([url])
@@ -914,21 +1149,38 @@ class VideoDownloaderThread(QThread):
             self.progress.emit(f"⚠️ Method 4 error: {str(e)[:100]}")
             return False
 
-    def _method5_force_ipv4(self, url, output_path, cookie_file=None):
+    def _method5_force_ipv4(self, url, output_path, cookie_file=None, use_proxy=False):
         try:
             self.progress.emit("🔄 Method 5: Force IPv4 fallback")
+            self.progress.emit(f"   {self._get_proxy_status_message(use_proxy)}")
+
+            # Smart yt-dlp detection
+            ytdlp_cmd = self._get_ytdlp_command()
+            if not ytdlp_cmd:
+                self.progress.emit(f"   ⚠️ yt-dlp not found, skipping")
+                return False
+
+            user_agent = _get_random_user_agent()
+            self.progress.emit(f"   🎭 UA: {user_agent[:50]}...")
+
             format_string = self.format_override or 'best'
             cmd = [
-                'yt-dlp',
+                ytdlp_cmd,
                 '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
                 '-f', format_string,
+                '--user-agent', user_agent,
                 '--force-ipv4', '--no-warnings', '--geo-bypass',
                 '--retries', str(self.max_retries), '--ignore-errors', '--continue',
                 '--restrict-filenames', '--no-check-certificate'
             ]
+
+            if use_proxy and self.proxy_url:
+                cmd.extend(['--proxy', self.proxy_url])
+
             if cookie_file:
                 cmd.extend(['--cookies', cookie_file])
-                self.progress.emit(f"🍪 Using cookies: {Path(cookie_file).name}")
+                self.progress.emit(f"   🍪 Cookies: {Path(cookie_file).name}")
+
             cmd.append(url)
             result = subprocess.run(
                 cmd,
@@ -998,6 +1250,14 @@ class VideoDownloaderThread(QThread):
                 self.progress.emit("🚫 File creation: DISABLED")
                 # Clean up any leftover tracking files from old runs
                 self._cleanup_tracking_files(self.save_path)
+
+            # Show proxy status
+            if self.available_proxies:
+                self.progress.emit(f"🌐 Proxies loaded: {len(self.available_proxies)} from Link Grabber")
+                self.progress.emit("✅ Auto-fallback: Direct → Proxy (if blocked)")
+            else:
+                self.progress.emit("⚠️ WARNING: No proxies configured - IP blocks possible!")
+                self.progress.emit("   💡 Add proxies in Link Grabber for better success rate")
 
             self.progress.emit("="*60)
             if self.force_all_methods:
@@ -1078,16 +1338,17 @@ class VideoDownloaderThread(QThread):
                 if not self.force_all_methods:
                     # Limit to first 3-4 methods for speed
                     methods = methods[:4]
-                # Try all methods
+                # Try all methods with intelligent proxy fallback
                 success = False
                 for method in methods:
                     if self.cancelled: break
                     try:
-                        if method(url, folder, cookie_file):
+                        # ENHANCED: Auto-fallback to proxy if direct fails (anti-detection style!)
+                        if self._try_download_with_auto_proxy_fallback(method, url, folder, cookie_file):
                             success = True
                             break
                     except Exception as e:
-                        self.progress.emit(f"Method error: {str(e)[:100]}")
+                        self.progress.emit(f"   ⚠️ Method error: {str(e)[:100]}")
                 if success:
                     self.success_count += 1
                     self.progress.emit(f"✅ [{processed}/{total}] Downloaded!")

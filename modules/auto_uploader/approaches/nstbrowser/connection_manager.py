@@ -143,10 +143,15 @@ class NSTConnectionManager:
             logger.info("[NSTConnection] Testing connection...")
             response = self._client.profiles.get_profiles(data={"page": 1, "pageSize": 1})
 
+            # Debug: Log the actual response structure
+            logger.debug("[NSTConnection] Raw response type: %s", type(response))
+            logger.debug("[NSTConnection] Raw response: %s", response)
+
             if response is None or response.get('code') != 0:
                 error_msg = response.get('message', 'Unknown error') if response else 'No response'
                 logger.error("[NSTConnection] Connection test failed!")
                 logger.error("[NSTConnection]   Error: %s", error_msg)
+                logger.error("[NSTConnection]   Response code: %s", response.get('code') if response else 'N/A')
                 self._is_connected = False
                 return False
 
@@ -204,10 +209,15 @@ class NSTConnectionManager:
                 data={"page": page, "pageSize": page_size}
             )
 
+            # Debug: Log response structure
+            logger.debug("[NSTConnection] get_profile_list response type: %s", type(response))
+            logger.debug("[NSTConnection] get_profile_list response: %s", response)
+
             if response is None or response.get('code') != 0:
                 error_msg = response.get('message', 'Unknown error') if response else 'No response'
                 logger.error("[NSTConnection] Failed to get profiles!")
                 logger.error("[NSTConnection]   Error: %s", error_msg)
+                logger.error("[NSTConnection]   Response code: %s", response.get('code') if response else 'N/A')
                 return None
 
             profiles = response.get('data', {}).get('list', [])

@@ -189,8 +189,9 @@ class AREngine:
         # Convert BGR to RGB for MediaPipe
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        # Create MediaPipe Image
-        mp_image = python.vision.Image(image_format=python.vision.ImageFormat.SRGB, data=rgb_frame)
+        # Create MediaPipe Image (correct import path for 0.10.x)
+        import mediapipe as mp
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
 
         # Detect faces
         detection_result = self.face_detector.detect(mp_image)

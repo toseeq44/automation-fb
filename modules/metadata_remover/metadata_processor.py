@@ -364,6 +364,7 @@ class MetadataBatchWorker(QThread):
                 '-c:a', 'aac',  # Re-encode audio
                 '-b:a', '192k',
                 '-ar', '48000',  # Change sample rate
+                '-f', 'mp4',  # Force MP4 format
                 '-y',  # Overwrite output
                 output_path
             ]
@@ -426,6 +427,7 @@ class MetadataBatchWorker(QThread):
                 '-c:a', 'aac',
                 '-b:a', '192k',
                 '-ar', '44100',  # Different sample rate
+                '-f', 'mp4',  # Force MP4 format
                 '-y',
                 output_path
             ]
@@ -496,6 +498,7 @@ class MetadataBatchWorker(QThread):
                 '-ar', '48000',
                 '-af', 'volume=1.02,highpass=f=50,lowpass=f=15000',  # Audio filtering
                 '-movflags', '+faststart',
+                '-f', 'mp4',  # Force MP4 format
                 '-y',
                 output_path
             ]

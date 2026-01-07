@@ -10,7 +10,8 @@ from enum import Enum
 
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QFrame, QRadioButton, QButtonGroup, QGroupBox, QProgressBar
+    QFrame, QRadioButton, QButtonGroup, QGroupBox, QProgressBar,
+    QScrollArea, QWidget
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
@@ -95,46 +96,65 @@ class MetadataStealthModeDialog(QDialog):
     def init_ui(self):
         """Initialize UI"""
         self.setWindowTitle("Choose Stealth Mode")
-        self.setMinimumSize(950, 800)
-        self.resize(1000, 850)
+        self.setMinimumSize(800, 600)
+        self.resize(850, 650)
         self.setModal(True)
 
-        main_layout = QVBoxLayout()
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.setSpacing(20)
+        # Create scroll area for responsiveness
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QFrame.NoFrame)
+
+        # Scroll content widget
+        scroll_content = QWidget()
+        content_layout = QVBoxLayout(scroll_content)
+        content_layout.setContentsMargins(20, 20, 20, 20)
+        content_layout.setSpacing(20)
 
         # Header
         header = self.create_header()
-        main_layout.addWidget(header)
+        content_layout.addWidget(header)
 
         # Device specs display
         device_group = self.create_device_specs_group()
-        main_layout.addWidget(device_group)
+        content_layout.addWidget(device_group)
 
         # Stealth modes
         modes_group = self.create_modes_group()
-        main_layout.addWidget(modes_group)
+        content_layout.addWidget(modes_group)
 
-        # Estimated time
-        time_group = self.create_time_estimate_group()
-        main_layout.addWidget(time_group)
+        # Add stretch to push content to top
+        content_layout.addStretch()
 
-        main_layout.addStretch()
+        scroll.setWidget(scroll_content)
 
-        # Bottom buttons
-        button_layout = QHBoxLayout()
+        # Main layout with scroll and buttons
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        main_layout.addWidget(scroll)
+
+        # Buttons at bottom (fixed, not scrollable)
+        button_container = QWidget()
+        button_container.setObjectName("button_container")
+        button_layout = QHBoxLayout(button_container)
+        button_layout.setContentsMargins(20, 15, 20, 15)
         button_layout.addStretch()
 
         cancel_btn = QPushButton("Cancel")
+        cancel_btn.setMinimumWidth(120)
         cancel_btn.clicked.connect(self.reject)
         button_layout.addWidget(cancel_btn)
 
         self.confirm_btn = QPushButton("Start Processing")
         self.confirm_btn.setObjectName("confirm_btn")
+        self.confirm_btn.setMinimumWidth(150)
         self.confirm_btn.clicked.connect(self.accept)
         button_layout.addWidget(self.confirm_btn)
 
-        main_layout.addLayout(button_layout)
+        main_layout.addWidget(button_container)
 
         self.setLayout(main_layout)
 
@@ -284,20 +304,19 @@ class MetadataStealthModeDialog(QDialog):
     def create_mode_card(self, title: str, speed: str, effectiveness: str,
                         processing: list, best_for: str, mode: StealthMode,
                         recommended: bool = False) -> QFrame:
-        """Create mode selection card"""
+        """Create mode selection card - simplified version"""
         frame = QFrame()
         frame.setObjectName("mode_card")
-        frame.setMinimumWidth(900)
         frame.setCursor(Qt.PointingHandCursor)
         layout = QVBoxLayout(frame)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
         layout.setContentsMargins(15, 15, 15, 15)
 
         # Header with radio button
         header_layout = QHBoxLayout()
 
         radio = QRadioButton(title)
-        radio.setFont(QFont('Segoe UI', 13, QFont.Bold))
+        radio.setFont(QFont('Segoe UI', 12, QFont.Bold))
         radio.setProperty("mode", mode)
         radio.setCursor(Qt.PointingHandCursor)
         self.mode_button_group.addButton(radio)
@@ -315,33 +334,17 @@ class MetadataStealthModeDialog(QDialog):
         header_layout.addStretch()
         layout.addLayout(header_layout)
 
-        # Stats
-        stats_html = (
-            f"<b>⏱️  Speed:</b> {speed}<br>"
-            f"<b>🎯 Effectiveness:</b> {effectiveness}"
+        # Basic info only - speed, effectiveness, best for
+        info_html = (
+            f"<span style='color: #b0b0b0;'><b>Speed:</b> {speed} | "
+            f"<b>Effectiveness:</b> {effectiveness}</span><br>"
+            f"<span style='color: #888888; font-style: italic;'>{best_for}</span>"
         )
-        stats_label = QLabel(stats_html)
-        stats_label.setFont(QFont('Segoe UI', 10))
-        stats_label.setStyleSheet("color: #b0b0b0; margin-left: 25px;")
-        stats_label.setWordWrap(True)
-        layout.addWidget(stats_label)
-
-        # Processing details
-        processing_text = "<b>🔧 Processing:</b><br>" + "<br>".join([f"  • {p}" for p in processing])
-        processing_label = QLabel(processing_text)
-        processing_label.setFont(QFont('Segoe UI', 9))
-        processing_label.setStyleSheet("color: #a0a0a0; margin-left: 25px;")
-        processing_label.setWordWrap(True)
-        processing_label.setMaximumWidth(850)
-        layout.addWidget(processing_label)
-
-        # Best for
-        best_label = QLabel(f"<b>✅ Best for:</b> {best_for}")
-        best_label.setFont(QFont('Segoe UI', 9))
-        best_label.setStyleSheet("color: #888888; margin-left: 25px; font-style: italic;")
-        best_label.setWordWrap(True)
-        best_label.setMaximumWidth(850)
-        layout.addWidget(best_label)
+        info_label = QLabel(info_html)
+        info_label.setFont(QFont('Segoe UI', 10))
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("margin-left: 25px;")
+        layout.addWidget(info_label)
 
         return frame
 
@@ -445,7 +448,7 @@ class MetadataStealthModeDialog(QDialog):
                 border: 2px solid #3a3a3a;
                 border-radius: 8px;
                 padding: 15px;
-                min-height: 180px;
+                min-height: 80px;
             }
             QFrame#mode_card:hover {
                 border-color: #9c27b0;
@@ -474,6 +477,14 @@ class MetadataStealthModeDialog(QDialog):
             }
             QRadioButton::indicator:unchecked:hover {
                 border-color: #9c27b0;
+            }
+            QWidget#button_container {
+                background-color: #1e1e1e;
+                border-top: 1px solid #3a3a3a;
+            }
+            QScrollArea {
+                border: none;
+                background-color: transparent;
             }
             QPushButton {
                 background-color: #2a2a2a;

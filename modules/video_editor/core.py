@@ -1047,6 +1047,9 @@ class VideoEditor:
         Args:
             intensity: Beautification intensity (0.0 - 1.0)
         """
+        if not self.ar_engine:
+            raise ValueError("❌ AR Engine not available. Install MediaPipe: pip install mediapipe protobuf")
+
         logger.info(f"Applying face beautification (intensity={intensity})")
         self._apply_ar_effect_to_video(self.ar_engine.apply_face_beautification, intensity=intensity)
         self.project.add_to_history({'operation': 'face_beautify', 'intensity': intensity})
@@ -1058,6 +1061,9 @@ class VideoEditor:
         Args:
             intensity: Enhancement intensity (0.0 - 1.0)
         """
+        if not self.ar_engine:
+            raise ValueError("❌ AR Engine not available. Install MediaPipe: pip install mediapipe protobuf")
+
         logger.info(f"Applying eye enhancement (intensity={intensity})")
         self._apply_ar_effect_to_video(self.ar_engine.apply_eye_enhancement, intensity=intensity)
         self.project.add_to_history({'operation': 'eye_enhancement', 'intensity': intensity})
@@ -1069,6 +1075,9 @@ class VideoEditor:
         Args:
             intensity: Whitening intensity (0.0 - 1.0)
         """
+        if not self.ar_engine:
+            raise ValueError("❌ AR Engine not available. Install MediaPipe: pip install mediapipe protobuf")
+
         logger.info(f"Applying teeth whitening (intensity={intensity})")
         self._apply_ar_effect_to_video(self.ar_engine.apply_teeth_whitening, intensity=intensity)
         self.project.add_to_history({'operation': 'teeth_whitening', 'intensity': intensity})
@@ -1115,6 +1124,9 @@ class VideoEditor:
         Args:
             blur_strength: Blur strength (1-51, higher = more blur)
         """
+        if not self.ar_engine:
+            raise ValueError("❌ AR Engine not available. Install MediaPipe: pip install mediapipe protobuf")
+
         logger.info(f"Applying background blur (strength={blur_strength})")
         self._apply_ar_effect_to_video(self.ar_engine.blur_background, blur_strength=blur_strength)
         self.project.add_to_history({'operation': 'blur_background', 'blur_strength': blur_strength})
@@ -1126,6 +1138,9 @@ class VideoEditor:
         Args:
             show_full_mesh: If True, show all 468 landmarks; if False, show key points only
         """
+        if not self.ar_engine:
+            raise ValueError("❌ AR Engine not available. Install MediaPipe: pip install mediapipe protobuf")
+
         logger.info(f"Drawing face landmarks (full_mesh={show_full_mesh})")
         self._apply_ar_effect_to_video(self.ar_engine.draw_face_landmarks, show_mesh=show_full_mesh)
         self.project.add_to_history({'operation': 'show_face_landmarks', 'show_full_mesh': show_full_mesh})

@@ -250,8 +250,8 @@ class VideoEditor:
         if not self.video:
             raise ValueError("No video loaded")
 
-        # MoviePy 2.x: Use mirrored_x() instead of fx(vfx.mirror_x)
-        self.video = self.video.mirrored_x()
+        # MoviePy 2.x: Use with_effects([vfx.MirrorX()])
+        self.video = self.video.with_effects([vfx.MirrorX()])
         self.project.add_to_history({
             'operation': 'flip_horizontal',
             'params': {}
@@ -264,8 +264,8 @@ class VideoEditor:
         if not self.video:
             raise ValueError("No video loaded")
 
-        # MoviePy 2.x: Use mirrored_y() instead of fx(vfx.mirror_y)
-        self.video = self.video.mirrored_y()
+        # MoviePy 2.x: Use with_effects([vfx.MirrorY()])
+        self.video = self.video.with_effects([vfx.MirrorY()])
         self.project.add_to_history({
             'operation': 'flip_vertical',
             'params': {}

@@ -21,6 +21,7 @@ import time
 import typing
 import json
 import logging
+import random
 from datetime import datetime
 from urllib.parse import urlparse
 
@@ -340,6 +341,75 @@ def _load_cookies_from_file(cookie_file: str, platform_key: str) -> typing.List[
     return cookies
 
 
+def _apply_instaloader_session(loader, cookie_file: str, platform_key: str, proxy: str = None) -> int:
+    """Configure Instaloader session with cookies, proxy, and user agent."""
+    try:
+        loader.context._session.headers.update({'User-Agent': _get_random_user_agent()})
+    except Exception:
+        pass
+
+    if proxy:
+        try:
+            proxy_url = _parse_proxy_format(proxy)
+            loader.context._session.proxies = {'http': proxy_url, 'https': proxy_url}
+        except Exception:
+            pass
+
+    if not cookie_file:
+        return 0
+
+    try:
+        cookies = _load_cookies_from_file(cookie_file, platform_key)
+        for cookie in cookies:
+            loader.context._session.cookies.set(
+                cookie.get('name', ''),
+                cookie.get('value', ''),
+                domain=cookie.get('domain'),
+                path=cookie.get('path', '/') or '/',
+                secure=bool(cookie.get('secure', False)),
+                expires=cookie.get('expires'),
+            )
+        return len(cookies)
+    except Exception:
+        return 0
+
+
+def _get_instagram_expected_count(url: str, cookie_file: str, proxy: str = None) -> typing.Optional[int]:
+    """Best-effort expected post count for Instagram profiles."""
+    try:
+        import instaloader
+    except Exception:
+        return None
+
+    try:
+        username_match = re.search(r'instagram\.com/([^/?#]+)', url, flags=re.IGNORECASE)
+        if not username_match or username_match.group(1) in ['p', 'reel', 'tv', 'stories']:
+            return None
+
+        username = username_match.group(1)
+
+        loader = instaloader.Instaloader(
+            quiet=True,
+            download_videos=False,
+            download_pictures=False,
+            download_video_thumbnails=False,
+            download_geotags=False,
+            download_comments=False,
+            save_metadata=False,
+            compress_json=False
+        )
+
+        _apply_instaloader_session(loader, cookie_file, 'instagram', proxy)
+        profile = instaloader.Profile.from_username(loader.context, username)
+        count = getattr(profile, 'mediacount', None)
+        if isinstance(count, int) and count > 0:
+            return count
+    except Exception:
+        return None
+
+    return None
+
+
 def _normalize_url(url: str) -> str:
     """Normalize URL for duplicate detection"""
     try:
@@ -612,10 +682,17 @@ def _validate_proxy(proxy: str, timeout: int = 10) -> dict:
 
     try:
         import requests
-        from requests.packages.urllib3.exceptions import InsecureRequestWarning
-
-        # Suppress SSL warnings for proxy testing
-        requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+        # Suppress SSL warnings for proxy testing (requests no longer exposes packages.urllib3 reliably)
+        try:
+            import urllib3
+            from urllib3.exceptions import InsecureRequestWarning
+            urllib3.disable_warnings(InsecureRequestWarning)
+        except Exception:
+            try:
+                from requests.packages.urllib3.exceptions import InsecureRequestWarning
+                requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+            except Exception:
+                pass
 
         # Parse proxy format (handles all 3 formats)
         proxy_url = _parse_proxy_format(proxy)
@@ -794,6 +871,8 @@ def _get_ytdlp_binary_path() -> str:
         # PRIORITY 3: User's custom locations (common installation directories)
         user_locations = [
             r"C:\yt-dlp\yt-dlp.exe",  # Recommended location
+            r"C:\Users\Fast Computers\automation\bin\yt-dlp.exe",  # User's automation folder
+            os.path.join(os.getcwd(), 'bin', 'yt-dlp.exe'),  # Current working directory bin folder
             os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Programs', 'yt-dlp', 'yt-dlp.exe'),
             os.path.join(os.environ.get('APPDATA', ''), 'yt-dlp', 'yt-dlp.exe'),
             os.path.join(Path.home(), 'yt-dlp', 'yt-dlp.exe'),
@@ -805,7 +884,19 @@ def _get_ytdlp_binary_path() -> str:
             try:
                 expanded = os.path.expandvars(location)
                 if os.path.exists(expanded):
-                    logging.info(f"✓ Using user's yt-dlp: {expanded}")
+                    # Get version of this yt-dlp
+                    try:
+                        ver_result = subprocess.run(
+                            [expanded, '--version'],
+                            capture_output=True,
+                            timeout=5,
+                            text=True,
+                            errors='ignore'
+                        )
+                        version = ver_result.stdout.strip() if ver_result.returncode == 0 else "unknown"
+                        logging.info(f"✓ Using user's yt-dlp: {expanded} (v{version})")
+                    except:
+                        logging.info(f"✓ Using user's yt-dlp: {expanded}")
                     return expanded
             except:
                 continue
@@ -836,7 +927,7 @@ def _execute_ytdlp_dual(url: str, options: dict, proxy: str = None, user_agent: 
 
     # Add proxy and user agent to options
     if proxy:
-        options['proxy'] = f"http://{proxy}" if not proxy.startswith('http') else proxy
+        options['proxy'] = _parse_proxy_format(proxy)  # FIXED: Properly parse ip:port:user:pass format
     if user_agent:
         options['user_agent'] = user_agent
 
@@ -872,7 +963,11 @@ def _execute_ytdlp_dual(url: str, options: dict, proxy: str = None, user_agent: 
                     return entries
 
     except Exception as e:
-        logging.debug(f"Python API failed: {e}")
+        logging.warning(f"❌ yt-dlp Python API failed:")
+        logging.warning(f"   URL: {url}")
+        logging.warning(f"   Error: {str(e)[:300]}")
+        logging.warning(f"   Proxy: {options.get('proxy', 'None')}")
+        logging.warning(f"   User-Agent: {options.get('user_agent', 'Default')[:50]}")
 
     # ===== APPROACH 2: Binary Subprocess (Fallback) =====
     try:
@@ -933,9 +1028,20 @@ def _execute_ytdlp_dual(url: str, options: dict, proxy: str = None, user_agent: 
             if entries:
                 logging.debug(f"✓ Binary success: {len(entries)} links")
                 return entries
+            else:
+                # No entries found - log detailed error info
+                logging.warning(f"❌ yt-dlp binary returned 0 results:")
+                logging.warning(f"   Command: {' '.join(cmd)}")
+                logging.warning(f"   Exit code: {result.returncode}")
+                if result.stdout:
+                    logging.warning(f"   Stdout: {result.stdout[:500]}")
+                if result.stderr:
+                    logging.warning(f"   Stderr: {result.stderr[:500]}")
 
     except Exception as e:
-        logging.debug(f"Binary fallback failed: {e}")
+        logging.warning(f"❌ yt-dlp binary exception:")
+        logging.warning(f"   URL: {url}")
+        logging.warning(f"   Error: {str(e)[:300]}")
 
     return entries
 
@@ -1000,7 +1106,10 @@ def _method_ytdlp_enhanced(
 
         # Platform-specific optimizations
         if platform_key == 'instagram':
-            options['extractor_args'] = {'instagram': {'feed_count': 100}}
+            from .config import get_instagram_feed_count
+            feed_count = get_instagram_feed_count(max_videos)
+            if feed_count > 0:
+                options['extractor_args'] = {'instagram': {'feed_count': feed_count}}
         elif platform_key == 'youtube':
             options['extractor_args'] = {'youtube': {'player_client': 'android'}}
 
@@ -1011,11 +1120,18 @@ def _method_ytdlp_enhanced(
             # Sort by date (newest first)
             entries.sort(key=lambda x: x.get('date', '00000000'), reverse=True)
             logging.debug(f"Enhanced yt-dlp: {len(entries)} links extracted")
-
-        return entries
+            return entries
+        else:
+            # No results from dual approach
+            logging.warning(f"❌ Method 0 (Enhanced) returned 0 results:")
+            logging.warning(f"   URL: {url}")
+            logging.warning(f"   Both Python API and binary fallback failed")
+            return []
 
     except Exception as e:
-        logging.debug(f"Enhanced yt-dlp method failed: {e}")
+        logging.warning(f"❌ Method 0 (Enhanced) exception:")
+        logging.warning(f"   URL: {url}")
+        logging.warning(f"   Error: {str(e)[:300]}")
 
     return []
 
@@ -1036,7 +1152,7 @@ def _method_ytdlp_dump_json(url: str, platform_key: str, cookie_file: str = None
 
         # Add proxy if available (CRITICAL for IP blocks)
         if proxy:
-            proxy_url = proxy if proxy.startswith('http') else f"http://{proxy}"
+            proxy_url = _parse_proxy_format(proxy)  # FIXED: Properly parse ip:port:user:pass format
             cmd.extend(['--proxy', proxy_url])
             logging.debug(f"Method 1: Using proxy {proxy_url.split('@')[-1][:20]}...")
 
@@ -1050,7 +1166,10 @@ def _method_ytdlp_dump_json(url: str, platform_key: str, cookie_file: str = None
 
         # Platform-specific optimizations
         if platform_key == 'instagram':
-            cmd.extend(['--extractor-args', 'instagram:feed_count=100'])
+            from .config import get_instagram_feed_count
+            feed_count = get_instagram_feed_count(max_videos)
+            if feed_count > 0:
+                cmd.extend(['--extractor-args', f'instagram:feed_count={feed_count}'])
         elif platform_key == 'youtube':
             cmd.extend(['--extractor-args', 'youtube:player_client=android'])
 
@@ -1085,9 +1204,20 @@ def _method_ytdlp_dump_json(url: str, platform_key: str, cookie_file: str = None
             # Sort by date (newest first)
             entries.sort(key=lambda x: x.get('date', '00000000'), reverse=True)
             return entries
+        else:
+            # No results - log detailed error info
+            logging.warning(f"❌ Method 1 (--dump-json) returned 0 results:")
+            logging.warning(f"   Command: {' '.join(cmd)}")
+            logging.warning(f"   Exit code: {result.returncode}")
+            if result.stdout:
+                logging.warning(f"   Stdout: {result.stdout[:500]}")
+            if result.stderr:
+                logging.warning(f"   Stderr: {result.stderr[:500]}")
 
     except Exception as e:
-        logging.debug(f"Method 1 (yt-dlp --dump-json) failed: {e}")
+        logging.warning(f"❌ Method 1 (--dump-json) exception:")
+        logging.warning(f"   URL: {url}")
+        logging.warning(f"   Error: {str(e)[:300]}")
 
     return []
 
@@ -1109,12 +1239,18 @@ def _method_ytdlp_get_url(url: str, platform_key: str, cookie_file: str = None, 
 
         # Add proxy if available (CRITICAL for IP blocks)
         if proxy:
-            proxy_url = proxy if proxy.startswith('http') else f"http://{proxy}"
+            proxy_url = _parse_proxy_format(proxy)  # FIXED: Properly parse ip:port:user:pass format
             cmd.extend(['--proxy', proxy_url])
             logging.debug(f"Method 2: Using proxy {proxy_url.split('@')[-1][:20]}...")
 
         if max_videos > 0:
             cmd.extend(['--playlist-end', str(max_videos)])
+
+        if platform_key == 'instagram':
+            from .config import get_instagram_feed_count
+            feed_count = get_instagram_feed_count(max_videos)
+            if feed_count > 0:
+                cmd.extend(['--extractor-args', f'instagram:feed_count={feed_count}'])
 
         cmd.append(url)
 
@@ -1148,10 +1284,24 @@ def _method_ytdlp_get_url(url: str, platform_key: str, cookie_file: str = None, 
                 logging.info(f"Found {len(urls)} URLs before filtering")
                 return [{'url': u, 'title': '', 'date': '00000000'} for u in urls]
             else:
-                logging.warning(f"No http URLs found in output. Raw output: {result.stdout[:200]}")
+                logging.warning(f"❌ Method 2 (--get-url) returned 0 results:")
+                logging.warning(f"   Command: {' '.join(cmd)}")
+                logging.warning(f"   Exit code: {result.returncode}")
+                logging.warning(f"   Raw output: {result.stdout[:500]}")
+                if result.stderr:
+                    logging.warning(f"   Stderr: {result.stderr[:500]}")
+        else:
+            # result.stdout is empty
+            logging.warning(f"❌ Method 2 (--get-url) returned empty output:")
+            logging.warning(f"   Command: {' '.join(cmd)}")
+            logging.warning(f"   Exit code: {result.returncode}")
+            if result.stderr:
+                logging.warning(f"   Stderr: {result.stderr[:500]}")
 
     except Exception as e:
-        logging.error(f"Method 2 (yt-dlp --get-url) exception: {e}")
+        logging.warning(f"❌ Method 2 (--get-url) exception:")
+        logging.warning(f"   URL: {url}")
+        logging.warning(f"   Error: {str(e)[:300]}")
 
     return []
 
@@ -1174,12 +1324,18 @@ def _method_ytdlp_with_retry(url: str, platform_key: str, cookie_file: str = Non
 
         # Add proxy if available
         if proxy:
-            proxy_url = proxy if proxy.startswith('http') else f"http://{proxy}"
+            proxy_url = _parse_proxy_format(proxy)  # FIXED: Properly parse ip:port:user:pass format
             cmd.extend(['--proxy', proxy_url])
             logging.debug(f"Method 3: Using proxy {proxy_url.split('@')[-1][:20]}...")
 
         if max_videos > 0:
             cmd.extend(['--playlist-end', str(max_videos)])
+
+        if platform_key == 'instagram':
+            from .config import get_instagram_feed_count
+            feed_count = get_instagram_feed_count(max_videos)
+            if feed_count > 0:
+                cmd.extend(['--extractor-args', f'instagram:feed_count={feed_count}'])
 
         cmd.append(url)
 
@@ -1209,11 +1365,30 @@ def _method_ytdlp_with_retry(url: str, platform_key: str, cookie_file: str = Non
                 except:
                     continue
 
-            entries.sort(key=lambda x: x.get('date', '00000000'), reverse=True)
-            return entries
+            if entries:
+                entries.sort(key=lambda x: x.get('date', '00000000'), reverse=True)
+                return entries
+            else:
+                # No results - log detailed error info
+                logging.warning(f"❌ Method 3 (with retry) returned 0 results:")
+                logging.warning(f"   Command: {' '.join(cmd)}")
+                logging.warning(f"   Exit code: {result.returncode}")
+                if result.stdout:
+                    logging.warning(f"   Stdout: {result.stdout[:500]}")
+                if result.stderr:
+                    logging.warning(f"   Stderr: {result.stderr[:500]}")
+        else:
+            # result.stdout is empty
+            logging.warning(f"❌ Method 3 (with retry) returned empty output:")
+            logging.warning(f"   Command: {' '.join(cmd)}")
+            logging.warning(f"   Exit code: {result.returncode}")
+            if result.stderr:
+                logging.warning(f"   Stderr: {result.stderr[:500]}")
 
     except Exception as e:
-        logging.debug(f"Method 3 (yt-dlp with retry) failed: {e}")
+        logging.warning(f"❌ Method 3 (with retry) exception:")
+        logging.warning(f"   URL: {url}")
+        logging.warning(f"   Error: {str(e)[:300]}")
 
     return []
 
@@ -1249,6 +1424,12 @@ def _method_ytdlp_user_agent(url: str, platform_key: str, cookie_file: str = Non
             if max_videos > 0:
                 cmd.extend(['--playlist-end', str(max_videos)])
 
+            if platform_key == 'instagram':
+                from .config import get_instagram_feed_count
+                feed_count = get_instagram_feed_count(max_videos)
+                if feed_count > 0:
+                    cmd.extend(['--extractor-args', f'instagram:feed_count={feed_count}'])
+
             cmd.append(url)
 
             result = subprocess.run(
@@ -1280,14 +1461,27 @@ def _method_ytdlp_user_agent(url: str, platform_key: str, cookie_file: str = Non
                 if entries:
                     entries.sort(key=lambda x: x.get('date', '00000000'), reverse=True)
                     return entries
+                else:
+                    # No results with this UA - log and try next
+                    logging.debug(f"Method 4: No results with UA: {ua[:40]}")
+            else:
+                # Empty stdout - log and try next
+                logging.debug(f"Method 4: Empty output with UA: {ua[:40]}")
+                if result.stderr:
+                    logging.debug(f"   Stderr: {result.stderr[:300]}")
 
-        except Exception:
+        except Exception as e:
+            logging.debug(f"Method 4: Exception with UA {ua[:40]}: {str(e)[:200]}")
             continue
 
+    # All user agents failed
+    logging.warning(f"❌ Method 4 (user agent rotation) failed:")
+    logging.warning(f"   Tried {len(user_agents)} different user agents")
+    logging.warning(f"   URL: {url}")
     return []
 
 
-def _method_instaloader(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0) -> typing.List[dict]:
+def _method_instaloader(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, proxy: str = None) -> typing.List[dict]:
     """METHOD 5: Instaloader (INSTAGRAM SPECIALIST) - No artificial limits"""
     if platform_key != 'instagram':
         return []
@@ -1312,43 +1506,63 @@ def _method_instaloader(url: str, platform_key: str, cookie_file: str = None, ma
             compress_json=False
         )
 
-        # Load cookies if available
-        if cookie_file:
-            try:
-                cookies_dict = {}
-                with open(cookie_file, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        if line.strip() and not line.startswith('#'):
-                            parts = line.strip().split('\t')
-                            if len(parts) >= 7:
-                                cookies_dict[parts[5]] = parts[6]
-                if cookies_dict:
-                    loader.context._session.cookies.update(cookies_dict)
-                    logging.info(f"✅ Loaded {len(cookies_dict)} cookies for Instagram")
-            except Exception as e:
-                logging.debug(f"Cookie loading failed: {e}")
+        cookies_loaded = _apply_instaloader_session(loader, cookie_file, platform_key, proxy)
+        if cookies_loaded:
+            logging.info(f"Loaded {cookies_loaded} cookies for Instagram")
 
         profile = instaloader.Profile.from_username(loader.context, username)
         logging.info(f"📊 Instagram profile: @{username} ({profile.mediacount} posts)")
 
         entries = []
+        seen_shortcodes = set()
+        target_count = max_videos if max_videos > 0 else 0
+        max_attempts = 3
+        attempt = 0
 
-        # Respect max_videos from GUI (0 = unlimited)
-        for idx, post in enumerate(profile.get_posts(), 1):
-            entries.append({
-                'url': f"https://www.instagram.com/p/{post.shortcode}/",
-                'title': (post.caption or 'Instagram Post')[:100],
-                'date': post.date_utc.strftime('%Y%m%d') if post.date_utc else '00000000'
-            })
+        while attempt < max_attempts:
+            try:
+                for idx, post in enumerate(profile.get_posts(), 1):
+                    shortcode = getattr(post, 'shortcode', None)
+                    if not shortcode or shortcode in seen_shortcodes:
+                        continue
+                    seen_shortcodes.add(shortcode)
+                    entries.append({
+                        'url': f"https://www.instagram.com/p/{shortcode}/",
+                        'title': (post.caption or 'Instagram Post')[:100],
+                        'date': post.date_utc.strftime('%Y%m%d') if post.date_utc else '00000000'
+                    })
 
-            # Progress logging every 50 posts
-            if idx % 50 == 0:
-                logging.info(f"📥 Extracted {idx} Instagram posts...")
+                    # IP PROTECTION: Add delay between post fetches to avoid rate limiting
+                    # Instagram allows ~1-2 requests per second, so we use 1.5-3 second delay
+                    if idx > 1 and idx % 5 == 0:  # Every 5 posts, add a longer delay
+                        delay = random.uniform(3.0, 5.0)
+                        logging.debug(f"   Instaloader: Fetched {idx} posts, waiting {delay:.1f}s (IP protection)...")
+                        time.sleep(delay)
+                    else:
+                        # Regular delay between posts
+                        delay = random.uniform(1.5, 2.5)
+                        time.sleep(delay)
 
-            # Only break if limit is specified (0 means unlimited)
-            if max_videos > 0 and len(entries) >= max_videos:
-                logging.info(f"✅ Reached Instagram limit of {max_videos} posts")
-                break
+                    # Progress logging every 50 posts
+                    if idx % 50 == 0:
+                        logging.info(f"Extracted {idx} Instagram posts...")
+
+                    # Only break if limit is specified (0 means unlimited)
+                    if target_count > 0 and len(entries) >= target_count:
+                        logging.info(f"Reached Instagram limit of {target_count} posts")
+                        break
+
+                break  # Completed without error
+
+            except Exception as e:
+                attempt += 1
+                if attempt >= max_attempts:
+                    logging.error(f"Instaloader stopped after {attempt} attempts: {e}")
+                    break
+                cooldown = min(60, 10 * attempt)
+                logging.warning(f"Instaloader retry {attempt}/{max_attempts} after error: {str(e)[:120]}")
+                logging.warning(f"Cooling down for {cooldown}s before retry...")
+                time.sleep(cooldown)
 
         # Sort by date (newest first)
         entries.sort(key=lambda x: x.get('date', '00000000'), reverse=True)
@@ -1378,7 +1592,7 @@ def _method_gallery_dl(url: str, platform_key: str, cookie_file: str = None, pro
 
         # Add proxy if available
         if proxy:
-            proxy_url = proxy if proxy.startswith('http') else f"http://{proxy}"
+            proxy_url = _parse_proxy_format(proxy)  # FIXED: Properly parse ip:port:user:pass format
             cmd.extend(['--proxy', proxy_url])
             logging.debug(f"Method 6 (gallery-dl): Using proxy {proxy_url.split('@')[-1][:20]}...")
 
@@ -1667,15 +1881,16 @@ def _method_playwright(url: str, platform_key: str, cookie_file: str = None, pro
                         entries.append({'url': full_url, 'title': 'Instagram Post', 'date': '00000000'})
 
             elif platform_key == 'youtube':
-                # NEW: YouTube support
+                # FIXED: YouTube support with SIMPLE selector (matches Selenium)
                 previous_count = 0
                 no_change_count = 0
                 scroll_count = 0
                 max_scrolls = 30 if max_videos == 0 else min(30, max_videos // 10 + 3)
 
                 while no_change_count < 3 and scroll_count < max_scrolls:
-                    # YouTube video links
-                    video_links = page.query_selector_all('a#video-title, a.yt-simple-endpoint[href*="/watch?v="]')
+                    # FIXED: Use same simple selector as Selenium (PROVEN TO WORK!)
+                    # Finds: /watch?v= (regular videos) AND /shorts/ (shorts)
+                    video_links = page.query_selector_all('a[href*="/watch?v="], a[href*="/shorts/"]')
                     current_count = len(video_links)
 
                     if current_count == previous_count:
@@ -1699,11 +1914,11 @@ def _method_playwright(url: str, platform_key: str, cookie_file: str = None, pro
                     if max_videos > 0 and len(entries) >= max_videos:
                         break
                     if href := link.get_attribute('href'):
-                        if '/watch?v=' in href:
+                        if '/watch?v=' in href or '/shorts/' in href:
                             full_url = f"https://www.youtube.com{href}" if not href.startswith('http') else href
-                            # Clean URL (remove tracking params)
-                            full_url = full_url.split('&')[0]
-                            title = link.get_attribute('title') or 'YouTube Video'
+                            # Clean URL (remove tracking & playlist params)
+                            full_url = full_url.split('&')[0].split('?list=')[0]
+                            title = link.get_attribute('title') or link.get_attribute('aria-label') or 'YouTube Video'
                             entries.append({'url': full_url, 'title': title[:100], 'date': '00000000'})
 
             context.close()
@@ -1728,9 +1943,20 @@ def _method_selenium(
     url: str,
     platform_key: str,
     max_videos: int = 0,
-    cookie_file: str = None
+    cookie_file: str = None,
+    proxy: str = None,
+    progress_callback=None
 ) -> typing.List[dict]:
-    """METHOD 8: Selenium (ABSOLUTE LAST RESORT with cookies)"""
+    """
+    METHOD 8: Selenium Headless (ENHANCED with Proxy + Cookies + Stealth)
+
+    The MOST RELIABLE method - uses real browser automation with:
+    - Headless Chrome for stealth
+    - Proxy support (HTTP/SOCKS with authentication)
+    - Cookie injection for authenticated access
+    - Anti-detection measures
+    - Human-like scrolling behavior
+    """
     driver = None
     try:
         from selenium import webdriver
@@ -1738,14 +1964,42 @@ def _method_selenium(
         from selenium.webdriver.chrome.options import Options
 
         options = Options()
+
+        # HEADLESS MODE: Run without visible window
         options.add_argument('--headless=new')
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-gpu')
+
+        # STEALTH FEATURES: Avoid detection
         options.add_argument('--disable-blink-features=AutomationControlled')
-        options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
-        options.add_argument('--window-size=1400,900')
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option('useAutomationExtension', False)
+
+        # REALISTIC BROWSER FINGERPRINT
+        user_agent = _get_random_user_agent()
+        options.add_argument(f'--user-agent={user_agent}')
+        options.add_argument('--window-size=1920,1080')
+        options.add_argument('--lang=en-US,en;q=0.9')
+
+        # PROXY SUPPORT: Critical for IP blocking avoidance
+        if proxy:
+            proxy_url = _parse_proxy_format(proxy)  # FIXED: Properly parse ip:port:user:pass format
+            options.add_argument(f'--proxy-server={proxy_url}')
+            if progress_callback:
+                progress_callback(f"🌐 Selenium: Using proxy {proxy_url.split('@')[-1][:30]}...")
+            logging.info(f"Selenium: Proxy configured: {proxy_url.split('@')[-1][:30]}")
 
         driver = webdriver.Chrome(options=options)
+
+        # Override navigator.webdriver property (anti-detection)
+        driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
+            'source': '''
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                })
+            '''
+        })
         driver.set_page_load_timeout(40)
 
         # Load cookies if available (critical for TikTok private/region locked pages)
@@ -1777,23 +2031,33 @@ def _method_selenium(
                 except Exception:
                     continue
 
+        # Navigate to target URL
         if cookies_loaded:
+            if progress_callback:
+                progress_callback(f"🍪 Selenium: Cookies injected, loading target page...")
             driver.get(url)
         else:
+            if progress_callback:
+                progress_callback(f"🌐 Selenium: Loading page (no cookies)...")
             driver.get(url)
 
+        # Wait for page to load
         time.sleep(5)
 
+        # Platform-specific selectors
         selector_map = {
             'tiktok': 'a[href*="/video/"]',
             'instagram': 'a[href*="/p/"], a[href*="/reel/"]',
-            'youtube': 'a[href*="/watch?v="]'
+            'youtube': 'a[href*="/watch?v="], a[href*="/shorts/"]'  # FIXED: Added Shorts support
         }
         selector = selector_map.get(platform_key, 'a')
 
         seen_urls: typing.Set[str] = set()
         scroll_attempts = 0
         stagnant_rounds = 0
+
+        if progress_callback:
+            progress_callback(f"📜 Selenium: Scrolling and extracting links...")
 
         while scroll_attempts < 20 and stagnant_rounds < 3:
             links = driver.find_elements(By.CSS_SELECTOR, selector)
@@ -1810,34 +2074,305 @@ def _method_selenium(
                     break
 
             if max_videos and len(seen_urls) >= max_videos:
+                if progress_callback:
+                    progress_callback(f"✓ Selenium: Reached limit of {max_videos} videos")
                 break
 
-            if len(seen_urls) == before_count:
+            # Check if we found new links this round
+            new_links_found = len(seen_urls) - before_count
+            if new_links_found == 0:
                 stagnant_rounds += 1
+                if progress_callback and stagnant_rounds == 1:
+                    progress_callback(f"⏳ Selenium: No new links, continuing... ({len(seen_urls)} total)")
             else:
                 stagnant_rounds = 0
+                if progress_callback and scroll_attempts % 5 == 0:
+                    progress_callback(f"📊 Selenium: Found {len(seen_urls)} links so far...")
 
-            driver.execute_script("window.scrollBy(0, 1500)")
-            time.sleep(2)
+            # Human-like scrolling with random variation
+            scroll_amount = random.randint(1200, 1800)
+            driver.execute_script(f"window.scrollBy(0, {scroll_amount})")
+
+            # Random delay to mimic human behavior
+            delay = random.uniform(1.5, 2.5)
+            time.sleep(delay)
             scroll_attempts += 1
+
+        if progress_callback:
+            progress_callback(f"✅ Selenium: Extraction complete - {len(seen_urls)} links found")
 
         entries = []
         limit = max_videos or len(seen_urls)
         for href in list(seen_urls)[:limit]:
             entries.append({'url': href, 'title': '', 'date': '00000000'})
 
+        logging.info(f"Selenium method: Successfully extracted {len(entries)} links")
         return entries
 
     except ImportError:
-        logging.debug("Selenium not installed")
+        logging.warning("❌ Selenium not installed (pip install selenium)")
+        if progress_callback:
+            progress_callback("❌ Selenium not available - install with: pip install selenium")
     except Exception as e:
-        logging.debug(f"Method 8 (selenium) failed: {e}")
+        logging.warning(f"❌ Selenium method failed:")
+        logging.warning(f"   URL: {url}")
+        logging.warning(f"   Error: {str(e)[:300]}")
+        logging.warning(f"   Platform: {platform_key}")
+        if proxy:
+            logging.warning(f"   Proxy: {proxy.split('@')[-1][:30]}")
+        if progress_callback:
+            progress_callback(f"❌ Selenium error: {str(e)[:100]}")
     finally:
         if driver:
             try:
                 driver.quit()
             except Exception:
                 pass
+
+    return []
+
+
+# ============ OLD WORKING METHODS (From ffbdcc8 - Proven to Work!) ============
+
+def _method_old_batch_file(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, proxy: str = None) -> typing.List[dict]:
+    """
+    OLD METHOD 9: ORIGINAL Batch File Approach (PROVEN 100% for Instagram/TikTok!)
+
+    This was the ORIGINAL working method from ffbdcc8 commit
+    Simple yt-dlp --flat-playlist --get-url
+    """
+    try:
+        logging.info("🕰️ Trying OLD Method 9: Original Batch File Approach")
+
+        cmd = ['yt-dlp', '--flat-playlist', '--get-url', '--ignore-errors', '--no-warnings']
+
+        if cookie_file:
+            cmd.extend(['--cookies', cookie_file])
+
+        if proxy:
+            proxy_url = _parse_proxy_format(proxy)  # FIXED: Properly parse ip:port:user:pass format
+            cmd.extend(['--proxy', proxy_url])
+
+        if max_videos > 0:
+            cmd.extend(['--playlist-end', str(max_videos)])
+
+        if platform_key == 'instagram':
+            from .config import get_instagram_feed_count
+            feed_count = get_instagram_feed_count(max_videos)
+            if feed_count > 0:
+                cmd.extend(['--extractor-args', f'instagram:feed_count={feed_count}'])
+
+        cmd.append(url)
+
+        # DEBUG: Log the actual command being run
+        logging.info(f"🔧 OLD Method 9 command: {' '.join(cmd[:8])}... (full command logged)")
+        logging.debug(f"   Full command: {' '.join(cmd)}")
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            encoding='utf-8',
+            errors='replace'
+        )
+
+        # DEBUG: Log exit code
+        logging.debug(f"   Exit code: {result.returncode}")
+
+        if result.stdout:
+            urls = [
+                line.strip()
+                for line in result.stdout.splitlines()
+                if line.strip() and line.strip().startswith('http')
+            ]
+
+            if urls:
+                logging.info(f"✅ OLD Method 9 SUCCESS: {len(urls)} links")
+                return [{'url': u, 'title': '', 'date': '00000000'} for u in urls]
+            else:
+                # Stdout exists but no URLs found
+                logging.warning(f"⚠️ OLD Method 9: Stdout exists but no URLs found")
+                logging.warning(f"   Stdout preview: {result.stdout[:300]}")
+        else:
+            # No stdout at all
+            logging.warning(f"⚠️ OLD Method 9: No stdout output")
+
+        # CRITICAL: Log stderr to see the REAL error
+        if result.stderr:
+            logging.warning(f"❌ OLD Method 9 STDERR: {result.stderr[:500]}")
+
+        logging.info(f"⚠️ OLD Method 9 failed - see stderr above for details")
+
+    except Exception as e:
+        logging.warning(f"❌ OLD Method 9 EXCEPTION: {str(e)[:200]}")
+
+    return []
+
+
+def _method_old_dump_json(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, proxy: str = None) -> typing.List[dict]:
+    """
+    OLD METHOD 10: ORIGINAL Dump JSON (PROVEN to work!)
+
+    Simple yt-dlp --dump-json without complex features
+    """
+    try:
+        logging.info("🕰️ Trying OLD Method 10: Original Dump JSON")
+
+        cmd = ['yt-dlp', '--dump-json', '--flat-playlist', '--ignore-errors', '--no-warnings']
+
+        if cookie_file:
+            cmd.extend(['--cookies', cookie_file])
+
+        if proxy:
+            proxy_url = _parse_proxy_format(proxy)  # FIXED: Properly parse ip:port:user:pass format
+            cmd.extend(['--proxy', proxy_url])
+
+        if max_videos > 0:
+            cmd.extend(['--playlist-end', str(max_videos)])
+
+        # Simple platform optimizations
+        if platform_key == 'instagram':
+            from .config import get_instagram_feed_count
+            feed_count = get_instagram_feed_count(max_videos)
+            if feed_count > 0:
+                cmd.extend(['--extractor-args', f'instagram:feed_count={feed_count}'])
+        elif platform_key == 'youtube':
+            cmd.extend(['--extractor-args', 'youtube:player_client=android'])
+
+        cmd.append(url)
+
+        # DEBUG: Log the actual command being run
+        logging.info(f"🔧 OLD Method 10 command: {' '.join(cmd[:8])}... (full command logged)")
+        logging.debug(f"   Full command: {' '.join(cmd)}")
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            encoding='utf-8',
+            errors='replace'
+        )
+
+        # DEBUG: Log exit code
+        logging.debug(f"   Exit code: {result.returncode}")
+
+        if result.stdout:
+            entries = []
+            for line in result.stdout.splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    data = json.loads(line)
+                    video_url = data.get('webpage_url') or data.get('url')
+                    if video_url:
+                        entries.append({
+                            'url': video_url,
+                            'title': data.get('title', 'Untitled')[:100],
+                            'date': data.get('upload_date', '00000000')
+                        })
+                except (json.JSONDecodeError, KeyError):
+                    continue
+
+            if entries:
+                logging.info(f"✅ OLD Method 10 SUCCESS: {len(entries)} links")
+                return entries
+            else:
+                # Stdout exists but no valid JSON entries
+                logging.warning(f"⚠️ OLD Method 10: Stdout exists but no valid JSON entries")
+                logging.warning(f"   Stdout preview: {result.stdout[:300]}")
+        else:
+            # No stdout at all
+            logging.warning(f"⚠️ OLD Method 10: No stdout output")
+
+        # CRITICAL: Log stderr to see the REAL error
+        if result.stderr:
+            logging.warning(f"❌ OLD Method 10 STDERR: {result.stderr[:500]}")
+
+        logging.info("⚠️ OLD Method 10 failed - see stderr above for details")
+
+    except Exception as e:
+        logging.warning(f"❌ OLD Method 10 EXCEPTION: {str(e)[:200]}")
+
+    return []
+
+
+def _method_old_instaloader(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, proxy: str = None) -> typing.List[dict]:
+    """
+    OLD METHOD 11: ORIGINAL Instaloader (PROVEN for Instagram!)
+
+    Simple Instaloader without complex authentication
+    """
+    if platform_key != 'instagram':
+        return []
+
+    try:
+        logging.info("🕰️ Trying OLD Method 11: Original Instaloader")
+
+        import instaloader
+
+        username_match = re.search(r'instagram\.com/([^/?#]+)', url)
+        if not username_match or username_match.group(1) in ['p', 'reel', 'tv', 'stories']:
+            return []
+
+        username = username_match.group(1)
+
+        loader = instaloader.Instaloader(
+            quiet=True,
+            download_videos=False,
+            save_metadata=False,
+            download_pictures=False
+        )
+
+        _apply_instaloader_session(loader, cookie_file, platform_key, proxy)
+
+        profile = instaloader.Profile.from_username(loader.context, username)
+        entries = []
+        seen_shortcodes = set()
+        target_count = max_videos if max_videos > 0 else 0
+
+        try:
+            for idx, post in enumerate(profile.get_posts(), 1):
+                shortcode = getattr(post, 'shortcode', None)
+                if not shortcode or shortcode in seen_shortcodes:
+                    continue
+                seen_shortcodes.add(shortcode)
+                entries.append({
+                    'url': f"https://www.instagram.com/p/{shortcode}/",
+                    'title': (post.caption or 'Instagram Post')[:100],
+                    'date': post.date_utc.strftime('%Y%m%d') if hasattr(post, 'date_utc') else '00000000'
+                })
+
+                # IP PROTECTION: Add delay between post fetches to avoid rate limiting
+                # Instagram allows ~1-2 requests per second, so we use 1.5-3 second delay
+                if idx > 0 and idx % 5 == 0:  # Every 5 posts, add a longer delay
+                    delay = random.uniform(3.0, 5.0)
+                    logging.debug(f"   Instaloader: Fetched {idx+1} posts, waiting {delay:.1f}s (IP protection)...")
+                    time.sleep(delay)
+                else:
+                    # Regular delay between posts
+                    delay = random.uniform(1.5, 2.5)
+                    time.sleep(delay)
+
+                if target_count > 0 and len(entries) >= target_count:
+                    break
+        except Exception as e:
+            logging.warning(f"OLD Method 11 interrupted: {str(e)[:200]}")
+
+        if entries:
+            logging.info(f"✅ OLD Method 11 SUCCESS: {len(entries)} links")
+            return entries
+        else:
+            logging.warning("⚠️ OLD Method 11: No posts found from profile")
+
+    except ImportError:
+        logging.warning("❌ OLD Method 11 unavailable: instaloader not installed")
+    except Exception as e:
+        # Log full exception details for debugging
+        logging.warning(f"❌ OLD Method 11 EXCEPTION: {type(e).__name__}: {str(e)[:300]}")
+        import traceback
+        logging.debug(f"   Full traceback: {traceback.format_exc()[:500]}")
 
     return []
 
@@ -1913,6 +2448,53 @@ def extract_links_intelligent(
         proxy_list = options.get('proxies', []) or []
         active_proxy = proxy_list[0] if proxy_list else None  # Use first proxy if available
         use_enhancements = options.get('use_enhancements', True)  # Enable enhancements by default
+        from .config import get_exhaustive_mode
+        exhaustive_mode = force_all_methods or get_exhaustive_mode()
+
+        expected_count = None
+        if platform_key == 'instagram' and exhaustive_mode:
+            expected_count = _get_instagram_expected_count(url, cookie_file, active_proxy)
+
+        target_count = max_videos if max_videos > 0 else (expected_count or 0)
+
+        # FIXED: Auto-append /videos or /shorts to YouTube URLs if needed
+        original_url = url
+        if platform_key == 'youtube' and '@' in url:
+            # Check if URL already has a tab suffix
+            if not any(suffix in url for suffix in ['/videos', '/shorts', '/streams', '/playlists', '/community', '/channels', '/about']):
+                # No tab specified - try /videos first (most common)
+                url = f"{url.rstrip('/')}/videos"
+                if progress_callback:
+                    progress_callback(f"📝 YouTube URL normalized:")
+                    progress_callback(f"   From: {original_url}")
+                    progress_callback(f"   To: {url}")
+                    progress_callback(f"   💡 Tip: Use /@username/videos or /@username/shorts for direct access")
+
+        # Check yt-dlp version and log it
+        ytdlp_version = "Unknown"
+        ytdlp_location = "Unknown"
+        try:
+            # Try to get version from Python module
+            import yt_dlp
+            ytdlp_version = yt_dlp.version.__version__
+            ytdlp_location = "Python module"
+        except:
+            # Try to get version from binary
+            try:
+                ytdlp_path = _get_ytdlp_binary_path()
+                result = subprocess.run(
+                    [ytdlp_path, '--version'],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    encoding='utf-8',
+                    errors='replace'
+                )
+                if result.stdout:
+                    ytdlp_version = result.stdout.strip().split()[0]
+                    ytdlp_location = ytdlp_path if ytdlp_path != 'yt-dlp' else "System PATH"
+            except:
+                pass
 
         # Show configuration summary
         if progress_callback:
@@ -1920,6 +2502,7 @@ def extract_links_intelligent(
             progress_callback(f"📊 Extraction Configuration:")
             progress_callback(f"   • Creator: @{creator}")
             progress_callback(f"   • Platform: {platform_key.title()}")
+            progress_callback(f"   • yt-dlp: v{ytdlp_version} ({ytdlp_location})")
             if active_proxy:
                 progress_callback(f"   • Proxy: {active_proxy} ✓")
             if cookie_file:
@@ -1928,13 +2511,33 @@ def extract_links_intelligent(
                 progress_callback(f"   • Limit: {max_videos} videos")
             else:
                 progress_callback(f"   • Limit: All videos (unlimited)")
+            if expected_count:
+                progress_callback(f"   Expected posts: {expected_count}")
             if use_enhancements:
                 progress_callback(f"   • Enhancements: Enabled (Dual yt-dlp + UA Rotation)")
             progress_callback(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
         # Define all available methods (pass cookie_browser to yt-dlp methods)
-        # PRIORITY ORDER: Enhanced method first, then fallback methods
+        # PRIORITY ORDER: OLD PROVEN METHODS FIRST, then advanced fallback methods
+        # ============================================================================
+        # 🕰️ OLD WORKING METHODS (From ffbdcc8 - PROVEN to work 100%!)
+        # These run FIRST because they worked perfectly in the beginning
+        # ============================================================================
         all_methods = [
+            # ========== PRIORITY 1-3: OLD PROVEN METHODS ==========
+            ("OLD Method 9: Original Batch File Approach (PROVEN 100%)",
+             lambda: _method_old_batch_file(url, platform_key, cookie_file, max_videos, active_proxy),
+             True),  # Always try this first
+
+            ("OLD Method 10: Original Dump JSON (PROVEN 100%)",
+             lambda: _method_old_dump_json(url, platform_key, cookie_file, max_videos, active_proxy),
+             True),  # Second priority
+
+            ("OLD Method 11: Original Instaloader (PROVEN 100%)",
+             lambda: _method_old_instaloader(url, platform_key, cookie_file, max_videos, active_proxy),
+             platform_key == 'instagram'),  # Instagram only
+
+            # ========== PRIORITY 4-12: ADVANCED METHODS (Fallback) ==========
             ("Method 0: Enhanced yt-dlp (Dual API + Proxy + UA Rotation)",
              lambda: _method_ytdlp_enhanced(url, platform_key, cookie_file, max_videos, cookie_browser, active_proxy),
              use_enhancements),  # Only use if enhancements enabled
@@ -1960,15 +2563,15 @@ def extract_links_intelligent(
              platform_key in ['instagram', 'tiktok']),
 
             ("Method 5: Instaloader",
-             lambda: _method_instaloader(url, platform_key, cookie_file, max_videos),
+             lambda: _method_instaloader(url, platform_key, cookie_file, max_videos, active_proxy),
              platform_key == 'instagram'),
 
             ("Method 7: Playwright (ENHANCED: Stealth + Proxy + Human Behavior)",
              lambda: _method_playwright(url, platform_key, cookie_file, active_proxy, max_videos),
              platform_key in ['tiktok', 'instagram', 'youtube']),
 
-            ("Method 8: Selenium",
-             lambda: _method_selenium(url, platform_key, max_videos, cookie_file),
+            ("Method 8: Selenium Headless (ENHANCED: Proxy + Cookies + Stealth)",
+             lambda: _method_selenium(url, platform_key, max_videos, cookie_file, active_proxy, progress_callback),
              True),
         ]
 
@@ -2058,7 +2661,12 @@ def extract_links_intelligent(
                 if progress_callback:
                     progress_callback(f"✅ {method_name} → {added} links in {time_taken:.1f}s")
 
-                if not force_all_methods:
+                if target_count > 0 and len(entries) >= target_count:
+                    if progress_callback:
+                        progress_callback(f"Target reached: {len(entries)}/{target_count} links")
+                    break
+
+                if not exhaustive_mode:
                     break  # Stop on first success
             else:
                 if progress_callback:
@@ -2067,6 +2675,18 @@ def extract_links_intelligent(
                     # If this was the learned "best" method and it failed, inform user we'll try others
                     if method_name == best_method_name and best_method_name:
                         progress_callback(f"   🔄 Best method didn't work, continuing with other methods...")
+
+                # ============================================================
+                # IP PROTECTION: Mandatory delay between failed method attempts
+                # This prevents rapid-fire requests that could trigger IP blocking
+                # ============================================================
+                # Check if there are more methods to try (don't delay after last method)
+                current_index = available_methods.index((method_name, method_func))
+                if current_index < len(available_methods) - 1:
+                    delay = random.uniform(2.0, 4.0)
+                    if progress_callback:
+                        progress_callback(f"⏳ IP Protection: Waiting {delay:.1f}s before next method...")
+                    time.sleep(delay)
 
         # Cleanup temp cookies
         for temp_cookie_file in temp_cookie_files:

@@ -71,6 +71,8 @@ class ConfigManager:
         },
         "link_grabber": {
             "max_videos": 0,  # 0 = unlimited
+            "instagram_feed_count": 200,  # yt-dlp instagram:feed_count override (0 = yt-dlp default)
+            "exhaustive_mode": True,  # Try all methods and merge results for best coverage
             "save_folder": str(Path.home() / "Desktop" / "Links Grabber"),
             "auto_save": False
         },

@@ -158,8 +158,68 @@ LOG_CONFIG = {
 }
 
 # ============================================================================
+# INSTAGRAM SETTINGS
+# ============================================================================
+
+INSTAGRAM_CONFIG = {
+    # yt-dlp extractor arg: instagram:feed_count
+    # 0 = use yt-dlp default
+    'feed_count_default': 200,
+}
+
+# ============================================================================
+# EXTRACTION SETTINGS
+# ============================================================================
+
+EXTRACTION_CONFIG = {
+    # When True, try all methods and merge results instead of stopping on first success.
+    'exhaustive_mode_default': True,
+}
+
+# ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
+
+def get_instagram_feed_count(max_videos: int = 0) -> int:
+    """
+    Resolve Instagram feed_count (yt-dlp extractor arg).
+
+    Priority:
+    1) Explicit max_videos from UI (if > 0)
+    2) ConfigManager link_grabber.instagram_feed_count
+    3) INSTAGRAM_CONFIG default
+    """
+    default_count = INSTAGRAM_CONFIG.get('feed_count_default', 200)
+    configured = default_count
+
+    try:
+        from modules.config.config_manager import ConfigManager
+        configured = ConfigManager().get('link_grabber.instagram_feed_count', default_count)
+    except Exception:
+        configured = default_count
+
+    try:
+        configured = int(configured)
+    except (TypeError, ValueError):
+        configured = default_count
+
+    if max_videos and max_videos > 0:
+        return max_videos
+
+    return max(configured, 0)
+
+
+def get_exhaustive_mode() -> bool:
+    """
+    Resolve whether to run in exhaustive mode (try all methods).
+    """
+    default_value = bool(EXTRACTION_CONFIG.get('exhaustive_mode_default', True))
+    try:
+        from modules.config.config_manager import ConfigManager
+        configured = ConfigManager().get('link_grabber.exhaustive_mode', default_value)
+        return bool(configured)
+    except Exception:
+        return default_value
 
 def get_rate_limit(platform: str) -> int:
     """

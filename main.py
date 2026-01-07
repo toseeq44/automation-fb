@@ -157,14 +157,16 @@ def main():
         else:
             # License exists but invalid (expired or offline too long)
             logger.warning("License invalid or expired", "License")
-            QMessageBox.warning(
+            QMessageBox.critical(
                 None,
-                "License Issue",
+                "License Expired",
                 f"{message}\n\n"
-                "Please check your license or renew your subscription.\n"
-                "Some features may be limited."
+                "Your license has expired or is invalid.\n"
+                "Please renew your subscription to continue using OneSoul.\n\n"
+                "The application will now close."
             )
-            # Allow app to run in demo mode
+            logger.info("License expired. Application exiting.", "License")
+            sys.exit(0)
     else:
         logger.info(f"License validated successfully: {message}", "License")
         days_remaining = license_info.get('days_remaining', 0) if license_info else 0

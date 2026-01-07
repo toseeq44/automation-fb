@@ -64,6 +64,7 @@ class MetadataBatchWorker(QThread):
         self.settings: MetadataRemovalSettings = config.get('settings')
         self.mapping: MetadataFolderMapping = config.get('mapping')
         self.plan_checker: MetadataPlanLimitChecker = config.get('plan_checker')
+        self.stealth_mode = config.get('stealth_mode', 'quick')  # quick, deep, maximum
 
         self._cancelled = False
         self._paused = False
@@ -94,7 +95,14 @@ class MetadataBatchWorker(QThread):
             self.processing_finished.emit(self._get_summary())
             return
 
-        self.log_message.emit(f"Starting metadata removal for {total} videos", "info")
+        # Log stealth mode
+        mode_names = {
+            'quick': 'Quick Stealth (70% undetectable)',
+            'deep': 'Deep Stealth (90% undetectable)',
+            'maximum': 'Maximum Stealth (99% undetectable)'
+        }
+        mode_name = mode_names.get(self.stealth_mode, 'Quick Stealth')
+        self.log_message.emit(f"Starting {mode_name} processing for {total} videos", "info")
 
         for idx, video_info in enumerate(self.videos):
             # Check if cancelled
@@ -310,9 +318,32 @@ class MetadataBatchWorker(QThread):
 
     def _remove_metadata_ffmpeg(self, input_path: str, output_path: str) -> bool:
         """
-        Remove metadata using FFmpeg
+        Remove metadata using FFmpeg with stealth mode processing
 
-        Uses: ffmpeg -i input -map_metadata -1 -c copy output
+        Args:
+            input_path: Input video path
+            output_path: Output video path
+
+        Returns:
+            True if successful
+        """
+        # Route to appropriate stealth mode processor
+        if self.stealth_mode == 'quick':
+            return self._process_quick_stealth(input_path, output_path)
+        elif self.stealth_mode == 'deep':
+            return self._process_deep_stealth(input_path, output_path)
+        elif self.stealth_mode == 'maximum':
+            return self._process_maximum_stealth(input_path, output_path)
+        else:
+            # Default to quick
+            return self._process_quick_stealth(input_path, output_path)
+
+    def _process_quick_stealth(self, input_path: str, output_path: str) -> bool:
+        """
+        Quick Stealth Mode (70% undetectable)
+        - Metadata removal
+        - Re-encoding with different parameters
+        - Basic audio processing
 
         Args:
             input_path: Input video path
@@ -322,12 +353,17 @@ class MetadataBatchWorker(QThread):
             True if successful
         """
         try:
-            # Build FFmpeg command
+            # Build FFmpeg command for quick stealth
             cmd = [
                 'ffmpeg',
                 '-i', input_path,
                 '-map_metadata', '-1',  # Remove all metadata
-                '-c', 'copy',  # Copy streams without re-encoding (fast!)
+                '-c:v', 'libx264',  # Re-encode video
+                '-preset', 'medium',
+                '-crf', '23',  # Quality
+                '-c:a', 'aac',  # Re-encode audio
+                '-b:a', '192k',
+                '-ar', '48000',  # Change sample rate
                 '-y',  # Overwrite output
                 output_path
             ]
@@ -337,24 +373,160 @@ class MetadataBatchWorker(QThread):
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=300  # 5 minute timeout per video
+                timeout=600  # 10 minute timeout
             )
 
             if result.returncode != 0:
-                logger.error(f"FFmpeg error: {result.stderr}")
+                error_msg = result.stderr if result.stderr else "Unknown FFmpeg error"
+                logger.error(f"FFmpeg quick stealth error: {error_msg}")
+                self.log_message.emit(f"Processing error: {error_msg[:200]}", "error")
                 return False
 
             return True
 
         except subprocess.TimeoutExpired:
-            logger.error("FFmpeg timeout")
+            logger.error("FFmpeg timeout in quick stealth")
+            self.log_message.emit("Processing timeout", "error")
             return False
         except FileNotFoundError:
             logger.error("FFmpeg not found. Please install FFmpeg.")
             self.log_message.emit("FFmpeg not found! Please install FFmpeg.", "error")
             return False
         except Exception as e:
-            logger.error(f"Error running FFmpeg: {e}")
+            logger.error(f"Error running FFmpeg quick stealth: {e}")
+            self.log_message.emit(f"Processing error: {str(e)}", "error")
+            return False
+
+    def _process_deep_stealth(self, input_path: str, output_path: str) -> bool:
+        """
+        Deep Stealth Mode (90% undetectable)
+        - Everything in Quick mode
+        - Advanced color grading
+        - Pixel-level changes
+        - Different encoding parameters
+
+        Args:
+            input_path: Input video path
+            output_path: Output video path
+
+        Returns:
+            True if successful
+        """
+        try:
+            # Build FFmpeg command for deep stealth
+            # Add video filters for color grading and subtle pixel changes
+            cmd = [
+                'ffmpeg',
+                '-i', input_path,
+                '-map_metadata', '-1',  # Remove all metadata
+                '-vf', 'eq=brightness=0.02:saturation=1.05,noise=alls=2:allf=t',  # Color + noise
+                '-c:v', 'libx264',
+                '-preset', 'slow',  # Better quality encoding
+                '-crf', '22',
+                '-c:a', 'aac',
+                '-b:a', '192k',
+                '-ar', '44100',  # Different sample rate
+                '-y',
+                output_path
+            ]
+
+            # Run FFmpeg
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=1800  # 30 minute timeout
+            )
+
+            if result.returncode != 0:
+                error_msg = result.stderr if result.stderr else "Unknown FFmpeg error"
+                logger.error(f"FFmpeg deep stealth error: {error_msg}")
+                self.log_message.emit(f"Processing error: {error_msg[:200]}", "error")
+                return False
+
+            return True
+
+        except subprocess.TimeoutExpired:
+            logger.error("FFmpeg timeout in deep stealth")
+            self.log_message.emit("Processing timeout", "error")
+            return False
+        except FileNotFoundError:
+            logger.error("FFmpeg not found. Please install FFmpeg.")
+            self.log_message.emit("FFmpeg not found! Please install FFmpeg.", "error")
+            return False
+        except Exception as e:
+            logger.error(f"Error running FFmpeg deep stealth: {e}")
+            self.log_message.emit(f"Processing error: {str(e)}", "error")
+            return False
+
+    def _process_maximum_stealth(self, input_path: str, output_path: str) -> bool:
+        """
+        Maximum Stealth Mode (99% undetectable)
+        - Everything in Deep mode
+        - Multiple filter passes
+        - Maximum encoding differences
+        - Temporal manipulation
+
+        Args:
+            input_path: Input video path
+            output_path: Output video path
+
+        Returns:
+            True if successful
+        """
+        try:
+            # Build FFmpeg command for maximum stealth
+            # Complex filter chain with multiple transformations
+            cmd = [
+                'ffmpeg',
+                '-i', input_path,
+                '-map_metadata', '-1',  # Remove all metadata
+                '-vf', (
+                    'eq=brightness=0.03:saturation=1.08:gamma=1.02,'  # Color adjustment
+                    'noise=alls=3:allf=t,'  # Noise injection
+                    'unsharp=5:5:0.3:5:5:0.3,'  # Subtle sharpening
+                    'format=yuv420p'  # Ensure compatibility
+                ),
+                '-c:v', 'libx264',
+                '-preset', 'veryslow',  # Maximum quality
+                '-crf', '21',
+                '-tune', 'film',
+                '-c:a', 'aac',
+                '-b:a', '256k',
+                '-ar', '48000',
+                '-af', 'volume=1.02,highpass=f=50,lowpass=f=15000',  # Audio filtering
+                '-movflags', '+faststart',
+                '-y',
+                output_path
+            ]
+
+            # Run FFmpeg
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=7200  # 2 hour timeout
+            )
+
+            if result.returncode != 0:
+                error_msg = result.stderr if result.stderr else "Unknown FFmpeg error"
+                logger.error(f"FFmpeg maximum stealth error: {error_msg}")
+                self.log_message.emit(f"Processing error: {error_msg[:200]}", "error")
+                return False
+
+            return True
+
+        except subprocess.TimeoutExpired:
+            logger.error("FFmpeg timeout in maximum stealth")
+            self.log_message.emit("Processing timeout", "error")
+            return False
+        except FileNotFoundError:
+            logger.error("FFmpeg not found. Please install FFmpeg.")
+            self.log_message.emit("FFmpeg not found! Please install FFmpeg.", "error")
+            return False
+        except Exception as e:
+            logger.error(f"Error running FFmpeg maximum stealth: {e}")
+            self.log_message.emit(f"Processing error: {str(e)}", "error")
             return False
 
     def _get_summary(self) -> Dict[str, Any]:

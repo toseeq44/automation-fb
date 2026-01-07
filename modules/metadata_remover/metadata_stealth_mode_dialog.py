@@ -95,8 +95,8 @@ class MetadataStealthModeDialog(QDialog):
     def init_ui(self):
         """Initialize UI"""
         self.setWindowTitle("Choose Stealth Mode")
-        self.setMinimumSize(700, 750)
-        self.resize(750, 800)
+        self.setMinimumSize(950, 800)
+        self.resize(1000, 850)
         self.setModal(True)
 
         main_layout = QVBoxLayout()
@@ -287,8 +287,11 @@ class MetadataStealthModeDialog(QDialog):
         """Create mode selection card"""
         frame = QFrame()
         frame.setObjectName("mode_card")
+        frame.setMinimumWidth(900)
+        frame.setCursor(Qt.PointingHandCursor)
         layout = QVBoxLayout(frame)
-        layout.setSpacing(8)
+        layout.setSpacing(10)
+        layout.setContentsMargins(15, 15, 15, 15)
 
         # Header with radio button
         header_layout = QHBoxLayout()
@@ -296,8 +299,12 @@ class MetadataStealthModeDialog(QDialog):
         radio = QRadioButton(title)
         radio.setFont(QFont('Segoe UI', 13, QFont.Bold))
         radio.setProperty("mode", mode)
+        radio.setCursor(Qt.PointingHandCursor)
         self.mode_button_group.addButton(radio)
         header_layout.addWidget(radio)
+
+        # Make entire frame clickable
+        frame.mousePressEvent = lambda event: radio.setChecked(True)
 
         if recommended:
             rec_label = QLabel("✨ RECOMMENDED")
@@ -316,6 +323,7 @@ class MetadataStealthModeDialog(QDialog):
         stats_label = QLabel(stats_html)
         stats_label.setFont(QFont('Segoe UI', 10))
         stats_label.setStyleSheet("color: #b0b0b0; margin-left: 25px;")
+        stats_label.setWordWrap(True)
         layout.addWidget(stats_label)
 
         # Processing details
@@ -324,6 +332,7 @@ class MetadataStealthModeDialog(QDialog):
         processing_label.setFont(QFont('Segoe UI', 9))
         processing_label.setStyleSheet("color: #a0a0a0; margin-left: 25px;")
         processing_label.setWordWrap(True)
+        processing_label.setMaximumWidth(850)
         layout.addWidget(processing_label)
 
         # Best for
@@ -331,6 +340,7 @@ class MetadataStealthModeDialog(QDialog):
         best_label.setFont(QFont('Segoe UI', 9))
         best_label.setStyleSheet("color: #888888; margin-left: 25px; font-style: italic;")
         best_label.setWordWrap(True)
+        best_label.setMaximumWidth(850)
         layout.addWidget(best_label)
 
         return frame
@@ -435,6 +445,7 @@ class MetadataStealthModeDialog(QDialog):
                 border: 2px solid #3a3a3a;
                 border-radius: 8px;
                 padding: 15px;
+                min-height: 180px;
             }
             QFrame#mode_card:hover {
                 border-color: #9c27b0;
@@ -442,21 +453,27 @@ class MetadataStealthModeDialog(QDialog):
             }
             QRadioButton {
                 color: #e0e0e0;
-                spacing: 8px;
+                spacing: 10px;
+                padding: 5px;
+            }
+            QRadioButton:hover {
+                color: #ffffff;
             }
             QRadioButton::indicator {
-                width: 18px;
-                height: 18px;
+                width: 20px;
+                height: 20px;
+                border-radius: 10px;
             }
             QRadioButton::indicator:checked {
                 background-color: #9c27b0;
-                border: 2px solid #9c27b0;
-                border-radius: 9px;
+                border: 3px solid #9c27b0;
             }
             QRadioButton::indicator:unchecked {
                 background-color: #2a2a2a;
-                border: 2px solid #666666;
-                border-radius: 9px;
+                border: 3px solid #666666;
+            }
+            QRadioButton::indicator:unchecked:hover {
+                border-color: #9c27b0;
             }
             QPushButton {
                 background-color: #2a2a2a;

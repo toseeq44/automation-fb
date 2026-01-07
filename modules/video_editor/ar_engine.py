@@ -10,22 +10,52 @@ from typing import Optional, Tuple, List, Dict, Any
 from pathlib import Path
 import sys
 
-# MediaPipe imports - compatible with 0.10.x
-try:
-    # Try new MediaPipe API (0.10.x)
-    from mediapipe.python.solutions import face_mesh as mp_face_mesh
-    from mediapipe.python.solutions import drawing_utils as mp_drawing
-    from mediapipe.python.solutions import drawing_styles as mp_drawing_styles
-except ImportError:
-    # Fallback to old API (pre 0.10.x)
-    import mediapipe as mp
-    mp_face_mesh = mp.solutions.face_mesh
-    mp_drawing = mp.solutions.drawing_utils
-    mp_drawing_styles = mp.solutions.drawing_styles
-
 from modules.logging.logger import get_logger
 
 logger = get_logger(__name__)
+
+# MediaPipe imports - try multiple API versions for maximum compatibility
+mp_face_mesh = None
+mp_drawing = None
+mp_drawing_styles = None
+MEDIAPIPE_AVAILABLE = False
+
+try:
+    # Attempt 1: New MediaPipe tasks API (0.10+)
+    logger.info("Attempting MediaPipe tasks API (0.10.x+)...")
+    from mediapipe.tasks import python
+    from mediapipe.tasks.python import vision
+    # Note: This requires rewriting to use FaceLandmarker instead of FaceMesh
+    logger.warning("MediaPipe tasks API found but not yet implemented - requires code refactor")
+    raise ImportError("Tasks API not implemented yet")
+except (ImportError, AttributeError, ModuleNotFoundError) as e:
+    logger.debug(f"MediaPipe tasks API not available: {e}")
+
+try:
+    # Attempt 2: Legacy solutions API (pre 0.10.x)
+    logger.info("Attempting MediaPipe solutions API (legacy)...")
+    import mediapipe as mp
+    if hasattr(mp, 'solutions'):
+        from mediapipe.solutions import face_mesh as mp_face_mesh
+        from mediapipe.solutions import drawing_utils as mp_drawing
+        from mediapipe.solutions import drawing_styles as mp_drawing_styles
+        MEDIAPIPE_AVAILABLE = True
+        logger.info("✅ MediaPipe solutions API loaded successfully (legacy)")
+    else:
+        raise AttributeError("mp.solutions not found")
+except (ImportError, AttributeError, ModuleNotFoundError) as e:
+    logger.warning(f"MediaPipe solutions API not available: {e}")
+
+if not MEDIAPIPE_AVAILABLE:
+    logger.error("=" * 60)
+    logger.error("❌ MediaPipe AR Engine NOT AVAILABLE")
+    logger.error("=" * 60)
+    logger.error("MediaPipe 0.10+ changed API structure.")
+    logger.error("Solutions:")
+    logger.error("  1. Downgrade: pip install mediapipe==0.8.11")
+    logger.error("  2. Wait for code update to support new tasks API")
+    logger.error("  3. Run diagnostic: python test_mediapipe_api.py")
+    logger.error("=" * 60)
 
 
 class AREngine:
@@ -37,6 +67,12 @@ class AREngine:
 
     def __init__(self):
         """Initialize MediaPipe Face Mesh"""
+        if not MEDIAPIPE_AVAILABLE or mp_face_mesh is None:
+            raise ImportError(
+                "MediaPipe not available or incompatible version. "
+                "For AR features, install compatible version: pip install mediapipe==0.8.11"
+            )
+
         # Initialize face mesh detector
         self.face_mesh = mp_face_mesh.FaceMesh(
             static_image_mode=False,

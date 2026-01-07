@@ -27,13 +27,15 @@ from modules.logging.logger import get_logger
 # AR Engine import (lazy load to avoid dependency issues)
 AR_ENGINE_AVAILABLE = False
 try:
-    from modules.video_editor.ar_engine import AREngine
+    from modules.video_editor.ar_engine import AREngine, MEDIAPIPE_AVAILABLE
     import cv2
     import numpy as np
-    AR_ENGINE_AVAILABLE = True
-except ImportError:
+    AR_ENGINE_AVAILABLE = MEDIAPIPE_AVAILABLE  # Only available if MediaPipe loaded correctly
+    if not AR_ENGINE_AVAILABLE:
+        logger.warning("MediaPipe not compatible. AR features disabled.")
+except (ImportError, AttributeError, ModuleNotFoundError) as e:
     AREngine = None
-    logger.warning("AR Engine not available. Install mediapipe and opencv-python for AR features.")
+    logger.warning(f"AR Engine not available: {e}")
 
 logger = get_logger(__name__)
 

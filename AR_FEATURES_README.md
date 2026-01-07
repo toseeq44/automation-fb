@@ -1,27 +1,29 @@
 # AR Face Effects - Installation Guide
 
-## ⚠️ Important: MediaPipe Version Compatibility
+## ✅ MediaPipe Version Compatibility
 
-The AR face effects feature requires **MediaPipe 0.8.x** (legacy solutions API).
+The AR face effects feature now supports **BOTH MediaPipe APIs**:
 
-**MediaPipe 0.10+** changed their API structure and is **NOT YET SUPPORTED**.
+- ✅ **MediaPipe 0.10+ (tasks API)** - Modern, recommended
+- ✅ **MediaPipe 0.8.x (solutions API)** - Legacy, still supported
+
+**RECOMMENDED: Use MediaPipe 0.10.31+ for best performance!**
 
 ---
 
-## 🔧 Quick Fix: Downgrade MediaPipe
+## 🚀 Quick Install (Recommended)
 
-If you have MediaPipe 0.10+ installed and getting errors, downgrade to 0.8.11:
+Install the latest MediaPipe version:
 
 ```bash
-# Uninstall current version
-pip uninstall mediapipe -y
-
-# Install compatible version
-pip install mediapipe==0.8.11
+# Install MediaPipe (latest version)
+pip install mediapipe
 
 # Restart OneSoul
 python main.py
 ```
+
+**First run**: The app will automatically download the face landmarker model (~10MB)
 
 ---
 
@@ -116,22 +118,24 @@ Current status:
 
 ## 📊 Version Compatibility Matrix
 
-| MediaPipe Version | Status | AR Features |
-|-------------------|--------|-------------|
-| 0.8.9 - 0.8.11    | ✅ Supported | All features work |
-| 0.9.x             | ⚠️ Untested | May work |
-| 0.10.0 - 0.10.31  | ❌ Not Supported | Requires code update |
+| MediaPipe Version | Status | AR Features | API Used |
+|-------------------|--------|-------------|----------|
+| 0.8.9 - 0.8.11    | ✅ Fully Supported | All features work | Solutions (legacy) |
+| 0.9.x             | ⚠️ Untested | May work | Solutions (legacy) |
+| 0.10.0 - 0.10.31  | ✅ Fully Supported | All features work | Tasks (modern) |
+| **0.10.31** (latest) | ✅ **RECOMMENDED** | All features work | Tasks (modern) |
+
+**Note**: MediaPipe 0.8.x is no longer available on PyPI. Use 0.10+ for new installations.
 
 ---
 
 ## 💡 Recommended Setup
 
-**For production use:**
+**For new installations (RECOMMENDED):**
 ```bash
-# Exact versions tested and working
-pip install mediapipe==0.8.11
-pip install protobuf==3.20.3
-pip install opencv-python==4.8.0
+# Install latest MediaPipe
+pip install mediapipe
+pip install protobuf opencv-python
 ```
 
 **For development:**

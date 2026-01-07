@@ -2,6 +2,10 @@
 modules/video_editor/ar_engine.py
 AR Face Effects Engine using MediaPipe
 Provides face detection, tracking, and AR filter application
+
+Supports both MediaPipe APIs:
+- Legacy solutions API (pre 0.10.x) - DEPRECATED
+- Modern tasks API (0.10.x+) - RECOMMENDED
 """
 
 import cv2
@@ -9,53 +13,61 @@ import numpy as np
 from typing import Optional, Tuple, List, Dict, Any
 from pathlib import Path
 import sys
+import urllib.request
+import os
 
 from modules.logging.logger import get_logger
 
 logger = get_logger(__name__)
 
-# MediaPipe imports - try multiple API versions for maximum compatibility
-mp_face_mesh = None
-mp_drawing = None
-mp_drawing_styles = None
+# MediaPipe imports - try both old and new APIs
 MEDIAPIPE_AVAILABLE = False
+MEDIAPIPE_API_VERSION = None  # 'tasks' or 'solutions'
 
+# Try new tasks API first (MediaPipe 0.10+)
 try:
-    # Attempt 1: New MediaPipe tasks API (0.10+)
-    logger.info("Attempting MediaPipe tasks API (0.10.x+)...")
+    logger.info("🔍 Attempting MediaPipe tasks API (0.10.x+)...")
+    from mediapipe import tasks
     from mediapipe.tasks import python
     from mediapipe.tasks.python import vision
-    # Note: This requires rewriting to use FaceLandmarker instead of FaceMesh
-    logger.warning("MediaPipe tasks API found but not yet implemented - requires code refactor")
-    raise ImportError("Tasks API not implemented yet")
+    from mediapipe.tasks.python.vision import FaceLandmarkerOptions
+
+    MEDIAPIPE_AVAILABLE = True
+    MEDIAPIPE_API_VERSION = 'tasks'
+    logger.info("✅ MediaPipe tasks API loaded (0.10.x+)")
 except (ImportError, AttributeError, ModuleNotFoundError) as e:
     logger.debug(f"MediaPipe tasks API not available: {e}")
 
-try:
-    # Attempt 2: Legacy solutions API (pre 0.10.x)
-    logger.info("Attempting MediaPipe solutions API (legacy)...")
-    import mediapipe as mp
-    if hasattr(mp, 'solutions'):
-        from mediapipe.solutions import face_mesh as mp_face_mesh
-        from mediapipe.solutions import drawing_utils as mp_drawing
-        from mediapipe.solutions import drawing_styles as mp_drawing_styles
-        MEDIAPIPE_AVAILABLE = True
-        logger.info("✅ MediaPipe solutions API loaded successfully (legacy)")
-    else:
-        raise AttributeError("mp.solutions not found")
-except (ImportError, AttributeError, ModuleNotFoundError) as e:
-    logger.warning(f"MediaPipe solutions API not available: {e}")
+# Fallback to legacy solutions API (pre 0.10.x)
+if not MEDIAPIPE_AVAILABLE:
+    try:
+        logger.info("🔍 Attempting MediaPipe solutions API (legacy)...")
+        import mediapipe as mp
+        if hasattr(mp, 'solutions'):
+            from mediapipe.solutions import face_mesh as mp_face_mesh
+            from mediapipe.solutions import drawing_utils as mp_drawing
+            from mediapipe.solutions import drawing_styles as mp_drawing_styles
+
+            MEDIAPIPE_AVAILABLE = True
+            MEDIAPIPE_API_VERSION = 'solutions'
+            logger.info("✅ MediaPipe solutions API loaded (legacy)")
+        else:
+            raise AttributeError("mp.solutions not found")
+    except (ImportError, AttributeError, ModuleNotFoundError) as e:
+        logger.warning(f"MediaPipe solutions API not available: {e}")
 
 if not MEDIAPIPE_AVAILABLE:
     logger.error("=" * 60)
     logger.error("❌ MediaPipe AR Engine NOT AVAILABLE")
     logger.error("=" * 60)
-    logger.error("MediaPipe 0.10+ changed API structure.")
+    logger.error("MediaPipe is not installed or incompatible.")
     logger.error("Solutions:")
-    logger.error("  1. Downgrade: pip install mediapipe==0.8.11")
-    logger.error("  2. Wait for code update to support new tasks API")
+    logger.error("  1. Install MediaPipe: pip install mediapipe")
+    logger.error("  2. Check version: pip show mediapipe")
     logger.error("  3. Run diagnostic: python test_mediapipe_api.py")
     logger.error("=" * 60)
+else:
+    logger.info(f"📦 Using MediaPipe API: {MEDIAPIPE_API_VERSION}")
 
 
 class AREngine:
@@ -63,26 +75,93 @@ class AREngine:
     AR Face Effects Engine
     Uses MediaPipe for 468-point face landmark detection
     Supports real-time face tracking and AR filter application
+
+    Compatible with both MediaPipe APIs:
+    - Tasks API (0.10.x+) - Modern, recommended
+    - Solutions API (pre 0.10.x) - Legacy, deprecated
     """
 
+    # Model URLs for tasks API
+    FACE_LANDMARKER_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task"
+
     def __init__(self):
-        """Initialize MediaPipe Face Mesh"""
-        if not MEDIAPIPE_AVAILABLE or mp_face_mesh is None:
+        """Initialize MediaPipe Face Detector"""
+        if not MEDIAPIPE_AVAILABLE:
             raise ImportError(
-                "MediaPipe not available or incompatible version. "
-                "For AR features, install compatible version: pip install mediapipe==0.8.11"
+                "MediaPipe not available. Install with: pip install mediapipe"
             )
 
+        self.api_version = MEDIAPIPE_API_VERSION
+        self.face_detector = None
+
+        if self.api_version == 'tasks':
+            self._init_tasks_api()
+        elif self.api_version == 'solutions':
+            self._init_solutions_api()
+        else:
+            raise ValueError(f"Unknown MediaPipe API version: {self.api_version}")
+
+        logger.info(f"✅ AR Engine initialized with MediaPipe {self.api_version} API")
+
+    def _init_tasks_api(self):
+        """Initialize using MediaPipe tasks API (0.10+)"""
+        # Download face landmarker model if needed
+        model_path = self._ensure_face_landmarker_model()
+
+        # Create FaceLandmarker options
+        base_options = python.BaseOptions(model_asset_path=model_path)
+        options = FaceLandmarkerOptions(
+            base_options=base_options,
+            running_mode=vision.RunningMode.IMAGE,  # Process individual frames
+            num_faces=5,  # Support multiple faces
+            min_face_detection_confidence=0.5,
+            min_face_presence_confidence=0.5,
+            min_tracking_confidence=0.5
+        )
+
+        # Create face landmarker
+        self.face_detector = vision.FaceLandmarker.create_from_options(options)
+        logger.info("✅ FaceLandmarker initialized (tasks API)")
+
+    def _init_solutions_api(self):
+        """Initialize using MediaPipe solutions API (legacy)"""
         # Initialize face mesh detector
-        self.face_mesh = mp_face_mesh.FaceMesh(
+        self.face_detector = mp_face_mesh.FaceMesh(
             static_image_mode=False,
             max_num_faces=5,  # Support multiple faces
             refine_landmarks=True,
             min_detection_confidence=0.5,
             min_tracking_confidence=0.5
         )
+        logger.info("✅ FaceMesh initialized (solutions API - legacy)")
 
-        logger.info("✅ AR Engine initialized with MediaPipe Face Mesh")
+    def _ensure_face_landmarker_model(self) -> str:
+        """
+        Download face landmarker model if not exists
+
+        Returns:
+            Path to model file
+        """
+        # Model directory
+        model_dir = Path(__file__).parent / 'models'
+        model_dir.mkdir(exist_ok=True)
+
+        model_path = model_dir / 'face_landmarker.task'
+
+        # Download if not exists
+        if not model_path.exists():
+            logger.info("📥 Downloading face landmarker model (~10MB)...")
+            try:
+                urllib.request.urlretrieve(self.FACE_LANDMARKER_MODEL_URL, str(model_path))
+                logger.info(f"✅ Model downloaded: {model_path}")
+            except Exception as e:
+                logger.error(f"❌ Failed to download model: {e}")
+                raise RuntimeError(
+                    f"Failed to download face landmarker model. "
+                    f"Please download manually from: {self.FACE_LANDMARKER_MODEL_URL}"
+                )
+
+        return str(model_path)
 
     def detect_faces(self, frame: np.ndarray) -> Optional[List[Dict[str, Any]]]:
         """
@@ -95,53 +174,110 @@ class AREngine:
             List of face data dictionaries with landmarks, or None if no faces
         """
         try:
-            # Convert BGR to RGB for MediaPipe
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-            # Process frame
-            results = self.face_mesh.process(rgb_frame)
-
-            if not results.multi_face_landmarks:
+            if self.api_version == 'tasks':
+                return self._detect_faces_tasks(frame)
+            elif self.api_version == 'solutions':
+                return self._detect_faces_solutions(frame)
+            else:
                 return None
-
-            # Extract face data
-            faces = []
-            h, w = frame.shape[:2]
-
-            for face_landmarks in results.multi_face_landmarks:
-                # Convert normalized landmarks to pixel coordinates
-                landmarks = []
-                for landmark in face_landmarks.landmark:
-                    x = int(landmark.x * w)
-                    y = int(landmark.y * h)
-                    z = landmark.z
-                    landmarks.append({'x': x, 'y': y, 'z': z})
-
-                # Get face bounding box
-                x_coords = [lm['x'] for lm in landmarks]
-                y_coords = [lm['y'] for lm in landmarks]
-
-                bbox = {
-                    'x1': min(x_coords),
-                    'y1': min(y_coords),
-                    'x2': max(x_coords),
-                    'y2': max(y_coords)
-                }
-
-                # Get key facial points (eyes, nose, mouth)
-                key_points = self._extract_key_points(landmarks)
-
-                faces.append({
-                    'landmarks': landmarks,
-                    'bbox': bbox,
-                    'key_points': key_points
-                })
-
-            return faces
-
         except Exception as e:
             logger.error(f"Face detection error: {e}")
             return None
+
+    def _detect_faces_tasks(self, frame: np.ndarray) -> Optional[List[Dict[str, Any]]]:
+        """Detect faces using tasks API (MediaPipe 0.10+)"""
+        # Convert BGR to RGB for MediaPipe
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        # Create MediaPipe Image
+        mp_image = python.vision.Image(image_format=python.vision.ImageFormat.SRGB, data=rgb_frame)
+
+        # Detect faces
+        detection_result = self.face_detector.detect(mp_image)
+
+        if not detection_result.face_landmarks:
+            return None
+
+        # Extract face data
+        faces = []
+        h, w = frame.shape[:2]
+
+        for face_landmarks_list in detection_result.face_landmarks:
+            # Convert normalized landmarks to pixel coordinates
+            landmarks = []
+            for landmark in face_landmarks_list:
+                x = int(landmark.x * w)
+                y = int(landmark.y * h)
+                z = landmark.z
+                landmarks.append({'x': x, 'y': y, 'z': z})
+
+            # Get face bounding box
+            x_coords = [lm['x'] for lm in landmarks]
+            y_coords = [lm['y'] for lm in landmarks]
+
+            bbox = {
+                'x1': min(x_coords),
+                'y1': min(y_coords),
+                'x2': max(x_coords),
+                'y2': max(y_coords)
+            }
+
+            # Get key facial points
+            key_points = self._extract_key_points(landmarks)
+
+            faces.append({
+                'landmarks': landmarks,
+                'bbox': bbox,
+                'key_points': key_points
+            })
+
+        return faces
+
+    def _detect_faces_solutions(self, frame: np.ndarray) -> Optional[List[Dict[str, Any]]]:
+        """Detect faces using solutions API (legacy)"""
+        # Convert BGR to RGB for MediaPipe
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        # Process frame
+        results = self.face_detector.process(rgb_frame)
+
+        if not results.multi_face_landmarks:
+            return None
+
+        # Extract face data
+        faces = []
+        h, w = frame.shape[:2]
+
+        for face_landmarks in results.multi_face_landmarks:
+            # Convert normalized landmarks to pixel coordinates
+            landmarks = []
+            for landmark in face_landmarks.landmark:
+                x = int(landmark.x * w)
+                y = int(landmark.y * h)
+                z = landmark.z
+                landmarks.append({'x': x, 'y': y, 'z': z})
+
+            # Get face bounding box
+            x_coords = [lm['x'] for lm in landmarks]
+            y_coords = [lm['y'] for lm in landmarks]
+
+            bbox = {
+                'x1': min(x_coords),
+                'y1': min(y_coords),
+                'x2': max(x_coords),
+                'y2': max(y_coords)
+            }
+
+            # Get key facial points
+            key_points = self._extract_key_points(landmarks)
+
+            faces.append({
+                'landmarks': landmarks,
+                'bbox': bbox,
+                'key_points': key_points
+            })
+
+        return faces
 
     def _extract_key_points(self, landmarks: List[Dict]) -> Dict[str, Tuple[int, int]]:
         """
@@ -513,6 +649,13 @@ class AREngine:
 
     def cleanup(self):
         """Cleanup MediaPipe resources"""
-        if hasattr(self, 'face_mesh'):
-            self.face_mesh.close()
+        if hasattr(self, 'face_detector') and self.face_detector:
+            try:
+                if self.api_version == 'tasks':
+                    self.face_detector.close()
+                elif self.api_version == 'solutions':
+                    self.face_detector.close()
+            except Exception as e:
+                logger.debug(f"Cleanup error (non-critical): {e}")
+
         logger.info("AR Engine cleaned up")

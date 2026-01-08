@@ -680,19 +680,21 @@ class AREngine:
                 # Use landmark-based mask only (better results)
                 mask_normalized = lip_mask_region.astype(float) / 255.0
 
-                # Apply color with aggressive blue/green suppression for pure red
+                # Apply color - completely replace lip color, don't blend with original
                 colored_lips = lip_region.copy().astype(float)
 
-                # For red lips, aggressively reduce blue and green while boosting red
+                # For red lips, completely remove blue/green and set pure red
                 if color == 'red':
-                    # Blue channel (0) - reduce significantly
-                    colored_lips[:, :, 0] = lip_region[:, :, 0] * (1 - mask_normalized * intensity * 0.9)
-                    # Green channel (1) - reduce significantly
-                    colored_lips[:, :, 1] = lip_region[:, :, 1] * (1 - mask_normalized * intensity * 0.9)
-                    # Red channel (2) - boost strongly
+                    # Step 1: Drastically reduce blue and green in lip areas
+                    # Keep only 10% of original blue/green to remove purple tint
+                    colored_lips[:, :, 0] = lip_region[:, :, 0] * (1 - mask_normalized * 0.95)  # Remove 95% blue
+                    colored_lips[:, :, 1] = lip_region[:, :, 1] * (1 - mask_normalized * 0.95)  # Remove 95% green
+
+                    # Step 2: Add pure red color
+                    # Use intensity to control how red the lips are
                     colored_lips[:, :, 2] = np.clip(
-                        lip_region[:, :, 2] * (1 - mask_normalized * intensity * 0.5) +
-                        target_color[2] * mask_normalized * intensity,
+                        lip_region[:, :, 2] * (1 - mask_normalized * 0.3) +  # Keep some original brightness
+                        target_color[2] * mask_normalized * intensity * 1.2,   # Add strong red
                         0, 255
                     )
                 else:

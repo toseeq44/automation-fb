@@ -680,27 +680,26 @@ class AREngine:
                 # Use landmark-based mask only (better results)
                 mask_normalized = lip_mask_region.astype(float) / 255.0
 
-                # Apply color - completely replace lip color, don't blend with original
+                # Simple approach: Add red tint to lips (don't replace color)
                 colored_lips = lip_region.copy().astype(float)
 
-                # For red lips, use absolute value clamping to remove all blue/green
+                # For red lips, simply add red tint on top of existing color
                 if color == 'red':
-                    # Step 1: Set blue and green to absolute low values (not percentage)
-                    # This ensures no purple/blue tint regardless of original color
+                    # Simple additive red tint - like applying lipstick
+                    # Add red to existing color instead of replacing it
+                    red_tint = intensity * 80  # Amount of red to add (0-80 at max intensity)
 
-                    # Blue channel - clamp to max 15 in lip areas
-                    blue_reduced = lip_region[:, :, 0] * (1 - mask_normalized)
-                    colored_lips[:, :, 0] = np.minimum(blue_reduced, 15)
+                    # Add red tint to red channel
+                    colored_lips[:, :, 2] = np.clip(
+                        lip_region[:, :, 2] + (mask_normalized * red_tint),
+                        0, 255
+                    )
 
-                    # Green channel - clamp to max 15 in lip areas
-                    green_reduced = lip_region[:, :, 1] * (1 - mask_normalized)
-                    colored_lips[:, :, 1] = np.minimum(green_reduced, 15)
+                    # Slightly darken blue/green to make red more visible
+                    darkening = mask_normalized * intensity * 0.3
+                    colored_lips[:, :, 0] = lip_region[:, :, 0] * (1 - darkening)  # Blue
+                    colored_lips[:, :, 1] = lip_region[:, :, 1] * (1 - darkening)  # Green
 
-                    # Step 2: Set pure red color
-                    # Blend between original red brightness and target red
-                    red_base = lip_region[:, :, 2] * 0.4  # Keep 40% of original brightness
-                    red_added = target_color[2] * mask_normalized * intensity * 1.5
-                    colored_lips[:, :, 2] = np.clip(red_base + red_added, 0, 255)
                 else:
                     # Standard blending for other colors
                     for c in range(3):

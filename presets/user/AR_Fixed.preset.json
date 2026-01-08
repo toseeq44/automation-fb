@@ -1,0 +1,56 @@
+{
+  "schema_version": "2.0",
+  "name": "AR Fixed",
+  "description": "Complete AR effects: Beauty, eye enhancement, teeth whitening, background blur, auto-crop for TikTok/Reels (NO landmarks)",
+  "created_at": "2026-01-08T16:59:00.000000",
+  "modified_at": "2026-01-08T16:59:00.000000",
+  "operations": [
+    {
+      "operation": "face_beautify",
+      "params": {
+        "intensity": 0.7
+      }
+    },
+    {
+      "operation": "eye_enhancement",
+      "params": {
+        "intensity": 0.8
+      }
+    },
+    {
+      "operation": "teeth_whitening",
+      "params": {
+        "intensity": 0.5
+      }
+    },
+    {
+      "operation": "auto_crop_face",
+      "params": {
+        "aspect_ratio": "9:16",
+        "margin": 0.3
+      }
+    },
+    {
+      "operation": "blur_background",
+      "params": {
+        "blur_strength": 25
+      }
+    }
+  ],
+  "thumbnail": null,
+  "tags": ["ar", "beauty", "complete", "tiktok", "reels"],
+  "author": "User",
+  "category": "AR Effects",
+  "preset_version": "1.0",
+  "compatibility": ["1.0"],
+  "export_settings": {
+    "quality": "high",
+    "format": "mp4",
+    "resolution": null,
+    "fps": null,
+    "codec_video": "libx264",
+    "codec_audio": "aac",
+    "bitrate_video": null,
+    "bitrate_audio": "192k"
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "schema_version": "2.0",
+  "name": "Beauty Pro",
+  "description": "Professional beauty preset: Eye enhancement, face beautification, background blur - Perfect for TikTok/Reels",
+  "created_at": "2026-01-08T16:59:00.000000",
+  "modified_at": "2026-01-08T16:59:00.000000",
+  "operations": [
+    {
+      "operation": "face_beautify",
+      "params": {
+        "intensity": 0.6
+      }
+    },
+    {
+      "operation": "eye_enhancement",
+      "params": {
+        "intensity": 0.7
+      }
+    },
+    {
+      "operation": "blur_background",
+      "params": {
+        "blur_strength": 21
+      }
+    }
+  ],
+  "thumbnail": null,
+  "tags": ["beauty", "makeup", "professional", "tiktok", "instagram"],
+  "author": "OneSoul",
+  "category": "AR Effects",
+  "preset_version": "1.0",
+  "compatibility": ["1.0"],
+  "export_settings": {
+    "quality": "high",
+    "format": "mp4",
+    "resolution": null,
+    "fps": null,
+    "codec_video": "libx264",
+    "codec_audio": "aac",
+    "bitrate_video": null,
+    "bitrate_audio": "192k"
+  }
+}

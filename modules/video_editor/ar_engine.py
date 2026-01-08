@@ -683,23 +683,24 @@ class AREngine:
                 # Simple approach: Add red tint to lips (don't replace color)
                 colored_lips = lip_region.copy().astype(float)
 
-                # For red lips, simply add red tint on top of existing color
+                # For red lips, add red tint with COMPLETE blue/green removal
                 if color == 'red':
-                    # COMPLETE blue/green suppression for pure red
-                    # No more percentage reductions - set absolute low values
-
-                    # Step 1: Add red tint
-                    red_boost = intensity * 120  # Strong red boost
+                    # Step 1: Add strong red tint
+                    red_boost = intensity * 120  # Strong red boost (60 at intensity=0.5)
                     colored_lips[:, :, 2] = np.clip(
                         lip_region[:, :, 2] + (mask_normalized * red_boost),
                         0, 255
                     )
 
-                    # Step 2: DRASTICALLY reduce blue and green to near-zero
-                    # Keep only 5% of original blue/green to remove ALL purple tint
-                    suppression = mask_normalized * 0.95  # Remove 95% at full mask
-                    colored_lips[:, :, 0] = lip_region[:, :, 0] * (1 - suppression)  # Blue: Only 5% left
-                    colored_lips[:, :, 1] = lip_region[:, :, 1] * (1 - suppression)  # Green: Only 5% left
+                    # Step 2: Remove 95% of blue and green EVERYWHERE in lip area
+                    # Apply suppression based on mask - where mask is high, suppress more
+                    # But ensure minimum 80% suppression even at low mask values
+                    base_suppression = 0.8  # At least 80% removal everywhere
+                    mask_suppression = mask_normalized * 0.15  # Additional 0-15% based on mask
+                    total_suppression = base_suppression + mask_suppression  # 80-95% total
+
+                    colored_lips[:, :, 0] = lip_region[:, :, 0] * (1 - total_suppression)  # Blue: 5-20% left
+                    colored_lips[:, :, 1] = lip_region[:, :, 1] * (1 - total_suppression)  # Green: 5-20% left
 
                 else:
                     # Standard blending for other colors

@@ -441,7 +441,7 @@ class AREngine:
 
                     # Create bulge effect using radial distortion
                     # This makes the eye area appear larger/enlarged
-                    scale_factor = 1.0 + (intensity * 0.5)  # Scale up to 1.5x at max intensity
+                    scale_factor = 1.0 + (intensity * 0.7)  # Scale up to 1.7x at max intensity (more noticeable)
 
                     # Create coordinate maps for remapping
                     map_x = np.zeros((region_h, region_w), dtype=np.float32)
@@ -599,13 +599,13 @@ class AREngine:
 
             result = frame.copy()
 
-            # Define lip colors in BGR format
+            # Define lip colors in BGR format (OpenCV uses BGR, not RGB)
             lip_colors = {
-                'red': (30, 30, 200),      # Bright red
-                'pink': (147, 112, 219),   # Pink/purple
-                'coral': (80, 127, 255),   # Coral/orange
-                'nude': (120, 150, 200),   # Nude/natural
-                'berry': (108, 72, 170)    # Berry/wine
+                'red': (0, 0, 220),        # Pure red
+                'pink': (180, 140, 255),   # Light pink
+                'coral': (100, 140, 255),  # Coral
+                'nude': (140, 160, 200),   # Nude/natural
+                'berry': (85, 60, 180)     # Berry/wine
             }
 
             target_color = lip_colors.get(color, lip_colors['red'])
@@ -636,15 +636,16 @@ class AREngine:
                 if len(lip_points) < 3:
                     continue
 
-                # Create lip mask
+                # Create lip mask with convex hull for smoother edges
                 lip_points_np = np.array(lip_points, dtype=np.int32)
                 mask = np.zeros(frame.shape[:2], dtype=np.uint8)
                 cv2.fillConvexPoly(mask, cv2.convexHull(lip_points_np), 255)
 
-                # Apply morphological operations to smooth the mask
-                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+                # Apply strong smoothing to remove square edges
+                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
                 mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-                mask = cv2.GaussianBlur(mask, (7, 7), 2)
+                # Much stronger Gaussian blur for very smooth edges (no squares)
+                mask = cv2.GaussianBlur(mask, (21, 21), 8)
 
                 # Get lip region
                 key_points = face['key_points']
@@ -676,27 +677,18 @@ class AREngine:
                 upper_lip = np.array([180, 255, 255])
                 lip_detect_mask = cv2.inRange(hsv, lower_lip, upper_lip)
 
-                # Combine with landmark-based mask
-                combined_mask = cv2.bitwise_and(lip_mask_region, lip_detect_mask)
+                # Use landmark-based mask only (better results)
+                mask_normalized = lip_mask_region.astype(float) / 255.0
 
-                # Create colored overlay
+                # Apply color directly with proper blending
                 colored_lips = lip_region.copy()
-                colored_lips[:] = target_color
 
-                # Blend colored lips with original based on mask and intensity
-                mask_normalized = combined_mask.astype(float) / 255.0
-                mask_normalized = np.power(mask_normalized, 0.7)  # Adjust contrast
-
+                # Blend each channel separately for accurate color
                 for c in range(3):
                     colored_lips[:, :, c] = (
                         lip_region[:, :, c] * (1 - mask_normalized * intensity) +
-                        colored_lips[:, :, c] * mask_normalized * intensity
+                        target_color[c] * mask_normalized * intensity
                     ).astype(np.uint8)
-
-                # Increase saturation slightly
-                hsv_colored = cv2.cvtColor(colored_lips, cv2.COLOR_BGR2HSV).astype(float)
-                hsv_colored[:, :, 1] = np.clip(hsv_colored[:, :, 1] * 1.2, 0, 255)
-                colored_lips = cv2.cvtColor(hsv_colored.astype(np.uint8), cv2.COLOR_HSV2BGR)
 
                 result[y1:y2, x1:x2] = colored_lips
 

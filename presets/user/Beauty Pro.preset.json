@@ -27,7 +27,7 @@
     {
       "operation": "blur_background",
       "params": {
-        "blur_strength": 21
+        "blur_strength": 15
       }
     }
   ],

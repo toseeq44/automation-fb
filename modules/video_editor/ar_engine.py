@@ -597,7 +597,7 @@ class AREngine:
             if not faces:
                 return frame
 
-            result = frame.copy()
+            result = frame.copy().astype(float)
 
             # Define lip colors in BGR format (OpenCV uses BGR, not RGB)
             lip_colors = {
@@ -614,11 +614,6 @@ class AREngine:
                 landmarks = face['landmarks']
 
                 # Get lip landmarks (MediaPipe lip indices)
-                # Upper lip outer: 61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291
-                # Lower lip outer: 146, 91, 181, 84, 17, 314, 405, 321, 375, 291
-                # Upper lip inner: 78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308
-                # Lower lip inner: 78, 95, 88, 178, 87, 14, 317, 402, 318, 324, 308
-
                 upper_outer = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291]
                 lower_outer = [146, 91, 181, 84, 17, 314, 405, 321, 375, 291]
                 upper_inner = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308]
@@ -636,83 +631,43 @@ class AREngine:
                 if len(lip_points) < 3:
                     continue
 
-                # Create lip mask with convex hull for smoother edges
+                # Create lip mask on FULL FRAME (not rectangular region)
                 lip_points_np = np.array(lip_points, dtype=np.int32)
                 mask = np.zeros(frame.shape[:2], dtype=np.uint8)
                 cv2.fillConvexPoly(mask, cv2.convexHull(lip_points_np), 255)
 
-                # Apply strong smoothing to remove square edges
-                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+                # Apply strong smoothing for seamless edges
+                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
                 mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-                # Much stronger Gaussian blur for very smooth edges (no squares)
-                mask = cv2.GaussianBlur(mask, (21, 21), 8)
+                mask = cv2.GaussianBlur(mask, (31, 31), 10)
 
-                # Get lip region
-                key_points = face['key_points']
-                mouth_left = key_points['mouth_left']
-                mouth_right = key_points['mouth_right']
-                mouth_top = key_points['mouth_top']
-                mouth_bottom = key_points['mouth_bottom']
+                # Normalize mask for blending
+                mask_normalized = mask.astype(float) / 255.0
+                mask_3ch = np.stack([mask_normalized] * 3, axis=-1)
 
-                x1 = max(0, min(mouth_left[0], mouth_right[0]) - 20)
-                y1 = max(0, mouth_top[1] - 20)
-                x2 = min(frame.shape[1], max(mouth_left[0], mouth_right[0]) + 20)
-                y2 = min(frame.shape[0], mouth_bottom[1] + 20)
-
-                if x2 <= x1 or y2 <= y1:
-                    continue
-
-                lip_region = result[y1:y2, x1:x2].copy()
-                lip_mask_region = mask[y1:y2, x1:x2]
-
-                if lip_region.size == 0:
-                    continue
-
-                # Convert to HSV for better color manipulation
-                hsv = cv2.cvtColor(lip_region, cv2.COLOR_BGR2HSV)
-
-                # Detect lip areas (slightly darker/reddish regions)
-                # This helps identify actual lip pixels vs surrounding skin
-                lower_lip = np.array([0, 20, 40])
-                upper_lip = np.array([180, 255, 255])
-                lip_detect_mask = cv2.inRange(hsv, lower_lip, upper_lip)
-
-                # Use landmark-based mask only (better results)
-                mask_normalized = lip_mask_region.astype(float) / 255.0
-
-                # Simple approach: Add red tint to lips (don't replace color)
-                colored_lips = lip_region.copy().astype(float)
-
-                # For red lips, add red tint with COMPLETE blue/green removal
+                # For red lips - work directly on full frame (no rectangular extraction!)
                 if color == 'red':
-                    # Step 1: Add strong red tint
-                    red_boost = intensity * 120  # Strong red boost (60 at intensity=0.5)
-                    colored_lips[:, :, 2] = np.clip(
-                        lip_region[:, :, 2] + (mask_normalized * red_boost),
+                    # Step 1: Suppress blue/green channels by 80-95%
+                    base_suppression = 0.85  # 85% removal
+
+                    result[:, :, 0] = result[:, :, 0] * (1 - mask_3ch[:, :, 0] * base_suppression)  # Blue
+                    result[:, :, 1] = result[:, :, 1] * (1 - mask_3ch[:, :, 1] * base_suppression)  # Green
+
+                    # Step 2: Add red boost
+                    red_boost = intensity * 100
+                    result[:, :, 2] = np.clip(
+                        result[:, :, 2] + (mask_3ch[:, :, 2] * red_boost),
                         0, 255
                     )
-
-                    # Step 2: Remove 95% of blue and green EVERYWHERE in lip area
-                    # Apply suppression based on mask - where mask is high, suppress more
-                    # But ensure minimum 80% suppression even at low mask values
-                    base_suppression = 0.8  # At least 80% removal everywhere
-                    mask_suppression = mask_normalized * 0.15  # Additional 0-15% based on mask
-                    total_suppression = base_suppression + mask_suppression  # 80-95% total
-
-                    colored_lips[:, :, 0] = lip_region[:, :, 0] * (1 - total_suppression)  # Blue: 5-20% left
-                    colored_lips[:, :, 1] = lip_region[:, :, 1] * (1 - total_suppression)  # Green: 5-20% left
-
                 else:
                     # Standard blending for other colors
                     for c in range(3):
-                        colored_lips[:, :, c] = (
-                            lip_region[:, :, c] * (1 - mask_normalized * intensity) +
-                            target_color[c] * mask_normalized * intensity
+                        result[:, :, c] = (
+                            result[:, :, c] * (1 - mask_3ch[:, :, c] * intensity) +
+                            target_color[c] * mask_3ch[:, :, c] * intensity
                         )
 
-                result[y1:y2, x1:x2] = colored_lips.astype(np.uint8)
-
-            return result
+            return result.astype(np.uint8)
 
         except Exception as e:
             logger.error(f"Lip color error: {e}")

@@ -683,20 +683,24 @@ class AREngine:
                 # Apply color - completely replace lip color, don't blend with original
                 colored_lips = lip_region.copy().astype(float)
 
-                # For red lips, completely remove blue/green and set pure red
+                # For red lips, use absolute value clamping to remove all blue/green
                 if color == 'red':
-                    # Step 1: Drastically reduce blue and green in lip areas
-                    # Keep only 10% of original blue/green to remove purple tint
-                    colored_lips[:, :, 0] = lip_region[:, :, 0] * (1 - mask_normalized * 0.95)  # Remove 95% blue
-                    colored_lips[:, :, 1] = lip_region[:, :, 1] * (1 - mask_normalized * 0.95)  # Remove 95% green
+                    # Step 1: Set blue and green to absolute low values (not percentage)
+                    # This ensures no purple/blue tint regardless of original color
 
-                    # Step 2: Add pure red color
-                    # Use intensity to control how red the lips are
-                    colored_lips[:, :, 2] = np.clip(
-                        lip_region[:, :, 2] * (1 - mask_normalized * 0.3) +  # Keep some original brightness
-                        target_color[2] * mask_normalized * intensity * 1.2,   # Add strong red
-                        0, 255
-                    )
+                    # Blue channel - clamp to max 15 in lip areas
+                    blue_reduced = lip_region[:, :, 0] * (1 - mask_normalized)
+                    colored_lips[:, :, 0] = np.minimum(blue_reduced, 15)
+
+                    # Green channel - clamp to max 15 in lip areas
+                    green_reduced = lip_region[:, :, 1] * (1 - mask_normalized)
+                    colored_lips[:, :, 1] = np.minimum(green_reduced, 15)
+
+                    # Step 2: Set pure red color
+                    # Blend between original red brightness and target red
+                    red_base = lip_region[:, :, 2] * 0.4  # Keep 40% of original brightness
+                    red_added = target_color[2] * mask_normalized * intensity * 1.5
+                    colored_lips[:, :, 2] = np.clip(red_base + red_added, 0, 255)
                 else:
                     # Standard blending for other colors
                     for c in range(3):

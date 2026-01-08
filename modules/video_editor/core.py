@@ -1084,6 +1084,21 @@ class VideoEditor:
         self._apply_ar_effect_to_video(self.ar_engine.apply_teeth_whitening, intensity=intensity)
         self.project.add_to_history({'operation': 'teeth_whitening', 'intensity': intensity})
 
+    def lip_color(self, intensity: float = 0.5, color: str = 'red'):
+        """
+        Apply color to lips (red, pink, coral, nude, berry)
+
+        Args:
+            intensity: Color intensity (0.0 - 1.0)
+            color: Lip color ('red', 'pink', 'coral', 'nude', 'berry')
+        """
+        if not self.ar_engine:
+            raise ValueError("❌ AR Engine not available. Install MediaPipe: pip install mediapipe protobuf")
+
+        logger.info(f"Applying lip color (intensity={intensity}, color={color})")
+        self._apply_ar_effect_to_video(self.ar_engine.apply_lip_color, intensity=intensity, color=color)
+        self.project.add_to_history({'operation': 'lip_color', 'intensity': intensity, 'color': color})
+
     def auto_crop_face(self, aspect_ratio: str = '9:16', margin: float = 0.3):
         """
         Automatically crop video to keep face centered (perfect for TikTok/Reels)

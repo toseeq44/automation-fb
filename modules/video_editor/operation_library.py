@@ -435,6 +435,21 @@ class OperationLibrary:
         ))
 
         self.register(OperationDef(
+            name='lip_color',
+            display_name='Lip Color',
+            category=self.CATEGORY_AR_EFFECTS,
+            description='Apply color to lips (red, pink, coral, nude, berry)',
+            parameters=[
+                ParameterDef('intensity', 'float', required=True, default=0.5, min_val=0.0, max_val=1.0,
+                           description='Color intensity'),
+                ParameterDef('color', 'str', required=True, default='red',
+                           choices=['red', 'pink', 'coral', 'nude', 'berry'],
+                           description='Lip color')
+            ],
+            icon='💄'
+        ))
+
+        self.register(OperationDef(
             name='auto_crop_face',
             display_name='Auto Crop to Face',
             category=self.CATEGORY_AR_EFFECTS,

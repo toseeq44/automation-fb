@@ -1,9 +1,9 @@
 {
   "schema_version": "2.0",
   "name": "AR Fixed",
-  "description": "Complete AR effects: Beauty, eye enhancement, teeth whitening, background blur, auto-crop for TikTok/Reels (NO landmarks)",
+  "description": "Complete AR effects: Beauty, eye enhancement, red lips, teeth whitening, background blur, auto-crop for TikTok/Reels (NO landmarks)",
   "created_at": "2026-01-08T16:59:00.000000",
-  "modified_at": "2026-01-08T16:59:00.000000",
+  "modified_at": "2026-01-08T19:30:00.000000",
   "operations": [
     {
       "operation": "face_beautify",
@@ -14,13 +14,20 @@
     {
       "operation": "eye_enhancement",
       "params": {
-        "intensity": 0.8
+        "intensity": 0.7
+      }
+    },
+    {
+      "operation": "lip_color",
+      "params": {
+        "intensity": 0.6,
+        "color": "red"
       }
     },
     {
       "operation": "teeth_whitening",
       "params": {
-        "intensity": 0.5
+        "intensity": 0.4
       }
     },
     {
@@ -33,7 +40,7 @@
     {
       "operation": "blur_background",
       "params": {
-        "blur_strength": 25
+        "blur_strength": 21
       }
     }
   ],

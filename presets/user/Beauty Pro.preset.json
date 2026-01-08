@@ -1,20 +1,27 @@
 {
   "schema_version": "2.0",
   "name": "Beauty Pro",
-  "description": "Professional beauty preset: Eye enhancement, face beautification, background blur - Perfect for TikTok/Reels",
+  "description": "Professional beauty preset: Eye enhancement, face beautification, red lips, background blur - Perfect for TikTok/Reels",
   "created_at": "2026-01-08T16:59:00.000000",
-  "modified_at": "2026-01-08T16:59:00.000000",
+  "modified_at": "2026-01-08T19:30:00.000000",
   "operations": [
     {
       "operation": "face_beautify",
       "params": {
-        "intensity": 0.6
+        "intensity": 0.7
       }
     },
     {
       "operation": "eye_enhancement",
       "params": {
         "intensity": 0.7
+      }
+    },
+    {
+      "operation": "lip_color",
+      "params": {
+        "intensity": 0.5,
+        "color": "red"
       }
     },
     {

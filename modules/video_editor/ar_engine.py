@@ -685,21 +685,21 @@ class AREngine:
 
                 # For red lips, simply add red tint on top of existing color
                 if color == 'red':
-                    # Simple additive red tint - like applying lipstick
-                    # Add red to existing color instead of replacing it
-                    red_tint = intensity * 100  # Amount of red to add (0-100 at max intensity)
+                    # COMPLETE blue/green suppression for pure red
+                    # No more percentage reductions - set absolute low values
 
-                    # Add red tint to red channel
+                    # Step 1: Add red tint
+                    red_boost = intensity * 120  # Strong red boost
                     colored_lips[:, :, 2] = np.clip(
-                        lip_region[:, :, 2] + (mask_normalized * red_tint),
+                        lip_region[:, :, 2] + (mask_normalized * red_boost),
                         0, 255
                     )
 
-                    # Aggressively darken blue/green to remove purple tint and show pure red
-                    # Reduce by 50% at intensity=0.5 (not just 15%)
-                    darkening = mask_normalized * intensity * 0.8
-                    colored_lips[:, :, 0] = lip_region[:, :, 0] * (1 - darkening)  # Blue - reduced by 40% at intensity=0.5
-                    colored_lips[:, :, 1] = lip_region[:, :, 1] * (1 - darkening)  # Green - reduced by 40% at intensity=0.5
+                    # Step 2: DRASTICALLY reduce blue and green to near-zero
+                    # Keep only 5% of original blue/green to remove ALL purple tint
+                    suppression = mask_normalized * 0.95  # Remove 95% at full mask
+                    colored_lips[:, :, 0] = lip_region[:, :, 0] * (1 - suppression)  # Blue: Only 5% left
+                    colored_lips[:, :, 1] = lip_region[:, :, 1] * (1 - suppression)  # Green: Only 5% left
 
                 else:
                     # Standard blending for other colors

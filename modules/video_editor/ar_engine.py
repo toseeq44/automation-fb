@@ -601,7 +601,7 @@ class AREngine:
 
             # Define lip colors in BGR format (OpenCV uses BGR, not RGB)
             lip_colors = {
-                'red': (0, 0, 220),        # Pure red
+                'red': (0, 0, 255),        # Pure bright red
                 'pink': (180, 140, 255),   # Light pink
                 'coral': (100, 140, 255),  # Coral
                 'nude': (140, 160, 200),   # Nude/natural
@@ -680,17 +680,30 @@ class AREngine:
                 # Use landmark-based mask only (better results)
                 mask_normalized = lip_mask_region.astype(float) / 255.0
 
-                # Apply color directly with proper blending
-                colored_lips = lip_region.copy()
+                # Apply color with aggressive blue/green suppression for pure red
+                colored_lips = lip_region.copy().astype(float)
 
-                # Blend each channel separately for accurate color
-                for c in range(3):
-                    colored_lips[:, :, c] = (
-                        lip_region[:, :, c] * (1 - mask_normalized * intensity) +
-                        target_color[c] * mask_normalized * intensity
-                    ).astype(np.uint8)
+                # For red lips, aggressively reduce blue and green while boosting red
+                if color == 'red':
+                    # Blue channel (0) - reduce significantly
+                    colored_lips[:, :, 0] = lip_region[:, :, 0] * (1 - mask_normalized * intensity * 0.9)
+                    # Green channel (1) - reduce significantly
+                    colored_lips[:, :, 1] = lip_region[:, :, 1] * (1 - mask_normalized * intensity * 0.9)
+                    # Red channel (2) - boost strongly
+                    colored_lips[:, :, 2] = np.clip(
+                        lip_region[:, :, 2] * (1 - mask_normalized * intensity * 0.5) +
+                        target_color[2] * mask_normalized * intensity,
+                        0, 255
+                    )
+                else:
+                    # Standard blending for other colors
+                    for c in range(3):
+                        colored_lips[:, :, c] = (
+                            lip_region[:, :, c] * (1 - mask_normalized * intensity) +
+                            target_color[c] * mask_normalized * intensity
+                        )
 
-                result[y1:y2, x1:x2] = colored_lips
+                result[y1:y2, x1:x2] = colored_lips.astype(np.uint8)
 
             return result
 

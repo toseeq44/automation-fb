@@ -1034,9 +1034,12 @@ class VideoEditor:
         def apply_to_frame(get_frame, t):
             """Apply AR effect to a single frame"""
             frame = get_frame(t)
-            # Apply AR effect
-            processed_frame = ar_function(frame, **kwargs)
-            return processed_frame if processed_frame is not None else frame
+            # MoviePy frames are RGB; AR engine expects BGR (OpenCV).
+            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            processed_bgr = ar_function(frame_bgr, **kwargs)
+            if processed_bgr is None:
+                return frame
+            return cv2.cvtColor(processed_bgr, cv2.COLOR_BGR2RGB)
 
         # Apply to video
         self.video = self.video.transform(apply_to_frame)

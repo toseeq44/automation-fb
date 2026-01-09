@@ -11,6 +11,8 @@ from datetime import datetime
 from pathlib import Path
 
 from modules.logging.logger import get_logger
+from modules.video_editor.operation_library import OperationLibrary
+from modules.video_editor.preset_validator import PresetValidator
 
 logger = get_logger(__name__)
 
@@ -199,6 +201,9 @@ class PresetManager:
 
         self.current_preset = None
         self.presets_cache = {}  # Cache loaded presets
+        self.operation_library = OperationLibrary()
+        self.preset_validator = PresetValidator()
+        self.preset_validator.set_operation_registry(self.operation_library)
 
         # Initialize system presets on first run
         self._initialize_system_presets()
@@ -536,38 +541,66 @@ class PresetManager:
 
     def _validate_and_fix_params(self, editor, op_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Validate parameters and add missing required ones with sensible defaults
-
-        Args:
-            editor: VideoEditor instance
-            op_name: Operation name
-            params: Current parameters dict
-
-        Returns:
-            Fixed parameters dict
+        Validate parameters, normalize values, and add missing required ones.
         """
         import inspect
+
+        if not isinstance(params, dict):
+            logger.warning(f"   Invalid params for {op_name}, using empty params")
+            params = {}
 
         if not hasattr(editor, op_name):
             return params
 
         method = getattr(editor, op_name)
         sig = inspect.signature(method)
+        accepts_kwargs = any(
+            param.kind == inspect.Parameter.VAR_KEYWORD
+            for param in sig.parameters.values()
+        )
+        allowed_params = {
+            name for name, param in sig.parameters.items()
+            if name != 'self' and param.kind not in (
+                inspect.Parameter.VAR_POSITIONAL,
+                inspect.Parameter.VAR_KEYWORD
+            )
+        }
 
-        # Check each parameter in method signature
-        for param_name, param in sig.parameters.items():
-            # Skip 'self' parameter
-            if param_name == 'self':
+        op_def = None
+        if self.operation_library and self.operation_library.has_operation(op_name):
+            op_def = self.operation_library.get_operation(op_name)
+
+        fixed_params = {}
+        for param_name, value in params.items():
+            if not accepts_kwargs and param_name not in allowed_params:
+                logger.warning(f"   Dropping unknown param '{param_name}' for {op_name}")
                 continue
 
-            # If parameter is required (no default) and missing from params
-            if param.default == inspect.Parameter.empty and param_name not in params:
-                # Generate sensible default based on parameter name
-                default_value = self._generate_sensible_default_by_name(param_name)
-                params[param_name] = default_value
-                logger.warning(f"   ⚠️  Missing required parameter '{param_name}' for {op_name}, using default: {default_value}")
+            if op_name == 'lip_color' and param_name == 'color' and isinstance(value, str):
+                value = self._normalize_color_alias(value)
 
-        return params
+            if op_def and param_name in op_def.parameters:
+                value = self._normalize_param_value(op_def.parameters[param_name], value)
+
+            fixed_params[param_name] = value
+
+        for param_name, param in sig.parameters.items():
+            if param_name == 'self':
+                continue
+            if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+                continue
+            if param.default == inspect.Parameter.empty and param_name not in fixed_params:
+                default_value = None
+                if op_def and param_name in op_def.parameters:
+                    default_value = op_def.parameters[param_name].default
+                if default_value is None:
+                    default_value = self._generate_sensible_default_by_name(param_name)
+                fixed_params[param_name] = default_value
+                logger.warning(
+                    f"   Missing required parameter '{param_name}' for {op_name}, using default: {default_value}"
+                )
+
+        return fixed_params
 
     def _generate_sensible_default_by_name(self, param_name: str) -> Any:
         """
@@ -610,6 +643,88 @@ class PresetManager:
             # Generic defaults
             return 1.0  # Most numeric parameters work with 1.0
 
+    def _normalize_color_alias(self, value: str) -> str:
+        """
+        Normalize common color aliases to known values.
+        """
+        normalized = value.strip().lower().replace('_', ' ').replace('-', ' ')
+        aliases = {
+            'natural': 'nude',
+            'skin': 'nude',
+            'light red': 'coral',
+            'soft red': 'coral',
+            'rose': 'coral',
+            'dark red': 'berry',
+            'maroon': 'berry',
+            'wine': 'berry'
+        }
+        return aliases.get(normalized, normalized)
+
+    def _normalize_param_value(self, param_def, value: Any) -> Any:
+        """
+        Coerce and clamp a parameter value based on its definition.
+        """
+        if value is None:
+            return value
+
+        try:
+            if param_def.param_type == 'int':
+                if isinstance(value, str):
+                    value = int(float(value.strip()))
+                elif isinstance(value, float):
+                    value = int(value)
+            elif param_def.param_type == 'float':
+                if isinstance(value, str):
+                    value = float(value.strip())
+                elif isinstance(value, int):
+                    value = float(value)
+            elif param_def.param_type == 'bool':
+                if isinstance(value, str):
+                    lowered = value.strip().lower()
+                    if lowered in ('true', '1', 'yes', 'y', 'on'):
+                        value = True
+                    elif lowered in ('false', '0', 'no', 'n', 'off'):
+                        value = False
+                elif isinstance(value, int):
+                    value = bool(value)
+            elif param_def.param_type == 'tuple':
+                if isinstance(value, list):
+                    value = tuple(value)
+                elif isinstance(value, str) and ',' in value:
+                    parts = [p.strip() for p in value.split(',')]
+                    if len(parts) == 2:
+                        value = (parts[0], parts[1])
+            elif param_def.param_type == 'list':
+                if isinstance(value, tuple):
+                    value = list(value)
+        except Exception:
+            if param_def.default is not None:
+                logger.warning(
+                    f"   Invalid value for '{param_def.name}', using default: {param_def.default}"
+                )
+                return param_def.default
+            return value
+
+        if isinstance(value, (int, float)):
+            if param_def.min_val is not None and value < param_def.min_val:
+                value = param_def.min_val
+            if param_def.max_val is not None and value > param_def.max_val:
+                value = param_def.max_val
+
+        if param_def.choices and isinstance(value, str):
+            choice_map = {str(c).lower(): c for c in param_def.choices}
+            lowered = value.lower()
+            if lowered in choice_map:
+                value = choice_map[lowered]
+            else:
+                fallback = param_def.default if param_def.default is not None else param_def.choices[0]
+                logger.warning(
+                    f"   Unknown choice for '{param_def.name}': {value}, using {fallback}"
+                )
+                value = fallback
+
+        return value
+
     def apply_preset_to_video(self, preset: EditingPreset, video_path: str,
                              output_path: str, quality: str = 'high',
                              progress_callback=None) -> bool:
@@ -635,13 +750,36 @@ class PresetManager:
             # Create editor
             editor = VideoEditor(video_path)
 
+            # Validate preset once before applying
+            if self.preset_validator:
+                validation = self.preset_validator.validate_preset_data(preset.to_dict())
+                if not validation.valid:
+                    logger.warning("Preset validation failed, attempting to continue with auto-fixes")
+                if validation.warnings:
+                    logger.info(f"Preset validation warnings: {len(validation.warnings)}")
+
+            operations = preset.operations if isinstance(preset.operations, list) else []
+
             # Apply all operations
-            for i, operation in enumerate(preset.operations):
-                op_name = operation['operation']
-                params = operation['params'].copy()  # Make a copy to avoid modifying original
+            for i, operation in enumerate(operations):
+                if not isinstance(operation, dict):
+                    logger.warning(f"Skipping invalid operation at index {i}")
+                    continue
+
+                op_name = operation.get('operation')
+                if not op_name or not isinstance(op_name, str):
+                    logger.warning(f"Skipping invalid operation name at index {i}")
+                    continue
+
+                params = operation.get('params', {})
+                if isinstance(params, dict):
+                    params = params.copy()
+                else:
+                    logger.warning(f"Invalid params for operation '{op_name}', using empty params")
+                    params = {}
 
                 if progress_callback:
-                    progress_callback(f"Applying {op_name}... ({i+1}/{len(preset.operations)})")
+                    progress_callback(f"Applying {op_name}... ({i+1}/{len(operations)})")
 
                 logger.info(f"   Applying operation: {op_name}")
                 logger.info(f"   Operation params: {params}")

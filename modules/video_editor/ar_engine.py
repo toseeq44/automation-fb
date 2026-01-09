@@ -114,9 +114,9 @@ class AREngine:
             base_options=base_options,
             running_mode=vision.RunningMode.IMAGE,  # Process individual frames
             num_faces=5,  # Support multiple faces
-            min_face_detection_confidence=0.5,
-            min_face_presence_confidence=0.5,
-            min_tracking_confidence=0.5
+            min_face_detection_confidence=0.3,
+            min_face_presence_confidence=0.3,
+            min_tracking_confidence=0.3
         )
 
         # Create face landmarker
@@ -130,8 +130,8 @@ class AREngine:
             static_image_mode=False,
             max_num_faces=5,  # Support multiple faces
             refine_landmarks=True,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
+            min_detection_confidence=0.3,
+            min_tracking_confidence=0.3
         )
         logger.info("✅ FaceMesh initialized (solutions API - legacy)")
 
@@ -647,14 +647,14 @@ class AREngine:
 
                 # For red lips - work directly on full frame (no rectangular extraction!)
                 if color == 'red':
-                    # Step 1: Suppress blue/green channels by 80-95%
-                    base_suppression = 0.85  # 85% removal
+                    # Step 1: Suppress blue/green channels based on intensity
+                    base_suppression = 0.35 + (intensity * 0.35)
 
                     result[:, :, 0] = result[:, :, 0] * (1 - mask_3ch[:, :, 0] * base_suppression)  # Blue
                     result[:, :, 1] = result[:, :, 1] * (1 - mask_3ch[:, :, 1] * base_suppression)  # Green
 
                     # Step 2: Add red boost
-                    red_boost = intensity * 100
+                    red_boost = intensity * 60
                     result[:, :, 2] = np.clip(
                         result[:, :, 2] + (mask_3ch[:, :, 2] * red_boost),
                         0, 255

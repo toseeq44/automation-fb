@@ -20,7 +20,7 @@
     {
       "operation": "lip_color",
       "params": {
-        "intensity": 0.5,
+        "intensity": 0.20,
         "color": "red"
       }
     },

@@ -762,12 +762,13 @@ class EditorBatchWorker(QThread):
             # Result: Clean voice isolation + music removal + pitch change
 
             # Complex filter for EDGE BLUR effect
+            # Using more robust syntax with explicit width/height calculations
             video_filter_complex = (
                 "[0:v]split=2[main][bg];"  # Split input into 2 streams
                 "[bg]scale=iw:ih,gblur=sigma=20[blurred];"  # Heavy blur for background
-                "[main]scale=iw*0.97:ih*0.97[scaled];"  # Scale to 97%
-                "[blurred][scaled]overlay=(W-w)/2:(H-h)/2[overlay];"  # Overlay centered
-                "[overlay]scale='trunc(iw*1.1/2)*2:trunc(ih*1.1/2)*2'[out]"  # 110% zoom, even dimensions
+                "[main]scale='iw*0.97':'ih*0.97'[scaled];"  # Scale to 97% (quotes for safety)
+                "[blurred][scaled]overlay='(main_w-overlay_w)/2:(main_h-overlay_h)/2'[overlay];"  # Overlay centered
+                "[overlay]scale='trunc(iw*1.1/2)*2':'trunc(ih*1.1/2)*2'[out]"  # 110% zoom, even dimensions
             )
 
             # PROFESSIONAL AUDIO PROCESSING (Adobe Premiere Pro / After Effects style)
@@ -855,7 +856,12 @@ class EditorBatchWorker(QThread):
                     "info"
                 )
 
-            # Run FFmpeg
+            # Log FFmpeg command for debugging (first 500 chars)
+            cmd_str = ' '.join(cmd)
+            logger.debug(f"      FFmpeg command: {cmd_str[:500]}...")
+
+            # Run FFmpeg with error handling and fallback
+            logger.info(f"      Running FFmpeg command...")
             result = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -863,14 +869,67 @@ class EditorBatchWorker(QThread):
                 timeout=600  # 10 minute timeout
             )
 
+            # Log stderr for debugging (even on success, FFmpeg writes to stderr)
+            if result.stderr:
+                logger.debug(f"      FFmpeg stderr: {result.stderr[-200:]}")
+
+            # If complex filter fails, try simplified version
             if result.returncode != 0:
                 error_msg = result.stderr[-500:] if result.stderr else "Unknown FFmpeg error"
-                logger.error(f"FFmpeg error: {error_msg}")
-                self.log_message.emit(f"❌ FFmpeg failed: {error_msg[:200]}", "error")
-                # Clean up temp file if it exists
-                if is_inplace and os.path.exists(actual_output):
-                    os.remove(actual_output)
-                return False
+                logger.error(f"FFmpeg complex filter failed: {error_msg}")
+
+                # Check if it's a filter-related error (-22 = Invalid argument)
+                if result.returncode == -22 or "Invalid argument" in error_msg or "filter" in error_msg.lower():
+                    logger.warning("      Attempting simplified processing (no audio effects)...")
+                    self.log_message.emit(f"⚠️  Complex filter failed, trying simplified version...", "warning")
+
+                    # Simplified command without audio processing
+                    simple_cmd = [
+                        ffmpeg_path,
+                        '-i', source_path,
+                        '-filter_complex', video_filter_complex,  # Keep video filter
+                        '-map', '[out]',  # Map output video
+                        '-c:v', 'libx264',
+                        *crf_preset,
+                        '-map_metadata', '-1',  # Remove all metadata
+                        '-y',  # Overwrite output
+                        actual_output
+                    ]
+
+                    # Add audio without complex processing if available
+                    if has_audio:
+                        simple_cmd.insert(-5, '-map')
+                        simple_cmd.insert(-5, '0:a?')
+                        simple_cmd.insert(-5, '-c:a')
+                        simple_cmd.insert(-5, 'aac')
+                        simple_cmd.insert(-5, '-b:a')
+                        simple_cmd.insert(-5, '192k')
+
+                    # Retry with simplified command
+                    result = subprocess.run(
+                        simple_cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=600
+                    )
+
+                    if result.returncode != 0:
+                        # Even simplified version failed
+                        error_msg = result.stderr[-500:] if result.stderr else "Unknown FFmpeg error"
+                        logger.error(f"Simplified FFmpeg also failed: {error_msg}")
+                        self.log_message.emit(f"❌ FFmpeg failed: {error_msg[:200]}", "error")
+                        if is_inplace and os.path.exists(actual_output):
+                            os.remove(actual_output)
+                        return False
+                    else:
+                        logger.info("      ✓ Simplified processing succeeded")
+                        self.log_message.emit(f"✓ Processed with simplified settings", "success")
+                else:
+                    # Different error, not filter-related
+                    self.log_message.emit(f"❌ FFmpeg failed: {error_msg[:200]}", "error")
+                    if is_inplace and os.path.exists(actual_output):
+                        os.remove(actual_output)
+                    return False
 
             # Verify output file exists
             if os.path.exists(actual_output):

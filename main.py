@@ -30,6 +30,53 @@ import os
 import shutil
 from pathlib import Path
 
+def configure_ffmpeg_for_moviepy():
+    """
+    Configure FFmpeg paths for MoviePy when running as bundled EXE.
+    This is CRITICAL - MoviePy won't find bundled FFmpeg without this!
+    """
+    if not getattr(sys, 'frozen', False):
+        return  # Only needed in frozen/exe mode
+
+    # Import here to avoid circular dependency
+    try:
+        from modules.video_editor.utils import get_ffmpeg_path
+        import os
+
+        # Get the bundled FFmpeg path
+        ffmpeg_path = get_ffmpeg_path()
+        ffprobe_path = ffmpeg_path.replace('ffmpeg.exe', 'ffprobe.exe')
+
+        # Configure MoviePy environment variables
+        os.environ['FFMPEG_BINARY'] = ffmpeg_path
+        os.environ['FFPROBE_BINARY'] = ffprobe_path
+
+        # Also configure imageio-ffmpeg (used by MoviePy)
+        try:
+            import imageio_ffmpeg
+            # Monkey-patch imageio_ffmpeg to use our bundled FFmpeg
+            imageio_ffmpeg.get_ffmpeg_exe = lambda: ffmpeg_path
+            print(f"✓ FFmpeg configured for MoviePy: {ffmpeg_path}")
+        except ImportError:
+            pass
+
+        # Configure moviepy.config (MoviePy 2.x)
+        try:
+            from moviepy.config import change_settings
+            change_settings({"FFMPEG_BINARY": ffmpeg_path})
+            print(f"✓ MoviePy config updated")
+        except (ImportError, AttributeError):
+            # MoviePy 1.x or different version
+            try:
+                import moviepy.config as mp_config
+                mp_config.FFMPEG_BINARY = ffmpeg_path
+                print(f"✓ MoviePy config updated (legacy)")
+            except (ImportError, AttributeError):
+                pass
+
+    except Exception as e:
+        print(f"⚠️  Warning: Failed to configure FFmpeg for MoviePy: {e}")
+
 def restore_bundled_configs():
     """
     Restore configuration files from the bundled PyInstaller temporary directory
@@ -96,7 +143,10 @@ def restore_bundled_configs():
 
 def main():
     """Launch the OneSoul application"""
-    # Attempt to restore configs first
+    # CRITICAL: Configure FFmpeg for MoviePy FIRST (before any video operations)
+    configure_ffmpeg_for_moviepy()
+
+    # Attempt to restore configs
     restore_bundled_configs()
 
     # Initialize application

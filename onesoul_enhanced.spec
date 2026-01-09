@@ -16,20 +16,39 @@ block_cipher = None
 
 # Optional binaries - only include if they exist
 optional_binaries = []
+
+# Cloudflared
 if os.path.exists('cloudflared.exe'):
     optional_binaries.append(('cloudflared.exe', '.'))
+    print("✓ cloudflared.exe found")
 else:
     print("⚠️  WARNING: cloudflared.exe not found - skipping")
+
+# FFmpeg binaries (CRITICAL for video editing)
+if os.path.exists('ffmpeg/ffmpeg.exe'):
+    optional_binaries.append(('ffmpeg/ffmpeg.exe', 'ffmpeg'))
+    print("✓ ffmpeg.exe found")
+else:
+    print("⚠️  WARNING: ffmpeg/ffmpeg.exe not found - video editing will NOT work in EXE")
+
+if os.path.exists('ffmpeg/ffprobe.exe'):
+    optional_binaries.append(('ffmpeg/ffprobe.exe', 'ffmpeg'))
+    print("✓ ffprobe.exe found")
+else:
+    print("⚠️  WARNING: ffmpeg/ffprobe.exe not found")
+
+# yt-dlp binary
+if os.path.exists('bin/yt-dlp.exe'):
+    optional_binaries.append(('bin/yt-dlp.exe', 'bin'))
+    print("✓ yt-dlp.exe found")
+else:
+    print("⚠️  WARNING: bin/yt-dlp.exe not found - link grabber may not work")
 
 # Optional data files - only include if they exist
 optional_datas = []
 
-# Check for ffmpeg
-if os.path.exists('ffmpeg') and os.path.isdir('ffmpeg'):
-    optional_datas.append(('ffmpeg', 'ffmpeg'))
-    print("✓ ffmpeg directory found")
-else:
-    print("⚠️  WARNING: ffmpeg directory not found - video editing may not work")
+# Note: ffmpeg binaries are now added to optional_binaries above
+# We don't need to include the entire directory, just the exe files
 
 # Check for presets
 if os.path.exists('presets') and os.path.isdir('presets'):
@@ -61,11 +80,7 @@ except ImportError:
 a = Analysis(
     ['main.py'],
     pathex=['.'],
-    binaries=[
-        ('cloudflared.exe', '.'),
-        ('bin/yt-dlp.exe', 'bin'),  # yt-dlp binary for Link Grabber
-        ('bin/chromium/*', 'bin/chromium'),
-    ],
+    binaries=optional_binaries,  # Use dynamic binaries list
     datas=[
         # Helper images for auto uploader (REQUIRED - image recognition)
         ('modules/auto_uploader/helper_images/*.png', 'modules/auto_uploader/helper_images'),
@@ -76,6 +91,9 @@ a = Analysis(
         ('modules/auto_uploader/data', 'modules/auto_uploader/data'),
 
         # NOTE: ix_data is NOT included - it's a runtime workspace created automatically
+
+        # Chromium browser data files (for NST browser approach)
+        ('bin/chromium', 'bin/chromium'),
 
         # GUI assets (new design)
         ('gui-redesign/assets/*.html', 'gui-redesign/assets'),

@@ -94,6 +94,28 @@
 
 ---
 
+## 🛡️ **NEW: Antivirus False Positive Prevention**
+
+### Problem
+EXE was being deleted by antivirus software after running - this is the **exe disappearing issue**.
+
+### Solution
+Added Windows metadata to make exe appear legitimate:
+
+1. **version_info.txt** - Company name, product info, version
+2. **manifest.xml** - Windows compatibility declarations
+3. **Updated spec file** - Embedded version info and manifest
+
+**Result:**
+- ✅ Windows recognizes exe as legitimate software
+- ✅ Antivirus less likely to flag as suspicious
+- ✅ Icon properly embedded and persists
+- ✅ No UAC prompts
+
+**See ANTIVIRUS_GUIDE.md for complete instructions on handling antivirus issues.**
+
+---
+
 ## 📝 Summary of Changes
 
 ### main.py

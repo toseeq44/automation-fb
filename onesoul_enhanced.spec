@@ -229,13 +229,16 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,
-    console=False,  # No console window
+    upx=False,  # UPX disabled to prevent antivirus false positives
+    console=False,  # No console window (GUI mode)
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='gui-redesign/assets/onesoul_logo.ico',
+    icon='gui-redesign/assets/onesoul_logo.ico',  # Application icon
+    version='version_info.txt',  # CRITICAL: Version info prevents antivirus false positives
+    manifest='manifest.xml',  # Windows manifest for compatibility and proper execution
+    uac_admin=False,  # Don't require admin privileges (prevents UAC prompt)
 )
 
 coll = COLLECT(

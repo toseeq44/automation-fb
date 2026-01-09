@@ -1,5 +1,17 @@
 # OneSoul EXE Build Instructions
 
+## 🔴 **CRITICAL: EXE Disappearing Issue**
+
+**If your exe disappears after running, it's being deleted by antivirus!**
+
+See **ANTIVIRUS_GUIDE.md** for complete solution.
+
+**Quick Fix:**
+1. Add `dist\OneSoul\` folder to Windows Defender exclusions
+2. Rebuild exe (it now includes version info to prevent false positives)
+
+---
+
 ## ✅ Pre-Build Checklist
 
 Before running the build command, ensure these files/folders exist in the **ROOT directory**:
@@ -7,22 +19,43 @@ Before running the build command, ensure these files/folders exist in the **ROOT
 ```
 automation-fb/
 ├── cloudflared.exe          ✓ (Your local file - not in git)
-├── ffmpeg/                  ✓ (Your local folder - not in git)
-│   ├── ffmpeg.exe
-│   └── ffprobe.exe
+├── ffmpeg/                  ✓ (Your local folder - not in git) **REQUIRED**
+│   ├── ffmpeg.exe          ⚠️  Must exist before build
+│   └── ffprobe.exe         ⚠️  Must exist before build
+├── bin/
+│   └── yt-dlp.exe          ⚠️  Optional (auto-download available)
 ├── main.py                  ✓ (Already in git)
 ├── onesoul_enhanced.spec    ✓ (Already in git - updated)
+├── version_info.txt         ✓ (NEW - prevents antivirus issues)
+├── manifest.xml             ✓ (NEW - Windows compatibility)
 ├── gui-redesign/            ✓ (Already in git)
 ├── modules/                 ✓ (Already in git)
 └── requirements.txt         ✓ (Already in git)
 ```
 
+### 📥 Quick Download (NEW)
+
+Run the helper script to download missing binaries:
+```bash
+download_binaries.bat
+```
+
+This will:
+- Check for missing ffmpeg.exe and ffprobe.exe
+- Auto-download yt-dlp.exe if missing
+- Verify all required files exist
+
+**Manual Download:**
+- **FFmpeg:** https://github.com/BtbN/FFmpeg-Builds/releases (Download `ffmpeg-master-latest-win64-gpl.zip`)
+- **yt-dlp:** https://github.com/yt-dlp/yt-dlp/releases (Download `yt-dlp.exe`)
+
 ### File Sizes (Approximate)
 - `cloudflared.exe`: ~50-60 MB
 - `ffmpeg/ffmpeg.exe`: ~100-120 MB
 - `ffmpeg/ffprobe.exe`: ~100-120 MB
+- `yt-dlp.exe`: ~10-15 MB
 
-**Note:** These files are NOT in git repository (`.gitignore`). Keep them locally only.
+**Note:** Binary files are NOT in git repository (`.gitignore`). Download them manually.
 
 ---
 

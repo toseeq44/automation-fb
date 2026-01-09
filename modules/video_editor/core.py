@@ -10,19 +10,30 @@ from typing import Optional, Tuple, List, Dict, Any
 from datetime import datetime
 
 try:
-    # MoviePy 2.x imports
+    # Try MoviePy 2.x imports first
     from moviepy import (
         VideoFileClip, AudioFileClip, ImageClip, TextClip,
         CompositeVideoClip, CompositeAudioClip, concatenate_videoclips,
         concatenate_audioclips
     )
-    from moviepy import vfx, afx
+    try:
+        # MoviePy 2.x: effects are in separate modules
+        from moviepy.video import fx as vfx
+        from moviepy.audio import fx as afx
+    except ImportError:
+        # MoviePy 1.x: effects are in editor modules
+        from moviepy.video import fx as vfx
+        from moviepy.audio import fx as afx
     MOVIEPY_AVAILABLE = True
 except ImportError:
     MOVIEPY_AVAILABLE = False
+    vfx = None
+    afx = None
     print("WARNING: MoviePy not installed. Install with: pip install moviepy")
 
 from modules.logging.logger import get_logger
+
+logger = get_logger(__name__)
 
 # AR Engine import (lazy load to avoid dependency issues)
 AR_ENGINE_AVAILABLE = False
@@ -36,8 +47,6 @@ try:
 except (ImportError, AttributeError, ModuleNotFoundError) as e:
     AREngine = None
     logger.warning(f"AR Engine not available: {e}")
-
-logger = get_logger(__name__)
 
 
 class VideoProject:

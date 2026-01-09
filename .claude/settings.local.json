@@ -6,7 +6,8 @@
       "Bash(rm:*)",
       "Bash(ls:*)",
       "Bash(cd:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(pip show:*)"
     ],
     "deny": [],
     "ask": []

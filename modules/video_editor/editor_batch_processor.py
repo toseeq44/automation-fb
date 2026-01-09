@@ -763,11 +763,11 @@ class EditorBatchWorker(QThread):
 
             # Complex filter for EDGE BLUR effect
             video_filter_complex = (
-                "[0:v]split=2[main][bg];"  # Split input into 2 streams
+                "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p,split=2[main][bg];"  # Normalize format/dimensions
                 "[bg]scale=iw:ih,gblur=sigma=20[blurred];"  # Heavy blur for background
                 "[main]scale=iw*0.97:ih*0.97[scaled];"  # Scale to 97%
                 "[blurred][scaled]overlay=(W-w)/2:(H-h)/2[overlay];"  # Overlay centered
-                "[overlay]scale='trunc(iw*1.1/2)*2:trunc(ih*1.1/2)*2'[out]"  # 110% zoom, even dimensions
+                "[overlay]scale='trunc(iw*1.1/2)*2:trunc(ih*1.1/2)*2',format=yuv420p[out]"  # 110% zoom, even dimensions
             )
 
             # PROFESSIONAL AUDIO PROCESSING (Adobe Premiere Pro / After Effects style)
@@ -835,6 +835,7 @@ class EditorBatchWorker(QThread):
 
             cmd += [
                 '-c:v', 'libx264',
+                '-pix_fmt', 'yuv420p',
                 *crf_preset,
                 '-map_metadata', '-1',  # Remove all metadata
                 '-y',  # Overwrite output

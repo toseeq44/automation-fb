@@ -61,8 +61,7 @@ except ImportError:
 a = Analysis(
     ['main.py'],
     pathex=['.'],
-    binaries=[
-        ('cloudflared.exe', '.'),
+    binaries=optional_binaries + [
         ('bin/yt-dlp.exe', 'bin'),  # yt-dlp binary for Link Grabber
         ('bin/chromium/*', 'bin/chromium'),
     ],

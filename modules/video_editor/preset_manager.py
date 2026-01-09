@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from modules.logging.logger import get_logger
+from modules.config.paths import get_application_root
 from modules.video_editor.operation_library import OperationLibrary
 from modules.video_editor.preset_validator import PresetValidator
 
@@ -185,7 +186,8 @@ class PresetManager:
             presets_dir: Directory to store presets (default: ./presets/)
         """
         if presets_dir is None:
-            presets_dir = os.path.join(os.getcwd(), 'presets')
+            app_root = get_application_root()
+            presets_dir = str(app_root / 'presets')
 
         self.presets_dir = presets_dir
 

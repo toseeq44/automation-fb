@@ -99,8 +99,8 @@ class BulkFolderTab(QWidget):
         folder_scroll = QScrollArea()
         folder_scroll.setWidgetResizable(True)
         folder_scroll.setWidget(self.folder_list_widget)
-        folder_scroll.setMinimumHeight(120)
-        folder_scroll.setMaximumHeight(180)
+        folder_scroll.setMinimumHeight(100)
+        folder_scroll.setMaximumHeight(150)
         folder_frame_layout.addWidget(folder_scroll)
         folder_frame.setLayout(folder_frame_layout)
         main_layout.addWidget(folder_frame)
@@ -114,8 +114,8 @@ class BulkFolderTab(QWidget):
         # Settings section in scroll area
         settings_scroll = QScrollArea()
         settings_scroll.setWidgetResizable(True)
-        settings_scroll.setMinimumHeight(200)
-        settings_scroll.setMaximumHeight(300)
+        settings_scroll.setMinimumHeight(300)
+        settings_scroll.setMaximumHeight(420)
 
         settings_widget = QWidget()
         settings_main_layout = QVBoxLayout()

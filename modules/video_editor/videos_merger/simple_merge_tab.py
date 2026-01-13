@@ -80,8 +80,8 @@ class SimpleMergeTab(QWidget):
         video_scroll = QScrollArea()
         video_scroll.setWidgetResizable(True)
         video_scroll.setWidget(self.video_list_widget)
-        video_scroll.setMinimumHeight(150)
-        video_scroll.setMaximumHeight(220)
+        video_scroll.setMinimumHeight(120)
+        video_scroll.setMaximumHeight(180)
         main_layout.addWidget(video_scroll)
 
         # Empty state label
@@ -93,8 +93,8 @@ class SimpleMergeTab(QWidget):
         # Settings sections in scroll area
         settings_scroll = QScrollArea()
         settings_scroll.setWidgetResizable(True)
-        settings_scroll.setMinimumHeight(250)
-        settings_scroll.setMaximumHeight(350)
+        settings_scroll.setMinimumHeight(350)
+        settings_scroll.setMaximumHeight(450)
 
         settings_widget = QWidget()
         settings_main_layout = QVBoxLayout()

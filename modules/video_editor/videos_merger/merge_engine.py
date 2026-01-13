@@ -370,6 +370,29 @@ class VideoMergeEngine:
         try:
             quality = self.QUALITY_PRESETS.get(settings.output_quality, self.QUALITY_PRESETS['high'])
 
+            # Try to preserve original quality if no transformations were applied
+            # Check if any transformations are enabled
+            has_transformations = (
+                settings.trim_start > 0 or settings.trim_end > 0 or
+                settings.crop_enabled or settings.zoom_enabled or
+                settings.flip_horizontal or settings.flip_vertical
+            )
+
+            # If no transformations and we have original clips, try to get original bitrate
+            if not has_transformations and self.clips:
+                try:
+                    # Get original video info from first clip
+                    original_clip = self.clips[0]
+                    if hasattr(original_clip.reader, 'infos') and 'video_bitrate' in original_clip.reader.infos:
+                        original_bitrate = original_clip.reader.infos['video_bitrate']
+                        # Use original bitrate if higher than preset
+                        preset_bitrate_num = int(quality['video_bitrate'].replace('k', '')) * 1000
+                        if original_bitrate > preset_bitrate_num:
+                            quality['video_bitrate'] = f"{original_bitrate // 1000}k"
+                            logger.info(f"Using original bitrate: {quality['video_bitrate']}")
+                except Exception as e:
+                    logger.warning(f"Could not detect original bitrate: {e}")
+
             logger.info(f"Exporting to: {output_path}")
             logger.info(f"Quality: {settings.output_quality} ({quality['video_bitrate']} video, {quality['audio_bitrate']} audio)")
 

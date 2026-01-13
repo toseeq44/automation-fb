@@ -301,6 +301,13 @@ class IntegratedVideoEditor(QWidget):
         bulk_btn.clicked.connect(self.open_bulk_processing)
         layout.addWidget(bulk_btn)
 
+        # Video Merging Button
+        merging_btn = QPushButton("🎬 Merging")
+        merging_btn.setStyleSheet(button_style)
+        merging_btn.setToolTip("Merge multiple videos into one")
+        merging_btn.clicked.connect(self.open_video_merger)
+        layout.addWidget(merging_btn)
+
         # Title Generator Button
         title_gen_btn = QPushButton("🪄 Title Generator")
         title_gen_btn.setStyleSheet(button_style)
@@ -1218,6 +1225,27 @@ class IntegratedVideoEditor(QWidget):
                 self,
                 "Error",
                 f"Failed to open bulk processing dialog:\n{str(e)}"
+            )
+
+    def open_video_merger(self):
+        """Open video merger window"""
+        try:
+            from modules.video_editor.videos_merger import VideoMergerWindow
+
+            # Create and show merger window
+            merger_window = VideoMergerWindow(self)
+            merger_window.exec_()
+
+            logger.info("Video merger window closed")
+
+        except Exception as e:
+            logger.error(f"Failed to open video merger: {e}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to open video merger window:\n{str(e)}"
             )
 
     def open_title_generator(self):

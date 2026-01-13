@@ -8,7 +8,7 @@ from pathlib import Path
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QFileDialog, QScrollArea, QGroupBox, QSpinBox, QDoubleSpinBox,
-    QComboBox, QCheckBox, QLineEdit, QMessageBox, QTextEdit
+    QComboBox, QCheckBox, QLineEdit, QMessageBox, QFrame
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont
@@ -42,20 +42,21 @@ class BulkFolderTab(QWidget):
     def init_ui(self):
         """Initialize UI"""
         main_layout = QVBoxLayout()
-        main_layout.setContentsMargins(15, 15, 15, 15)
-        main_layout.setSpacing(15)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setSpacing(10)
 
-        # Top buttons
+        # Top buttons row
         button_layout = QHBoxLayout()
+        button_layout.setSpacing(8)
 
         add_btn = QPushButton("➕ Add Folders")
-        add_btn.setFixedHeight(35)
+        add_btn.setFixedHeight(32)
         add_btn.setStyleSheet("""
             QPushButton {
                 background-color: #0066cc;
                 color: white;
                 font-weight: bold;
-                font-size: 10pt;
+                border-radius: 5px;
             }
             QPushButton:hover {
                 background-color: #0052a3;
@@ -65,68 +66,95 @@ class BulkFolderTab(QWidget):
         button_layout.addWidget(add_btn)
 
         clear_btn = QPushButton("🗑️ Clear All")
-        clear_btn.setFixedHeight(35)
+        clear_btn.setFixedHeight(32)
         clear_btn.clicked.connect(self.clear_all)
         button_layout.addWidget(clear_btn)
 
-        preview_btn = QPushButton("📊 Preview Batches")
-        preview_btn.setFixedHeight(35)
+        preview_btn = QPushButton("📊 Preview")
+        preview_btn.setFixedHeight(32)
         preview_btn.clicked.connect(self.preview_batches)
         button_layout.addWidget(preview_btn)
 
         button_layout.addStretch()
         main_layout.addLayout(button_layout)
 
-        # Folder list scroll area
-        self.folder_list_widget = QWidget()
-        self.folder_list_layout = QVBoxLayout()
-        self.folder_list_layout.setSpacing(8)
-        self.folder_list_widget.setLayout(self.folder_list_layout)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(self.folder_list_widget)
-        scroll.setMinimumHeight(150)
-        main_layout.addWidget(scroll, 1)
-
-        # Empty state label
-        self.empty_label = QLabel("No folders added. Click 'Add Folders' to get started.")
-        self.empty_label.setAlignment(Qt.AlignCenter)
-        self.empty_label.setStyleSheet("color: #888; font-size: 11pt; padding: 40px;")
-        self.folder_list_layout.addWidget(self.empty_label)
-
         # Info label
-        info_label = QLabel("ℹ️ Merging Logic: One video from each folder per batch (round-robin)")
-        info_label.setStyleSheet("color: #0066cc; font-size: 9pt; padding: 5px; background-color: #e8f4f8; border-radius: 3px;")
+        info_label = QLabel("ℹ️ Round-robin: Takes 1 video from each folder per batch. Skips single-video batches.")
+        info_label.setStyleSheet("color: #00bcd4; font-size: 9pt; padding: 6px; background-color: #1e3a4a; border-radius: 4px;")
         info_label.setWordWrap(True)
         main_layout.addWidget(info_label)
 
-        # Settings row
-        settings_layout = QHBoxLayout()
-        settings_layout.addWidget(self._create_bulk_settings(), 1)
-        settings_layout.addWidget(self._create_output_settings(), 1)
-        main_layout.addLayout(settings_layout)
+        # Folder list scroll area
+        folder_frame = QFrame()
+        folder_frame.setFrameShape(QFrame.StyledPanel)
+        folder_frame_layout = QVBoxLayout()
+        folder_frame_layout.setContentsMargins(5, 5, 5, 5)
+
+        self.folder_list_widget = QWidget()
+        self.folder_list_layout = QVBoxLayout()
+        self.folder_list_layout.setSpacing(6)
+        self.folder_list_layout.setContentsMargins(0, 0, 0, 0)
+        self.folder_list_widget.setLayout(self.folder_list_layout)
+
+        folder_scroll = QScrollArea()
+        folder_scroll.setWidgetResizable(True)
+        folder_scroll.setWidget(self.folder_list_widget)
+        folder_scroll.setMinimumHeight(120)
+        folder_scroll.setMaximumHeight(180)
+        folder_frame_layout.addWidget(folder_scroll)
+        folder_frame.setLayout(folder_frame_layout)
+        main_layout.addWidget(folder_frame)
+
+        # Empty state label
+        self.empty_label = QLabel("No folders added. Click 'Add Folders' to begin.")
+        self.empty_label.setAlignment(Qt.AlignCenter)
+        self.empty_label.setStyleSheet("color: #888; font-size: 10pt; padding: 30px;")
+        self.folder_list_layout.addWidget(self.empty_label)
+
+        # Settings section in scroll area
+        settings_scroll = QScrollArea()
+        settings_scroll.setWidgetResizable(True)
+        settings_scroll.setMinimumHeight(200)
+        settings_scroll.setMaximumHeight(300)
+
+        settings_widget = QWidget()
+        settings_main_layout = QVBoxLayout()
+        settings_main_layout.setContentsMargins(5, 5, 5, 5)
+        settings_main_layout.setSpacing(10)
+
+        # Create settings in columns
+        settings_row = QHBoxLayout()
+        settings_row.setSpacing(10)
+        settings_row.addWidget(self._create_bulk_settings())
+        settings_row.addWidget(self._create_output_settings())
+        settings_main_layout.addLayout(settings_row)
+
+        settings_widget.setLayout(settings_main_layout)
+        settings_scroll.setWidget(settings_widget)
+        main_layout.addWidget(settings_scroll)
 
         # Summary row
-        self.summary_label = QLabel("📊 Total Batches: 0  |  Folders: 0")
-        self.summary_label.setStyleSheet("font-size: 10pt; font-weight: bold; color: #0066cc;")
+        self.summary_label = QLabel("📊 Batches: 0  |  Folders: 0")
+        self.summary_label.setStyleSheet("font-size: 10pt; font-weight: bold; color: #00bcd4; padding: 5px;")
         main_layout.addWidget(self.summary_label)
 
         # Start button
         self.start_btn = QPushButton("▶️ Start Batch Merging")
-        self.start_btn.setFixedHeight(45)
+        self.start_btn.setFixedHeight(42)
         self.start_btn.setStyleSheet("""
             QPushButton {
                 background-color: #28a745;
                 color: white;
                 font-weight: bold;
-                font-size: 12pt;
+                font-size: 11pt;
+                border-radius: 6px;
             }
             QPushButton:hover {
                 background-color: #218838;
             }
             QPushButton:disabled {
-                background-color: #cccccc;
+                background-color: #3a3a3a;
+                color: #666;
             }
         """)
         self.start_btn.clicked.connect(self.start_merge)
@@ -135,26 +163,33 @@ class BulkFolderTab(QWidget):
 
         self.setLayout(main_layout)
 
-        # Apply dark theme styling
+        # Apply comprehensive dark theme
         self.setStyleSheet("""
             QWidget {
                 background-color: #2a2a2a;
                 color: #e0e0e0;
             }
+            QFrame {
+                background-color: #252525;
+                border: 1px solid #3a3a3a;
+                border-radius: 6px;
+            }
             QGroupBox {
                 background-color: #252525;
                 border: 1px solid #3a3a3a;
                 border-radius: 8px;
-                margin-top: 10px;
-                padding-top: 10px;
+                margin-top: 12px;
+                padding-top: 12px;
                 font-weight: bold;
                 color: #00bcd4;
+                font-size: 10pt;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 subcontrol-position: top left;
-                padding: 5px 10px;
+                padding: 2px 10px;
                 color: #00bcd4;
+                background-color: #252525;
             }
             QLabel {
                 color: #e0e0e0;
@@ -164,7 +199,7 @@ class BulkFolderTab(QWidget):
                 background-color: #2a2a2a;
                 color: #e0e0e0;
                 border: 1px solid #3a3a3a;
-                border-radius: 6px;
+                border-radius: 5px;
                 padding: 6px 12px;
                 font-weight: 500;
             }
@@ -180,61 +215,92 @@ class BulkFolderTab(QWidget):
                 color: #e0e0e0;
                 border: 1px solid #3a3a3a;
                 border-radius: 4px;
-                padding: 5px;
+                padding: 4px 6px;
+                min-height: 20px;
             }
             QSpinBox:focus, QDoubleSpinBox:focus, QLineEdit:focus {
                 border-color: #0066cc;
+            }
+            QSpinBox::up-button, QDoubleSpinBox::up-button {
+                background-color: #2a2a2a;
+                border-left: 1px solid #3a3a3a;
+                border-radius: 0px 3px 0px 0px;
+            }
+            QSpinBox::down-button, QDoubleSpinBox::down-button {
+                background-color: #2a2a2a;
+                border-left: 1px solid #3a3a3a;
+                border-radius: 0px 0px 3px 0px;
+            }
+            QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
+            QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
+                background-color: #353535;
             }
             QComboBox {
                 background-color: #1e1e1e;
                 color: #e0e0e0;
                 border: 1px solid #3a3a3a;
                 border-radius: 4px;
-                padding: 5px;
+                padding: 4px 6px;
+                min-height: 20px;
             }
             QComboBox:hover {
                 border-color: #0066cc;
             }
             QComboBox::drop-down {
                 border: none;
+                width: 20px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid #e0e0e0;
+                margin-right: 5px;
             }
             QComboBox QAbstractItemView {
                 background-color: #2a2a2a;
                 color: #e0e0e0;
                 selection-background-color: #0066cc;
                 border: 1px solid #3a3a3a;
+                outline: none;
             }
             QCheckBox {
                 color: #e0e0e0;
-                spacing: 8px;
+                spacing: 6px;
             }
             QCheckBox::indicator {
-                width: 18px;
-                height: 18px;
+                width: 16px;
+                height: 16px;
                 border: 2px solid #3a3a3a;
-                border-radius: 4px;
+                border-radius: 3px;
                 background-color: #1e1e1e;
             }
             QCheckBox::indicator:checked {
                 background-color: #0066cc;
                 border-color: #0066cc;
+                image: none;
+            }
+            QCheckBox::indicator:checked:after {
+                content: "✓";
+                color: white;
             }
             QCheckBox::indicator:hover {
                 border-color: #0066cc;
             }
             QScrollArea {
-                background-color: #252525;
+                background-color: transparent;
                 border: 1px solid #3a3a3a;
                 border-radius: 6px;
             }
             QScrollBar:vertical {
                 background-color: #1e1e1e;
-                width: 12px;
-                border-radius: 6px;
+                width: 10px;
+                border-radius: 5px;
+                margin: 0px;
             }
             QScrollBar::handle:vertical {
                 background-color: #3a3a3a;
-                border-radius: 6px;
+                border-radius: 5px;
                 min-height: 20px;
             }
             QScrollBar::handle:vertical:hover {
@@ -243,39 +309,46 @@ class BulkFolderTab(QWidget):
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
                 height: 0px;
             }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+            }
         """)
 
     def _create_bulk_settings(self) -> QGroupBox:
         """Create bulk settings group"""
-        group = QGroupBox("⚙️ Bulk Settings")
-        group.setFont(QFont("Arial", 10, QFont.Bold))
+        group = QGroupBox("⚙️ Processing Settings")
         layout = QVBoxLayout()
+        layout.setSpacing(8)
+        layout.setContentsMargins(10, 15, 10, 10)
 
         # Trim start
         start_layout = QHBoxLayout()
-        start_layout.addWidget(QLabel("✂️ Trim Start:"))
+        start_label = QLabel("Trim Start:")
+        start_label.setFixedWidth(80)
+        start_layout.addWidget(start_label)
         self.trim_start_spin = QSpinBox()
         self.trim_start_spin.setRange(0, 300)
         self.trim_start_spin.setValue(0)
         self.trim_start_spin.setSuffix(" sec")
-        self.trim_start_spin.setToolTip("Trim from start of each video")
         start_layout.addWidget(self.trim_start_spin, 1)
         layout.addLayout(start_layout)
 
         # Trim end
         end_layout = QHBoxLayout()
-        end_layout.addWidget(QLabel("✂️ Trim End:"))
+        end_label = QLabel("Trim End:")
+        end_label.setFixedWidth(80)
+        end_layout.addWidget(end_label)
         self.trim_end_spin = QSpinBox()
         self.trim_end_spin.setRange(0, 300)
         self.trim_end_spin.setValue(0)
         self.trim_end_spin.setSuffix(" sec")
-        self.trim_end_spin.setToolTip("Trim from end of each video")
         end_layout.addWidget(self.trim_end_spin, 1)
         layout.addLayout(end_layout)
 
         # Crop
         crop_layout = QHBoxLayout()
-        self.crop_check = QCheckBox("Crop to:")
+        self.crop_check = QCheckBox("Crop:")
+        self.crop_check.setFixedWidth(80)
         self.crop_check.toggled.connect(lambda checked: self.crop_combo.setEnabled(checked))
         crop_layout.addWidget(self.crop_check)
         self.crop_combo = QComboBox()
@@ -287,6 +360,7 @@ class BulkFolderTab(QWidget):
         # Zoom
         zoom_layout = QHBoxLayout()
         self.zoom_check = QCheckBox("Zoom:")
+        self.zoom_check.setFixedWidth(80)
         self.zoom_check.toggled.connect(lambda checked: self.zoom_spin.setEnabled(checked))
         zoom_layout.addWidget(self.zoom_check)
         self.zoom_spin = QDoubleSpinBox()
@@ -298,68 +372,87 @@ class BulkFolderTab(QWidget):
         zoom_layout.addWidget(self.zoom_spin, 1)
         layout.addLayout(zoom_layout)
 
-        # Flip
+        # Flip horizontal
         self.flip_h_check = QCheckBox("Flip Horizontal (Mirror)")
         layout.addWidget(self.flip_h_check)
 
         # Transition
         trans_layout = QHBoxLayout()
-        trans_layout.addWidget(QLabel("🔁 Transition:"))
+        trans_label = QLabel("Transition:")
+        trans_label.setFixedWidth(80)
+        trans_layout.addWidget(trans_label)
         self.transition_combo = QComboBox()
         self.transition_combo.addItems(['Crossfade', 'Fade', 'Slide Left', 'None'])
         trans_layout.addWidget(self.transition_combo, 1)
+
         self.transition_duration_spin = QDoubleSpinBox()
         self.transition_duration_spin.setRange(0.1, 5.0)
         self.transition_duration_spin.setValue(1.0)
         self.transition_duration_spin.setSuffix("s")
-        self.transition_duration_spin.setFixedWidth(80)
+        self.transition_duration_spin.setFixedWidth(70)
         trans_layout.addWidget(self.transition_duration_spin)
         layout.addLayout(trans_layout)
 
         # Auto-delete
-        self.delete_check = QCheckBox("🗑️ Auto-delete videos after merge")
-        self.delete_check.setStyleSheet("font-weight: bold; color: #dc3545;")
+        self.delete_check = QCheckBox("🗑️ Auto-delete after merge")
+        self.delete_check.setStyleSheet("color: #ff6b6b; font-weight: bold;")
         layout.addWidget(self.delete_check)
 
+        layout.addStretch()
         group.setLayout(layout)
         return group
+
     def _create_output_settings(self) -> QGroupBox:
         """Create output settings"""
         group = QGroupBox("💾 Output Settings")
-        group.setFont(QFont("Arial", 10, QFont.Bold))
         layout = QVBoxLayout()
+        layout.setSpacing(8)
+        layout.setContentsMargins(10, 15, 10, 10)
 
         # Output folder
-        folder_layout = QHBoxLayout()
-        folder_layout.addWidget(QLabel("📂 Output:"))
+        folder_label = QLabel("Output Folder:")
+        layout.addWidget(folder_label)
+
+        folder_row = QHBoxLayout()
         self.output_folder_edit = QLineEdit()
         self.output_folder_edit.setText(get_default_output_folder())
         self.output_folder_edit.setReadOnly(True)
-        folder_layout.addWidget(self.output_folder_edit, 1)
-        browse_btn = QPushButton("Browse...")
+        folder_row.addWidget(self.output_folder_edit, 1)
+
+        browse_btn = QPushButton("Browse")
+        browse_btn.setFixedWidth(70)
         browse_btn.clicked.connect(self._browse_output_folder)
-        folder_layout.addWidget(browse_btn)
-        layout.addLayout(folder_layout)
+        folder_row.addWidget(browse_btn)
+        layout.addLayout(folder_row)
 
         # Naming
-        naming_label = QLabel("📝 Naming: batch_001.mp4, batch_002.mp4, ...")
-        naming_label.setStyleSheet("color: #666; font-size: 9pt;")
+        naming_label = QLabel("Files: batch_001.mp4, batch_002.mp4, ...")
+        naming_label.setStyleSheet("color: #888; font-size: 8pt; font-style: italic;")
         layout.addWidget(naming_label)
 
         # Quality and format
         quality_layout = QHBoxLayout()
-        quality_layout.addWidget(QLabel("Quality:"))
+        quality_label = QLabel("Quality:")
+        quality_label.setFixedWidth(60)
+        quality_layout.addWidget(quality_label)
+
         self.quality_combo = QComboBox()
         self.quality_combo.addItems(['Low', 'Medium', 'High', 'Ultra'])
         self.quality_combo.setCurrentIndex(2)
         quality_layout.addWidget(self.quality_combo, 1)
-
-        quality_layout.addWidget(QLabel("Format:"))
-        self.format_combo = QComboBox()
-        self.format_combo.addItems(['MP4', 'MOV', 'AVI'])
-        quality_layout.addWidget(self.format_combo, 1)
         layout.addLayout(quality_layout)
 
+        format_layout = QHBoxLayout()
+        format_label = QLabel("Format:")
+        format_label.setFixedWidth(60)
+        format_layout.addWidget(format_label)
+
+        self.format_combo = QComboBox()
+        self.format_combo.addItems(['MP4', 'MOV', 'AVI'])
+        format_layout.addWidget(self.format_combo, 1)
+        layout.addLayout(format_layout)
+
+        layout.addStretch()
         group.setLayout(layout)
         return group
 
@@ -488,7 +581,7 @@ class BulkFolderTab(QWidget):
     def _update_summary(self):
         """Update summary label"""
         if not self.folder_widgets:
-            self.summary_label.setText("📊 Total Batches: 0  |  Folders: 0")
+            self.summary_label.setText("📊 Batches: 0  |  Folders: 0")
             return
 
         # Quick batch count estimate

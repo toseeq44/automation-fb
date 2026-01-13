@@ -208,6 +208,64 @@ def _validate_cookie_file(cookie_file: str, max_age_days: int = 14) -> dict:
     return result
 
 
+_YOUTUBE_AUTH_COOKIE_NAMES = {
+    "SAPISID",
+    "SID",
+    "HSID",
+    "SSID",
+    "APISID",
+    "__Secure-1PAPISID",
+    "__Secure-3PAPISID",
+    "__Secure-1PSID",
+    "__Secure-3PSID",
+    "__Secure-3PSIDCC",
+}
+
+_YOUTUBE_DOMAIN_HINTS = ("youtube.com", "google.com")
+
+
+def _is_youtube_cookie_domain(domain: str) -> bool:
+    domain = domain.lstrip(".").lower()
+    return any(domain.endswith(token) for token in _YOUTUBE_DOMAIN_HINTS)
+
+
+def _scan_youtube_cookie_file(cookie_file: str):
+    """Return (has_auth_cookie, has_domain_hint) for YouTube cookie files."""
+    has_auth = False
+    has_domain = False
+    try:
+        with open(cookie_file, "r", encoding="utf-8", errors="ignore") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "\t" in line:
+                    parts = line.split("\t")
+                    if len(parts) >= 6:
+                        domain = parts[0]
+                        name = parts[5]
+                        if _is_youtube_cookie_domain(domain):
+                            has_domain = True
+                            if name in _YOUTUBE_AUTH_COOKIE_NAMES:
+                                has_auth = True
+                else:
+                    # Simple name=value format fallback.
+                    if "=" in line:
+                        name = line.split("=", 1)[0].strip()
+                        if name in _YOUTUBE_AUTH_COOKIE_NAMES:
+                            has_auth = True
+                    if not has_domain:
+                        lowered = line.lower()
+                        if "youtube.com" in lowered or "google.com" in lowered:
+                            has_domain = True
+                if has_auth and has_domain:
+                    break
+    except Exception:
+        return False, False
+
+    return has_auth, has_domain
+
+
 def _is_ip_block_error(error_text: str) -> bool:
     """Detect if error is due to IP blocking"""
     if not error_text:
@@ -680,6 +738,21 @@ class VideoDownloaderThread(QThread):
             # Store for fallback use by other methods
             self._all_cookie_files = valid_cookies
 
+            # YouTube: prefer cookies that actually contain auth tokens.
+            if platform == 'youtube' and valid_cookies:
+                scanned = []
+                for cookie_path in valid_cookies:
+                    has_auth, has_domain = _scan_youtube_cookie_file(cookie_path)
+                    scanned.append((cookie_path, has_auth, has_domain))
+
+                for cookie_path, has_auth, _has_domain in scanned:
+                    if has_auth:
+                        return cookie_path
+
+                for cookie_path, _has_auth, has_domain in scanned:
+                    if has_domain:
+                        return cookie_path
+
             # Return first valid cookie (highest priority)
             if valid_cookies:
                 return valid_cookies[0]
@@ -696,69 +769,112 @@ class VideoDownloaderThread(QThread):
         try:
             from datetime import datetime
             start_time = datetime.now()
-            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] 🚀 Method 1: YT-DLP Standard")
+            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] dYs? Method 1: YT-DLP Standard (Progressive)")
 
             # Smart yt-dlp detection
             ytdlp_cmd = self._get_ytdlp_command()
             if not ytdlp_cmd:
-                self.progress.emit(f"   ⚠️ yt-dlp not found, skipping command-based method")
+                self.progress.emit("   yt-dlp not found, skipping command-based method")
                 return False
 
             format_string = self.format_override or 'best'
 
-            # Get user agent (shared pool)
-            user_agent = _get_random_user_agent()
-
             # Get current proxy
             current_proxy = self._get_current_proxy()
 
-            cmd = [
-                ytdlp_cmd,  # Use detected command instead of hardcoded 'yt-dlp'
-                '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
-                '--rm-cache-dir',
-                '-f', format_string,
-                '--restrict-filenames', '--no-warnings', '--retries', str(self.max_retries),
-                '--continue', '--no-check-certificate',
-                '--no-playlist',  # Don't download playlists
-                '--user-agent', user_agent,  # Random UA rotation
+            attempts = [
+                {
+                    'label': "Normal (no cookies/proxy/UA)",
+                    'use_cookies': False,
+                    'use_proxy': False,
+                    'use_ua': False,
+                },
+                {
+                    'label': "Add cookies",
+                    'use_cookies': True,
+                    'use_proxy': False,
+                    'use_ua': False,
+                },
+                {
+                    'label': "Add cookies + proxy",
+                    'use_cookies': True,
+                    'use_proxy': True,
+                    'use_ua': False,
+                },
+                {
+                    'label': "Add cookies + proxy + UA",
+                    'use_cookies': True,
+                    'use_proxy': True,
+                    'use_ua': True,
+                },
             ]
 
-            # ENHANCED: Add realistic Chrome 120 headers to avoid detection
-            cmd.extend(_get_chrome120_headers())
+            for idx, attempt in enumerate(attempts, 1):
+                if attempt['use_cookies'] and not cookie_file:
+                    continue
+                if attempt['use_proxy'] and not current_proxy:
+                    continue
 
-            # Add proxy if available
-            if current_proxy:
-                cmd.extend(['--proxy', current_proxy])
-                self.progress.emit(f"   🌐 Proxy: {current_proxy.split('@')[-1][:20]}...")  # Hide credentials
-            else:
-                self.progress.emit(f"   ⚠️ No proxy (IP blocks possible)")
+                attempt_start = datetime.now()
+                self.progress.emit(f"   -> Step {idx}/{len(attempts)}: {attempt['label']}")
 
-            if cookie_file:
-                cmd.extend(['--cookies', cookie_file])
-                self.progress.emit(f"   🍪 Cookies: {Path(cookie_file).name}")
+                cmd = [
+                    ytdlp_cmd,  # Use detected command instead of hardcoded 'yt-dlp'
+                    '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
+                    '--rm-cache-dir',
+                    '-f', format_string,
+                    '--restrict-filenames', '--no-warnings', '--retries', str(self.max_retries),
+                    '--continue', '--no-check-certificate',
+                    '--no-playlist',  # Don't download playlists
+                ]
 
-            self.progress.emit(f"   🎭 UA: {user_agent[:45]}...")
+                if attempt['use_ua']:
+                    # Get user agent (shared pool)
+                    user_agent = _get_random_user_agent()
+                    cmd.extend(['--user-agent', user_agent])  # Random UA rotation
+                    # ENHANCED: Add realistic Chrome 120 headers to avoid detection
+                    cmd.extend(_get_chrome120_headers())
+                    self.progress.emit(f"      UA: {user_agent[:45]}...")
 
-            cmd.append(url)
+                if attempt['use_proxy'] and current_proxy:
+                    cmd.extend(['--proxy', current_proxy])
+                    self.progress.emit(f"      Proxy: {current_proxy.split('@')[-1][:20]}...")  # Hide credentials
 
-            self.progress.emit(f"   ⏳ Starting download...")
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, encoding='utf-8', errors='replace')
+                if attempt['use_cookies'] and cookie_file:
+                    cmd.extend(['--cookies', cookie_file])
+                    self.progress.emit(f"      Cookies: {Path(cookie_file).name}")
 
-            elapsed = (datetime.now() - start_time).total_seconds()
+                cmd.append(url)
 
-            if result.returncode == 0:
-                self.progress.emit(f"   ✅ SUCCESS in {elapsed:.1f}s")
-                return True
-            else:
+                self.progress.emit("      Starting download...")
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=1800,
+                    encoding='utf-8',
+                    errors='replace'
+                )
+
+                elapsed = (datetime.now() - attempt_start).total_seconds()
+
+                if result.returncode == 0:
+                    total_elapsed = (datetime.now() - start_time).total_seconds()
+                    self.progress.emit(f"      SUCCESS in {elapsed:.1f}s (total {total_elapsed:.1f}s)")
+                    return True
+
                 error_msg = result.stderr[:300] if result.stderr else "Unknown error"
-                self.progress.emit(f"   ❌ FAILED ({elapsed:.1f}s)")
-                self.progress.emit(f"   📝 Error: {error_msg}")
+                self.progress.emit(f"      FAILED ({elapsed:.1f}s)")
+                self.progress.emit(f"      Error: {error_msg}")
+
+            total_elapsed = (datetime.now() - start_time).total_seconds()
+            self.progress.emit(f"   Method 1 failed after {total_elapsed:.1f}s (all steps)")
             return False
         except subprocess.TimeoutExpired:
-            self.progress.emit(f"   ⏱️ TIMEOUT (30min limit)")
+            self.progress.emit("   TIMEOUT (30min limit)")
             return False
         except Exception as e:
-            self.progress.emit(f"   ❌ Exception: {str(e)[:100]}")
+            self.progress.emit(f"   Exception: {str(e)[:100]}")
             return False
 
     def _method2_tiktok_special(self, url, output_path, cookie_file=None):

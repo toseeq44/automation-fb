@@ -73,37 +73,53 @@ class SimpleMergeTab(QWidget):
         # Video list scroll area
         self.video_list_widget = QWidget()
         self.video_list_layout = QVBoxLayout()
-        self.video_list_layout.setSpacing(8)
+        self.video_list_layout.setSpacing(6)
+        self.video_list_layout.setContentsMargins(0, 0, 0, 0)
         self.video_list_widget.setLayout(self.video_list_layout)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(self.video_list_widget)
-        scroll.setMinimumHeight(200)
-        main_layout.addWidget(scroll, 1)
+        video_scroll = QScrollArea()
+        video_scroll.setWidgetResizable(True)
+        video_scroll.setWidget(self.video_list_widget)
+        video_scroll.setMinimumHeight(150)
+        video_scroll.setMaximumHeight(220)
+        main_layout.addWidget(video_scroll)
 
         # Empty state label
         self.empty_label = QLabel("No videos added. Click 'Add Videos' to get started.")
         self.empty_label.setAlignment(Qt.AlignCenter)
-        self.empty_label.setStyleSheet("color: #888; font-size: 11pt; padding: 40px;")
+        self.empty_label.setStyleSheet("color: #888; font-size: 10pt; padding: 30px;")
         self.video_list_layout.addWidget(self.empty_label)
 
-        # Settings sections
-        settings_layout = QHBoxLayout()
+        # Settings sections in scroll area
+        settings_scroll = QScrollArea()
+        settings_scroll.setWidgetResizable(True)
+        settings_scroll.setMinimumHeight(250)
+        settings_scroll.setMaximumHeight(350)
+
+        settings_widget = QWidget()
+        settings_main_layout = QVBoxLayout()
+        settings_main_layout.setContentsMargins(5, 5, 5, 5)
+        settings_main_layout.setSpacing(10)
 
         # Left column - Trim and Transform
+        # Right column - Transition and Output
+        settings_row = QHBoxLayout()
+        settings_row.setSpacing(10)
+
         left_column = QVBoxLayout()
         left_column.addWidget(self._create_trim_settings())
         left_column.addWidget(self._create_transform_settings())
-        settings_layout.addLayout(left_column, 1)
+        settings_row.addLayout(left_column, 1)
 
-        # Right column - Transition and Output
         right_column = QVBoxLayout()
         right_column.addWidget(self._create_transition_settings())
         right_column.addWidget(self._create_output_settings())
-        settings_layout.addLayout(right_column, 1)
+        settings_row.addLayout(right_column, 1)
 
-        main_layout.addLayout(settings_layout)
+        settings_main_layout.addLayout(settings_row)
+        settings_widget.setLayout(settings_main_layout)
+        settings_scroll.setWidget(settings_widget)
+        main_layout.addWidget(settings_scroll)
 
         # Summary row
         summary_layout = QHBoxLayout()
@@ -182,9 +198,30 @@ class SimpleMergeTab(QWidget):
                 border: 1px solid #3a3a3a;
                 border-radius: 4px;
                 padding: 5px;
+                min-height: 22px;
+            }
+            QSpinBox:hover, QDoubleSpinBox:hover, QLineEdit:hover {
+                border-color: #0066cc;
+                background-color: #252525;
             }
             QSpinBox:focus, QDoubleSpinBox:focus, QLineEdit:focus {
                 border-color: #0066cc;
+                background-color: #252525;
+            }
+            QSpinBox::up-button, QDoubleSpinBox::up-button,
+            QSpinBox::down-button, QDoubleSpinBox::down-button {
+                background-color: #2a2a2a;
+                border: none;
+                width: 16px;
+            }
+            QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
+            QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
+                background-color: #353535;
+            }
+            QSpinBox:disabled, QDoubleSpinBox:disabled {
+                background-color: #1a1a1a;
+                color: #666666;
+                border-color: #2a2a2a;
             }
             QComboBox {
                 background-color: #1e1e1e;
@@ -192,18 +229,34 @@ class SimpleMergeTab(QWidget):
                 border: 1px solid #3a3a3a;
                 border-radius: 4px;
                 padding: 5px;
+                min-height: 22px;
             }
             QComboBox:hover {
                 border-color: #0066cc;
+                background-color: #252525;
+            }
+            QComboBox:disabled {
+                background-color: #1a1a1a;
+                color: #666666;
+                border-color: #2a2a2a;
             }
             QComboBox::drop-down {
                 border: none;
+                width: 20px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 4px solid #e0e0e0;
+                margin-right: 5px;
             }
             QComboBox QAbstractItemView {
                 background-color: #2a2a2a;
                 color: #e0e0e0;
                 selection-background-color: #0066cc;
                 border: 1px solid #3a3a3a;
+                padding: 4px;
             }
             QCheckBox {
                 color: #e0e0e0;
@@ -224,25 +277,34 @@ class SimpleMergeTab(QWidget):
                 border-color: #0066cc;
             }
             QScrollArea {
-                background-color: #252525;
+                background-color: transparent;
                 border: 1px solid #3a3a3a;
                 border-radius: 6px;
             }
             QScrollBar:vertical {
                 background-color: #1e1e1e;
-                width: 12px;
-                border-radius: 6px;
+                width: 10px;
+                border-radius: 5px;
+                margin: 2px;
             }
             QScrollBar::handle:vertical {
                 background-color: #3a3a3a;
-                border-radius: 6px;
+                border-radius: 5px;
                 min-height: 20px;
             }
             QScrollBar::handle:vertical:hover {
                 background-color: #4a4a4a;
             }
+            QScrollBar::handle:vertical:pressed {
+                background-color: #0066cc;
+            }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
                 height: 0px;
+                border: none;
+                background: none;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
             }
         """)
 
@@ -251,14 +313,18 @@ class SimpleMergeTab(QWidget):
         group = QGroupBox("✂️ Bulk Trim Settings")
         group.setFont(QFont("Arial", 10, QFont.Bold))
         layout = QVBoxLayout()
+        layout.setSpacing(8)
 
         # Trim start
         start_layout = QHBoxLayout()
-        start_layout.addWidget(QLabel("Trim Start:"))
+        start_label = QLabel("Trim Start:")
+        start_label.setFixedWidth(80)
+        start_layout.addWidget(start_label)
         self.trim_start_spin = QSpinBox()
         self.trim_start_spin.setRange(0, 300)
         self.trim_start_spin.setValue(0)
         self.trim_start_spin.setSuffix(" sec")
+        self.trim_start_spin.setFixedHeight(28)
         self.trim_start_spin.setToolTip("Seconds to trim from start of each video")
         self.trim_start_spin.valueChanged.connect(self._update_trimmed_durations)
         start_layout.addWidget(self.trim_start_spin, 1)
@@ -266,11 +332,14 @@ class SimpleMergeTab(QWidget):
 
         # Trim end
         end_layout = QHBoxLayout()
-        end_layout.addWidget(QLabel("Trim End:"))
+        end_label = QLabel("Trim End:")
+        end_label.setFixedWidth(80)
+        end_layout.addWidget(end_label)
         self.trim_end_spin = QSpinBox()
         self.trim_end_spin.setRange(0, 300)
         self.trim_end_spin.setValue(0)
         self.trim_end_spin.setSuffix(" sec")
+        self.trim_end_spin.setFixedHeight(28)
         self.trim_end_spin.setToolTip("Seconds to trim from end of each video")
         self.trim_end_spin.valueChanged.connect(self._update_trimmed_durations)
         end_layout.addWidget(self.trim_end_spin, 1)
@@ -278,6 +347,7 @@ class SimpleMergeTab(QWidget):
 
         # Apply button
         apply_btn = QPushButton("Apply to All Videos")
+        apply_btn.setFixedHeight(30)
         apply_btn.clicked.connect(self._update_trimmed_durations)
         layout.addWidget(apply_btn)
 
@@ -288,16 +358,19 @@ class SimpleMergeTab(QWidget):
         group = QGroupBox("🔧 Transform Settings")
         group.setFont(QFont("Arial", 10, QFont.Bold))
         layout = QVBoxLayout()
+        layout.setSpacing(8)
 
         # Crop
         crop_layout = QHBoxLayout()
         self.crop_check = QCheckBox("Crop to:")
+        self.crop_check.setFixedWidth(80)
         self.crop_check.toggled.connect(lambda checked: self.crop_combo.setEnabled(checked))
         crop_layout.addWidget(self.crop_check)
 
         self.crop_combo = QComboBox()
         self.crop_combo.addItems(['9:16 (TikTok)', '16:9 (YouTube)', '1:1 (Square)',
                                    '4:3 (Classic)', '4:5 (Instagram)', '21:9 (Ultrawide)'])
+        self.crop_combo.setFixedHeight(28)
         self.crop_combo.setEnabled(False)
         crop_layout.addWidget(self.crop_combo, 1)
         layout.addLayout(crop_layout)
@@ -305,6 +378,7 @@ class SimpleMergeTab(QWidget):
         # Zoom
         zoom_layout = QHBoxLayout()
         self.zoom_check = QCheckBox("Zoom:")
+        self.zoom_check.setFixedWidth(80)
         self.zoom_check.toggled.connect(lambda checked: self.zoom_spin.setEnabled(checked))
         zoom_layout.addWidget(self.zoom_check)
 
@@ -313,6 +387,7 @@ class SimpleMergeTab(QWidget):
         self.zoom_spin.setSingleStep(0.1)
         self.zoom_spin.setValue(1.1)
         self.zoom_spin.setSuffix("x")
+        self.zoom_spin.setFixedHeight(28)
         self.zoom_spin.setToolTip("1.0 = no zoom, 1.1 = 110%")
         self.zoom_spin.setEnabled(False)
         zoom_layout.addWidget(self.zoom_spin, 1)
@@ -336,32 +411,40 @@ class SimpleMergeTab(QWidget):
         group = QGroupBox("🔁 Transition Settings")
         group.setFont(QFont("Arial", 10, QFont.Bold))
         layout = QVBoxLayout()
+        layout.setSpacing(8)
 
         # Transition type
         type_layout = QHBoxLayout()
-        type_layout.addWidget(QLabel("Default Transition:"))
+        type_label = QLabel("Transition:")
+        type_label.setFixedWidth(80)
+        type_layout.addWidget(type_label)
 
         self.transition_combo = QComboBox()
         self.transition_combo.addItems(['Crossfade', 'Fade', 'Slide Left', 'Slide Right',
                                         'Slide Up', 'Slide Down', 'Zoom In', 'Zoom Out',
                                         'Wipe', 'None'])
+        self.transition_combo.setFixedHeight(28)
         type_layout.addWidget(self.transition_combo, 1)
         layout.addLayout(type_layout)
 
         # Duration
         duration_layout = QHBoxLayout()
-        duration_layout.addWidget(QLabel("Duration:"))
+        duration_label = QLabel("Duration:")
+        duration_label.setFixedWidth(80)
+        duration_layout.addWidget(duration_label)
 
         self.transition_duration_spin = QDoubleSpinBox()
         self.transition_duration_spin.setRange(0.1, 5.0)
         self.transition_duration_spin.setSingleStep(0.1)
         self.transition_duration_spin.setValue(1.0)
         self.transition_duration_spin.setSuffix(" sec")
+        self.transition_duration_spin.setFixedHeight(28)
         duration_layout.addWidget(self.transition_duration_spin, 1)
         layout.addLayout(duration_layout)
 
         # Apply to all button
         apply_btn = QPushButton("Apply Same Transition to All")
+        apply_btn.setFixedHeight(30)
         apply_btn.clicked.connect(self._apply_transition_to_all)
         layout.addWidget(apply_btn)
 
@@ -373,42 +456,57 @@ class SimpleMergeTab(QWidget):
         group = QGroupBox("💾 Output Settings")
         group.setFont(QFont("Arial", 10, QFont.Bold))
         layout = QVBoxLayout()
+        layout.setSpacing(8)
 
         # Output folder
         folder_layout = QHBoxLayout()
-        folder_layout.addWidget(QLabel("📂 Output:"))
+        folder_label = QLabel("📂 Output:")
+        folder_label.setFixedWidth(80)
+        folder_layout.addWidget(folder_label)
 
         self.output_folder_edit = QLineEdit()
         self.output_folder_edit.setText(get_default_output_folder())
         self.output_folder_edit.setReadOnly(True)
+        self.output_folder_edit.setFixedHeight(28)
         folder_layout.addWidget(self.output_folder_edit, 1)
 
         browse_btn = QPushButton("Browse...")
+        browse_btn.setFixedHeight(28)
+        browse_btn.setFixedWidth(80)
         browse_btn.clicked.connect(self._browse_output_folder)
         folder_layout.addWidget(browse_btn)
         layout.addLayout(folder_layout)
 
         # Filename
         filename_layout = QHBoxLayout()
-        filename_layout.addWidget(QLabel("📝 Filename:"))
+        filename_label = QLabel("📝 Filename:")
+        filename_label.setFixedWidth(80)
+        filename_layout.addWidget(filename_label)
 
         self.filename_edit = QLineEdit()
         self.filename_edit.setText(generate_output_filename())
+        self.filename_edit.setFixedHeight(28)
         filename_layout.addWidget(self.filename_edit, 1)
         layout.addLayout(filename_layout)
 
         # Quality and format row
         quality_layout = QHBoxLayout()
 
-        quality_layout.addWidget(QLabel("Quality:"))
+        quality_label = QLabel("Quality:")
+        quality_label.setFixedWidth(60)
+        quality_layout.addWidget(quality_label)
         self.quality_combo = QComboBox()
         self.quality_combo.addItems(['Low', 'Medium', 'High', 'Ultra'])
         self.quality_combo.setCurrentIndex(2)  # Default: High
+        self.quality_combo.setFixedHeight(28)
         quality_layout.addWidget(self.quality_combo, 1)
 
-        quality_layout.addWidget(QLabel("Format:"))
+        format_label = QLabel("Format:")
+        format_label.setFixedWidth(60)
+        quality_layout.addWidget(format_label)
         self.format_combo = QComboBox()
         self.format_combo.addItems(['MP4', 'MOV', 'AVI'])
+        self.format_combo.setFixedHeight(28)
         quality_layout.addWidget(self.format_combo, 1)
 
         layout.addLayout(quality_layout)
@@ -421,6 +519,7 @@ class SimpleMergeTab(QWidget):
 
         self.fade_audio_check = QCheckBox("Fade Audio Between Clips")
         audio_layout.addWidget(self.fade_audio_check)
+        audio_layout.addStretch()
         layout.addLayout(audio_layout)
 
         # Delete source

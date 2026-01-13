@@ -10,10 +10,17 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont
-from moviepy.editor import VideoFileClip
 from modules.logging.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Try to import MoviePy (MoviePy 2.x structure)
+try:
+    from moviepy import VideoFileClip
+    MOVIEPY_AVAILABLE = True
+except ImportError:
+    MOVIEPY_AVAILABLE = False
+    logger.warning("MoviePy not available. Video info will not be loaded.")
 
 
 class VideoClipWidget(QFrame):
@@ -61,6 +68,15 @@ class VideoClipWidget(QFrame):
 
     def _load_video_info(self):
         """Load video information"""
+        if not MOVIEPY_AVAILABLE:
+            logger.warning("MoviePy not available - using default video info")
+            self.duration = 60.0  # Default 1 minute
+            self.fps = 30
+            self.width = 1920
+            self.height = 1080
+            self.trimmed_duration = self.duration
+            return
+
         try:
             clip = VideoFileClip(self.video_path)
             self.duration = clip.duration

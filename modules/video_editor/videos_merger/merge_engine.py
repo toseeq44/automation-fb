@@ -5,11 +5,18 @@ Core video merging engine with trim, crop, zoom, flip, and transitions
 
 from typing import List, Dict, Any, Optional, Callable
 from pathlib import Path
-from moviepy.editor import VideoFileClip, concatenate_videoclips
 from modules.logging.logger import get_logger
 from modules.video_editor.transitions import TransitionManager
 
 logger = get_logger(__name__)
+
+# Try to import MoviePy (MoviePy 2.x structure)
+try:
+    from moviepy import VideoFileClip, concatenate_videoclips
+    MOVIEPY_AVAILABLE = True
+except ImportError:
+    MOVIEPY_AVAILABLE = False
+    logger.warning("MoviePy not available. Install with: pip install moviepy")
 
 
 class MergeSettings:
@@ -99,6 +106,8 @@ class VideoMergeEngine:
     }
 
     def __init__(self):
+        if not MOVIEPY_AVAILABLE:
+            raise ImportError("MoviePy is not installed. Install with: pip install moviepy")
         self.clips: List[VideoFileClip] = []
         self.processed_clips: List[VideoFileClip] = []
 

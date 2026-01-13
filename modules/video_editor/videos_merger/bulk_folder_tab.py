@@ -135,6 +135,116 @@ class BulkFolderTab(QWidget):
 
         self.setLayout(main_layout)
 
+        # Apply dark theme styling
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #2a2a2a;
+                color: #e0e0e0;
+            }
+            QGroupBox {
+                background-color: #252525;
+                border: 1px solid #3a3a3a;
+                border-radius: 8px;
+                margin-top: 10px;
+                padding-top: 10px;
+                font-weight: bold;
+                color: #00bcd4;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                padding: 5px 10px;
+                color: #00bcd4;
+            }
+            QLabel {
+                color: #e0e0e0;
+                background-color: transparent;
+            }
+            QPushButton {
+                background-color: #2a2a2a;
+                color: #e0e0e0;
+                border: 1px solid #3a3a3a;
+                border-radius: 6px;
+                padding: 6px 12px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background-color: #353535;
+                border-color: #0066cc;
+            }
+            QPushButton:pressed {
+                background-color: #202020;
+            }
+            QSpinBox, QDoubleSpinBox, QLineEdit {
+                background-color: #1e1e1e;
+                color: #e0e0e0;
+                border: 1px solid #3a3a3a;
+                border-radius: 4px;
+                padding: 5px;
+            }
+            QSpinBox:focus, QDoubleSpinBox:focus, QLineEdit:focus {
+                border-color: #0066cc;
+            }
+            QComboBox {
+                background-color: #1e1e1e;
+                color: #e0e0e0;
+                border: 1px solid #3a3a3a;
+                border-radius: 4px;
+                padding: 5px;
+            }
+            QComboBox:hover {
+                border-color: #0066cc;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #2a2a2a;
+                color: #e0e0e0;
+                selection-background-color: #0066cc;
+                border: 1px solid #3a3a3a;
+            }
+            QCheckBox {
+                color: #e0e0e0;
+                spacing: 8px;
+            }
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+                border: 2px solid #3a3a3a;
+                border-radius: 4px;
+                background-color: #1e1e1e;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #0066cc;
+                border-color: #0066cc;
+            }
+            QCheckBox::indicator:hover {
+                border-color: #0066cc;
+            }
+            QScrollArea {
+                background-color: #252525;
+                border: 1px solid #3a3a3a;
+                border-radius: 6px;
+            }
+            QScrollBar:vertical {
+                background-color: #1e1e1e;
+                width: 12px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #3a3a3a;
+                border-radius: 6px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #4a4a4a;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
+
     def _create_bulk_settings(self) -> QGroupBox:
         """Create bulk settings group"""
         group = QGroupBox("⚙️ Bulk Settings")

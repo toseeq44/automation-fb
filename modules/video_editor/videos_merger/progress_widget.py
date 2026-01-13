@@ -136,6 +136,67 @@ class ProgressWidget(QWidget):
 
         self.setLayout(main_layout)
 
+        # Apply dark theme styling
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #2a2a2a;
+                color: #e0e0e0;
+            }
+            QGroupBox {
+                background-color: #252525;
+                border: 1px solid #3a3a3a;
+                border-radius: 8px;
+                margin-top: 10px;
+                padding-top: 10px;
+                font-weight: bold;
+                color: #00bcd4;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                padding: 5px 10px;
+                color: #00bcd4;
+            }
+            QGroupBox::indicator {
+                width: 16px;
+                height: 16px;
+            }
+            QLabel {
+                color: #e0e0e0;
+                background-color: transparent;
+            }
+            QProgressBar {
+                background-color: #1e1e1e;
+                border: 1px solid #3a3a3a;
+                border-radius: 6px;
+                text-align: center;
+                color: #e0e0e0;
+            }
+            QProgressBar::chunk {
+                background-color: #0066cc;
+                border-radius: 5px;
+            }
+            QPushButton {
+                background-color: #2a2a2a;
+                color: #e0e0e0;
+                border: 1px solid #3a3a3a;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background-color: #353535;
+                border-color: #0066cc;
+            }
+            QPushButton:pressed {
+                background-color: #202020;
+            }
+            QPushButton:disabled {
+                background-color: #1a1a1a;
+                color: #666666;
+            }
+        """)
+
     def _on_pause_resume(self):
         """Pause/Resume button clicked"""
         if self.is_paused:

@@ -12,7 +12,7 @@ logger = get_logger(__name__)
 
 # Try to import MoviePy (MoviePy 2.x structure)
 try:
-    from moviepy import VideoFileClip, concatenate_videoclips
+    from moviepy import VideoFileClip, concatenate_videoclips, vfx
     MOVIEPY_AVAILABLE = True
 except ImportError:
     MOVIEPY_AVAILABLE = False
@@ -255,11 +255,13 @@ class VideoMergeEngine:
         """
         if horizontal:
             logger.info("Applying horizontal flip (mirror)")
-            clip = clip.with_effects([lambda pic: pic[:, ::-1]])
+            # MoviePy 2.x: Use vfx.MirrorX() for horizontal flip
+            clip = clip.with_effects([vfx.MirrorX()])
 
         if vertical:
             logger.info("Applying vertical flip")
-            clip = clip.with_effects([lambda pic: pic[::-1, :]])
+            # MoviePy 2.x: Use vfx.MirrorY() for vertical flip
+            clip = clip.with_effects([vfx.MirrorY()])
 
         return clip
 

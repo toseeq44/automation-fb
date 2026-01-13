@@ -101,16 +101,30 @@ class FolderItemWidget(QFrame):
 
         self.setLayout(main_layout)
 
-        # Style
+        # Dark theme style
         self.setStyleSheet("""
             FolderItemWidget {
-                background-color: #f9f9f9;
-                border: 1px solid #ccc;
-                border-radius: 5px;
+                background-color: #252525;
+                border: 1px solid #3a3a3a;
+                border-radius: 6px;
             }
             FolderItemWidget:hover {
-                background-color: #e8f4f8;
+                background-color: #2f2f2f;
                 border: 1px solid #0066cc;
+            }
+            QLabel {
+                color: #e0e0e0;
+                background-color: transparent;
+            }
+            QPushButton {
+                background-color: #2a2a2a;
+                color: #e0e0e0;
+                border: 1px solid #3a3a3a;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #353535;
+                border-color: #0066cc;
             }
         """)
 

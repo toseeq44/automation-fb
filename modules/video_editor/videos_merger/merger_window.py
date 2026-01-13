@@ -25,9 +25,13 @@ class VideoMergerWindow(QDialog):
 
         self.current_processor = None
 
+        # Set window flags for proper minimize/maximize
+        self.setWindowFlags(Qt.Window)
+
         self.init_ui()
         self.setWindowTitle("🎬 Video Merger")
-        self.resize(1200, 900)
+        self.resize(1400, 950)
+        self.setMinimumSize(1200, 800)
 
     def init_ui(self):
         """Initialize UI"""
@@ -103,29 +107,60 @@ class VideoMergerWindow(QDialog):
 
         self.setLayout(main_layout)
 
-        # Apply stylesheet
+        # Apply dark theme stylesheet matching integrated_editor
         self.setStyleSheet("""
             QDialog {
-                background-color: #f0f0f0;
+                background-color: #1e1e1e;
+                color: #e0e0e0;
+            }
+            QLabel {
+                color: #e0e0e0;
+            }
+            QPushButton {
+                background-color: #2a2a2a;
+                color: #e0e0e0;
+                border: none;
+                border-radius: 8px;
+                padding: 8px 16px;
+                font-size: 12px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background-color: #353535;
+            }
+            QPushButton:pressed {
+                background-color: #202020;
             }
             QTabWidget::pane {
-                border: 1px solid #ccc;
-                background-color: white;
+                border: 1px solid #3a3a3a;
+                background-color: #2a2a2a;
                 border-radius: 5px;
+                margin-top: -1px;
             }
             QTabBar::tab {
-                background-color: #e0e0e0;
+                background-color: #2a2a2a;
+                color: #b0b0b0;
                 padding: 10px 20px;
                 margin-right: 2px;
                 border-top-left-radius: 5px;
                 border-top-right-radius: 5px;
+                border: 1px solid #3a3a3a;
+                border-bottom: none;
             }
             QTabBar::tab:selected {
-                background-color: white;
+                background-color: #353535;
+                color: #ffffff;
                 font-weight: bold;
             }
             QTabBar::tab:hover {
-                background-color: #d0e0f0;
+                background-color: #303030;
+            }
+            QSplitter::handle {
+                background-color: #3a3a3a;
+                height: 3px;
+            }
+            QSplitter::handle:hover {
+                background-color: #0066cc;
             }
         """)
 

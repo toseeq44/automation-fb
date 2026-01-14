@@ -41,9 +41,16 @@ class VideoClipWidget(QFrame):
         ('Slide Right', 'slide_right'),
         ('Slide Up', 'slide_up'),
         ('Slide Down', 'slide_down'),
+        ('Wipe Left', 'wipe_left'),
+        ('Wipe Right', 'wipe_right'),
+        ('Wipe Up', 'wipe_up'),
+        ('Wipe Down', 'wipe_down'),
         ('Zoom In', 'zoom_in'),
         ('Zoom Out', 'zoom_out'),
-        ('Wipe', 'wipe'),
+        ('Dissolve (Random)', 'dissolve_random'),
+        ('Dissolve (Grid)', 'dissolve_grid'),
+        ('Dissolve (Radial)', 'dissolve_radial'),
+        ('Blur', 'blur'),
         ('None', 'none')
     ]
 
@@ -102,14 +109,14 @@ class VideoClipWidget(QFrame):
 
         # Index label
         index_label = QLabel(f"{self.index + 1}.")
-        index_label.setFont(QFont("Arial", 14, QFont.Bold))
+        index_label.setFont(QFont("Segoe UI", 14, QFont.Bold))
         index_label.setFixedWidth(30)
         top_layout.addWidget(index_label)
 
         # Filename
         filename = Path(self.video_path).name
         filename_label = QLabel(f"📹 {filename}")
-        filename_label.setFont(QFont("Arial", 10, QFont.Bold))
+        filename_label.setFont(QFont("Segoe UI", 10, QFont.Bold))
         filename_label.setWordWrap(True)
         top_layout.addWidget(filename_label, 1)
 
@@ -147,7 +154,7 @@ class VideoClipWidget(QFrame):
 
         # Trimmed duration (updated when trim settings change)
         self.trimmed_label = QLabel(f"After trim: {self._format_duration(self.trimmed_duration)}")
-        self.trimmed_label.setStyleSheet("color: #0066cc; font-size: 9pt; font-weight: bold;")
+        self.trimmed_label.setStyleSheet("color: #00bcd4; font-size: 9pt; font-weight: bold;")
         main_layout.addWidget(self.trimmed_label)
 
         # Transition row (if enabled)
@@ -188,7 +195,7 @@ class VideoClipWidget(QFrame):
             }
             VideoClipWidget:hover {
                 background-color: #2f2f2f;
-                border: 1px solid #0066cc;
+                border: 1px solid #00bcd4;
             }
             QLabel {
                 color: #e0e0e0;
@@ -202,7 +209,7 @@ class VideoClipWidget(QFrame):
             }
             QPushButton:hover {
                 background-color: #353535;
-                border-color: #0066cc;
+                border-color: #00bcd4;
             }
             QComboBox, QDoubleSpinBox {
                 background-color: #1e1e1e;
@@ -212,12 +219,12 @@ class VideoClipWidget(QFrame):
                 padding: 3px;
             }
             QComboBox:hover, QDoubleSpinBox:hover {
-                border-color: #0066cc;
+                border-color: #00bcd4;
             }
             QComboBox QAbstractItemView {
                 background-color: #2a2a2a;
                 color: #e0e0e0;
-                selection-background-color: #0066cc;
+                selection-background-color: #00bcd4;
                 border: 1px solid #3a3a3a;
             }
         """)

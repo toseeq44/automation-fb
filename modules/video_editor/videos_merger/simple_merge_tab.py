@@ -8,7 +8,7 @@ from pathlib import Path
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QFileDialog, QScrollArea, QGroupBox, QSpinBox, QDoubleSpinBox,
-    QComboBox, QCheckBox, QLineEdit, QMessageBox, QFrame
+    QComboBox, QCheckBox, QLineEdit, QMessageBox, QFrame, QSizePolicy
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont
@@ -39,6 +39,16 @@ class SimpleMergeTab(QWidget):
 
     def init_ui(self):
         """Initialize UI"""
+        outer_layout = QVBoxLayout()
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setObjectName("tabScrollArea")
+        scroll_area.setFrameShape(QFrame.NoFrame)
+
+        content_widget = QWidget()
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(15, 15, 15, 15)
         main_layout.setSpacing(15)
@@ -50,13 +60,18 @@ class SimpleMergeTab(QWidget):
         add_btn.setFixedHeight(35)
         add_btn.setStyleSheet("""
             QPushButton {
-                background-color: #0066cc;
+                background-color: #00bcd4;
                 color: white;
                 font-weight: bold;
                 font-size: 10pt;
+                border-radius: 6px;
+                padding: 6px 14px;
             }
             QPushButton:hover {
-                background-color: #0052a3;
+                background-color: #00d4ea;
+            }
+            QPushButton:pressed {
+                background-color: #00a4b8;
             }
         """)
         add_btn.clicked.connect(self.add_videos)
@@ -81,7 +96,7 @@ class SimpleMergeTab(QWidget):
         video_scroll.setWidgetResizable(True)
         video_scroll.setWidget(self.video_list_widget)
         video_scroll.setMinimumHeight(120)
-        video_scroll.setMaximumHeight(180)
+        video_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         main_layout.addWidget(video_scroll)
 
         # Empty state label
@@ -90,12 +105,7 @@ class SimpleMergeTab(QWidget):
         self.empty_label.setStyleSheet("color: #888; font-size: 10pt; padding: 30px;")
         self.video_list_layout.addWidget(self.empty_label)
 
-        # Settings sections in scroll area
-        settings_scroll = QScrollArea()
-        settings_scroll.setWidgetResizable(True)
-        settings_scroll.setMinimumHeight(350)
-        settings_scroll.setMaximumHeight(450)
-
+        # Settings sections
         settings_widget = QWidget()
         settings_main_layout = QVBoxLayout()
         settings_main_layout.setContentsMargins(5, 5, 5, 5)
@@ -118,13 +128,13 @@ class SimpleMergeTab(QWidget):
 
         settings_main_layout.addLayout(settings_row)
         settings_widget.setLayout(settings_main_layout)
-        settings_scroll.setWidget(settings_widget)
-        main_layout.addWidget(settings_scroll)
+        settings_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        main_layout.addWidget(settings_widget)
 
         # Summary row
         summary_layout = QHBoxLayout()
         self.summary_label = QLabel("📊 Total Duration: 00:00  |  Videos: 0")
-        self.summary_label.setStyleSheet("font-size: 10pt; font-weight: bold; color: #0066cc;")
+        self.summary_label.setStyleSheet("font-size: 10pt; font-weight: bold; color: #00bcd4;")
         summary_layout.addWidget(self.summary_label)
         summary_layout.addStretch()
         main_layout.addLayout(summary_layout)
@@ -150,12 +160,15 @@ class SimpleMergeTab(QWidget):
         self.start_btn.setEnabled(False)
         main_layout.addWidget(self.start_btn)
 
-        self.setLayout(main_layout)
+        content_widget.setLayout(main_layout)
+        scroll_area.setWidget(content_widget)
+        outer_layout.addWidget(scroll_area)
+        self.setLayout(outer_layout)
 
         # Apply dark theme styling
         self.setStyleSheet("""
             QWidget {
-                background-color: #2a2a2a;
+                background-color: #1a1a1a;
                 color: #e0e0e0;
             }
             QGroupBox {
@@ -187,7 +200,7 @@ class SimpleMergeTab(QWidget):
             }
             QPushButton:hover {
                 background-color: #353535;
-                border-color: #0066cc;
+                border-color: #00bcd4;
             }
             QPushButton:pressed {
                 background-color: #202020;
@@ -201,11 +214,11 @@ class SimpleMergeTab(QWidget):
                 min-height: 22px;
             }
             QSpinBox:hover, QDoubleSpinBox:hover, QLineEdit:hover {
-                border-color: #0066cc;
+                border-color: #00bcd4;
                 background-color: #252525;
             }
             QSpinBox:focus, QDoubleSpinBox:focus, QLineEdit:focus {
-                border-color: #0066cc;
+                border-color: #00bcd4;
                 background-color: #252525;
             }
             QSpinBox::up-button, QDoubleSpinBox::up-button,
@@ -232,7 +245,7 @@ class SimpleMergeTab(QWidget):
                 min-height: 22px;
             }
             QComboBox:hover {
-                border-color: #0066cc;
+                border-color: #00bcd4;
                 background-color: #252525;
             }
             QComboBox:disabled {
@@ -254,7 +267,7 @@ class SimpleMergeTab(QWidget):
             QComboBox QAbstractItemView {
                 background-color: #2a2a2a;
                 color: #e0e0e0;
-                selection-background-color: #0066cc;
+                selection-background-color: #00bcd4;
                 border: 1px solid #3a3a3a;
                 padding: 4px;
             }
@@ -270,16 +283,19 @@ class SimpleMergeTab(QWidget):
                 background-color: #1e1e1e;
             }
             QCheckBox::indicator:checked {
-                background-color: #0066cc;
-                border-color: #0066cc;
+                background-color: #00bcd4;
+                border-color: #00bcd4;
             }
             QCheckBox::indicator:hover {
-                border-color: #0066cc;
+                border-color: #00bcd4;
             }
             QScrollArea {
                 background-color: transparent;
                 border: 1px solid #3a3a3a;
                 border-radius: 6px;
+            }
+            QScrollArea#tabScrollArea {
+                border: none;
             }
             QScrollBar:vertical {
                 background-color: #1e1e1e;
@@ -296,7 +312,7 @@ class SimpleMergeTab(QWidget):
                 background-color: #4a4a4a;
             }
             QScrollBar::handle:vertical:pressed {
-                background-color: #0066cc;
+                background-color: #00bcd4;
             }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
                 height: 0px;
@@ -420,9 +436,14 @@ class SimpleMergeTab(QWidget):
         type_layout.addWidget(type_label)
 
         self.transition_combo = QComboBox()
-        self.transition_combo.addItems(['Crossfade', 'Fade', 'Slide Left', 'Slide Right',
-                                        'Slide Up', 'Slide Down', 'Zoom In', 'Zoom Out',
-                                        'Wipe', 'None'])
+        self.transition_combo.addItems([
+            'Crossfade', 'Fade',
+            'Slide Left', 'Slide Right', 'Slide Up', 'Slide Down',
+            'Wipe Left', 'Wipe Right', 'Wipe Up', 'Wipe Down',
+            'Zoom In', 'Zoom Out',
+            'Dissolve (Random)', 'Dissolve (Grid)', 'Dissolve (Radial)',
+            'Blur', 'None'
+        ])
         self.transition_combo.setFixedHeight(28)
         type_layout.addWidget(self.transition_combo, 1)
         layout.addLayout(type_layout)
@@ -496,8 +517,8 @@ class SimpleMergeTab(QWidget):
         quality_label.setFixedWidth(60)
         quality_layout.addWidget(quality_label)
         self.quality_combo = QComboBox()
-        self.quality_combo.addItems(['Low', 'Medium', 'High', 'Ultra'])
-        self.quality_combo.setCurrentIndex(2)  # Default: High
+        self.quality_combo.addItems(['Match Source', 'Low', 'Medium', 'High', 'Ultra'])
+        self.quality_combo.setCurrentIndex(0)  # Default: Match Source
         self.quality_combo.setFixedHeight(28)
         quality_layout.addWidget(self.quality_combo, 1)
 
@@ -652,9 +673,16 @@ class SimpleMergeTab(QWidget):
             'Slide Right': 'slide_right',
             'Slide Up': 'slide_up',
             'Slide Down': 'slide_down',
+            'Wipe Left': 'wipe_left',
+            'Wipe Right': 'wipe_right',
+            'Wipe Up': 'wipe_up',
+            'Wipe Down': 'wipe_down',
             'Zoom In': 'zoom_in',
             'Zoom Out': 'zoom_out',
-            'Wipe': 'wipe',
+            'Dissolve (Random)': 'dissolve_random',
+            'Dissolve (Grid)': 'dissolve_grid',
+            'Dissolve (Radial)': 'dissolve_radial',
+            'Blur': 'blur',
             'None': 'none'
         }
 
@@ -775,16 +803,25 @@ class SimpleMergeTab(QWidget):
             'Slide Right': 'slide_right',
             'Slide Up': 'slide_up',
             'Slide Down': 'slide_down',
+            'Wipe Left': 'wipe_left',
+            'Wipe Right': 'wipe_right',
+            'Wipe Up': 'wipe_up',
+            'Wipe Down': 'wipe_down',
             'Zoom In': 'zoom_in',
             'Zoom Out': 'zoom_out',
-            'Wipe': 'wipe',
+            'Dissolve (Random)': 'dissolve_random',
+            'Dissolve (Grid)': 'dissolve_grid',
+            'Dissolve (Radial)': 'dissolve_radial',
+            'Blur': 'blur',
             'None': 'none'
         }
         settings.transition_type = transition_map.get(self.transition_combo.currentText(), 'crossfade')
         settings.transition_duration = self.transition_duration_spin.value()
 
         # Output
-        settings.output_quality = self.quality_combo.currentText().lower()
+        quality_text = self.quality_combo.currentText()
+        quality_map = {'Match Source': 'source'}
+        settings.output_quality = quality_map.get(quality_text, quality_text.lower())
         settings.output_format = self.format_combo.currentText().lower()
         settings.keep_audio = self.keep_audio_check.isChecked()
         settings.fade_audio = self.fade_audio_check.isChecked()
@@ -835,7 +872,7 @@ class SimpleMergeTab(QWidget):
         self.flip_v_check.setChecked(False)
         self.transition_combo.setCurrentIndex(0)
         self.transition_duration_spin.setValue(1.0)
-        self.quality_combo.setCurrentIndex(2)
+        self.quality_combo.setCurrentIndex(0)
         self.keep_audio_check.setChecked(True)
         self.fade_audio_check.setChecked(False)
         self.delete_source_check.setChecked(False)

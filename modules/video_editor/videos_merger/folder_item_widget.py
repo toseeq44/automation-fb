@@ -49,14 +49,14 @@ class FolderItemWidget(QFrame):
 
         # Index label
         index_label = QLabel(f"{self.index + 1}.")
-        index_label.setFont(QFont("Arial", 12, QFont.Bold))
+        index_label.setFont(QFont("Segoe UI", 12, QFont.Bold))
         index_label.setFixedWidth(30)
         top_layout.addWidget(index_label)
 
         # Folder icon and name
         folder_name = Path(self.folder_path).name
         folder_label = QLabel(f"📁 {folder_name}")
-        folder_label.setFont(QFont("Arial", 10, QFont.Bold))
+        folder_label.setFont(QFont("Segoe UI", 10, QFont.Bold))
         folder_label.setWordWrap(True)
         folder_label.setCursor(Qt.PointingHandCursor)
         folder_label.mousePressEvent = lambda e: self.folder_clicked.emit(self.folder_path)
@@ -66,7 +66,7 @@ class FolderItemWidget(QFrame):
         count_label = QLabel(f"[{self.video_count} videos]")
         count_label.setStyleSheet("""
             QLabel {
-                background-color: #0066cc;
+                background-color: #00bcd4;
                 color: white;
                 padding: 2px 8px;
                 border-radius: 10px;
@@ -110,7 +110,7 @@ class FolderItemWidget(QFrame):
             }
             FolderItemWidget:hover {
                 background-color: #2f2f2f;
-                border: 1px solid #0066cc;
+                border: 1px solid #00bcd4;
             }
             QLabel {
                 color: #e0e0e0;
@@ -124,7 +124,7 @@ class FolderItemWidget(QFrame):
             }
             QPushButton:hover {
                 background-color: #353535;
-                border-color: #0066cc;
+                border-color: #00bcd4;
             }
         """)
 

@@ -45,7 +45,7 @@ class MergeSettings:
         self.transition_duration: float = 1.0  # Seconds
 
         # Output settings
-        self.output_quality: str = 'high'  # 'low', 'medium', 'high', 'ultra'
+        self.output_quality: str = 'high'  # 'source', 'low', 'medium', 'high', 'ultra'
         self.output_format: str = 'mp4'
         self.keep_audio: bool = True
         self.fade_audio: bool = False
@@ -265,6 +265,93 @@ class VideoMergeEngine:
 
         return clip
 
+    def _parse_bitrate(self, value: Any) -> Optional[int]:
+        """Normalize bitrate value to bits per second."""
+        if value is None:
+            return None
+        if isinstance(value, str):
+            text = value.strip().lower()
+            try:
+                if text.endswith('k'):
+                    return int(float(text[:-1]) * 1000)
+                if text.endswith('m'):
+                    return int(float(text[:-1]) * 1_000_000)
+                return int(float(text))
+            except ValueError:
+                return None
+        if isinstance(value, (int, float)):
+            if value <= 0:
+                return None
+            # Heuristic: values under 100k are likely in kbps
+            if value < 100000:
+                return int(value * 1000)
+            return int(value)
+        return None
+
+    def _estimate_total_bitrate(self, clip: VideoFileClip) -> Optional[int]:
+        """Estimate total bitrate using file size and duration."""
+        try:
+            if not hasattr(clip, 'filename'):
+                return None
+            file_path = Path(clip.filename)
+            if not file_path.exists() or clip.duration <= 0:
+                return None
+            total_bits = file_path.stat().st_size * 8
+            return int(total_bits / clip.duration)
+        except Exception:
+            return None
+
+    def _get_source_bitrates(self, settings: MergeSettings) -> tuple:
+        """Return max source video/audio bitrates (bps) if available."""
+        video_bitrates = []
+        audio_bitrates = []
+
+        for clip in self.clips:
+            infos = getattr(clip.reader, 'infos', {}) or {}
+            video_bps = self._parse_bitrate(infos.get('video_bitrate'))
+            audio_bps = self._parse_bitrate(infos.get('audio_bitrate'))
+
+            if video_bps is None:
+                total_bps = self._parse_bitrate(infos.get('bitrate'))
+                if total_bps is None:
+                    total_bps = self._estimate_total_bitrate(clip)
+                if total_bps:
+                    if settings.keep_audio and audio_bps and total_bps > audio_bps:
+                        video_bps = total_bps - audio_bps
+                    else:
+                        video_bps = total_bps
+
+            if video_bps:
+                video_bitrates.append(video_bps)
+            if audio_bps:
+                audio_bitrates.append(audio_bps)
+
+        max_video = max(video_bitrates) if video_bitrates else None
+        max_audio = max(audio_bitrates) if audio_bitrates else None
+        return max_video, max_audio
+
+    def _pad_to_size(self, clip: VideoFileClip, target_w: int, target_h: int) -> VideoFileClip:
+        """Pad clip to target size without scaling."""
+        width, height = clip.size
+        if width == target_w and height == target_h:
+            return clip
+
+        pad_left = max(0, (target_w - width) // 2)
+        pad_right = max(0, target_w - width - pad_left)
+        pad_top = max(0, (target_h - height) // 2)
+        pad_bottom = max(0, target_h - height - pad_top)
+
+        logger.info(f"Padding clip from {width}x{height} to {target_w}x{target_h}")
+        return clip.with_effects([
+            vfx.Margin(
+                left=pad_left,
+                right=pad_right,
+                top=pad_top,
+                bottom=pad_bottom,
+                color=(0, 0, 0)
+            )
+        ])
+
     def process_clips(self, settings: MergeSettings,
                       progress_callback: Optional[Callable[[int, int, str], None]] = None) -> bool:
         """
@@ -308,6 +395,16 @@ class VideoMergeEngine:
                     processed = processed.without_audio()
 
                 self.processed_clips.append(processed)
+
+            if len(self.processed_clips) > 1:
+                target_w = max(c.size[0] for c in self.processed_clips)
+                target_h = max(c.size[1] for c in self.processed_clips)
+                if any(c.size != (target_w, target_h) for c in self.processed_clips):
+                    self.processed_clips = [
+                        self._pad_to_size(clip, target_w, target_h)
+                        for clip in self.processed_clips
+                    ]
+                    logger.info(f"Normalized clip sizes to {target_w}x{target_h}")
 
             logger.info(f"Processed {len(self.processed_clips)} clips")
             return True
@@ -368,7 +465,7 @@ class VideoMergeEngine:
             True if successful
         """
         try:
-            quality = self.QUALITY_PRESETS.get(settings.output_quality, self.QUALITY_PRESETS['high'])
+            quality = dict(self.QUALITY_PRESETS.get(settings.output_quality, self.QUALITY_PRESETS['high']))
 
             # Try to preserve original quality if no transformations were applied
             # Check if any transformations are enabled
@@ -378,23 +475,39 @@ class VideoMergeEngine:
                 settings.flip_horizontal or settings.flip_vertical
             )
 
+            source_video_bps = None
+            source_audio_bps = None
+            if self.clips:
+                source_video_bps, source_audio_bps = self._get_source_bitrates(settings)
+
+            if settings.output_quality == 'source':
+                if source_video_bps:
+                    quality['video_bitrate'] = f"{max(source_video_bps // 1000, 250)}k"
+                else:
+                    logger.warning("Could not detect source bitrate; using high preset.")
+                    quality = dict(self.QUALITY_PRESETS['high'])
+
+                if settings.keep_audio:
+                    if source_audio_bps:
+                        quality['audio_bitrate'] = f"{max(source_audio_bps // 1000, 64)}k"
+                else:
+                    quality['audio_bitrate'] = None
+
+                if source_video_bps:
+                    logger.info(f"Using source bitrate: {quality['video_bitrate']}")
             # If no transformations and we have original clips, try to get original bitrate
-            if not has_transformations and self.clips:
-                try:
-                    # Get original video info from first clip
-                    original_clip = self.clips[0]
-                    if hasattr(original_clip.reader, 'infos') and 'video_bitrate' in original_clip.reader.infos:
-                        original_bitrate = original_clip.reader.infos['video_bitrate']
-                        # Use original bitrate if higher than preset
-                        preset_bitrate_num = int(quality['video_bitrate'].replace('k', '')) * 1000
-                        if original_bitrate > preset_bitrate_num:
-                            quality['video_bitrate'] = f"{original_bitrate // 1000}k"
-                            logger.info(f"Using original bitrate: {quality['video_bitrate']}")
-                except Exception as e:
-                    logger.warning(f"Could not detect original bitrate: {e}")
+            elif not has_transformations and source_video_bps:
+                preset_bitrate_num = int(quality['video_bitrate'].replace('k', '')) * 1000
+                if source_video_bps > preset_bitrate_num:
+                    quality['video_bitrate'] = f"{source_video_bps // 1000}k"
+                    logger.info(f"Using source bitrate: {quality['video_bitrate']}")
+
+            quality_label = settings.output_quality
+            if settings.output_quality == 'source' and not source_video_bps:
+                quality_label = 'high'
 
             logger.info(f"Exporting to: {output_path}")
-            logger.info(f"Quality: {settings.output_quality} ({quality['video_bitrate']} video, {quality['audio_bitrate']} audio)")
+            logger.info(f"Quality: {quality_label} ({quality['video_bitrate']} video, {quality['audio_bitrate']} audio)")
 
             # Progress callback wrapper
             def progress_wrapper(t):

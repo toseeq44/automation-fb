@@ -38,7 +38,7 @@ class ProgressWidget(QWidget):
 
         # Progress group
         progress_group = QGroupBox("Progress")
-        progress_group.setFont(QFont("Arial", 10, QFont.Bold))
+        progress_group.setFont(QFont("Segoe UI", 10, QFont.Bold))
         progress_layout = QVBoxLayout()
 
         # Current operation label
@@ -81,7 +81,7 @@ class ProgressWidget(QWidget):
 
         # Log group (collapsible)
         log_group = QGroupBox("Log")
-        log_group.setFont(QFont("Arial", 10, QFont.Bold))
+        log_group.setFont(QFont("Segoe UI", 10, QFont.Bold))
         log_group.setCheckable(True)
         log_group.setChecked(False)  # Collapsed by default
         log_layout = QVBoxLayout()
@@ -92,11 +92,11 @@ class ProgressWidget(QWidget):
         self.log_text.setMaximumHeight(150)
         self.log_text.setStyleSheet("""
             QTextEdit {
-                background-color: #2b2b2b;
-                color: #ffffff;
-                font-family: 'Courier New', monospace;
+                background-color: #1e1e1e;
+                color: #e0e0e0;
+                font-family: 'Consolas', 'Courier New', monospace;
                 font-size: 8pt;
-                border: 1px solid #555;
+                border: 1px solid #3a3a3a;
             }
         """)
         log_layout.addWidget(self.log_text)
@@ -139,7 +139,7 @@ class ProgressWidget(QWidget):
         # Apply dark theme styling
         self.setStyleSheet("""
             QWidget {
-                background-color: #2a2a2a;
+                background-color: #1a1a1a;
                 color: #e0e0e0;
             }
             QGroupBox {
@@ -173,7 +173,7 @@ class ProgressWidget(QWidget):
                 color: #e0e0e0;
             }
             QProgressBar::chunk {
-                background-color: #0066cc;
+                background-color: #00bcd4;
                 border-radius: 5px;
             }
             QPushButton {
@@ -186,7 +186,7 @@ class ProgressWidget(QWidget):
             }
             QPushButton:hover {
                 background-color: #353535;
-                border-color: #0066cc;
+                border-color: #00bcd4;
             }
             QPushButton:pressed {
                 background-color: #202020;

@@ -19,6 +19,10 @@ except ImportError:
 
 # ==================== BASIC TRANSITIONS ====================
 
+def _clamp_duration(clip1: VideoFileClip, clip2: VideoFileClip, duration: float) -> float:
+    """Clamp transition duration to valid clip lengths."""
+    return max(0.0, min(duration, clip1.duration, clip2.duration))
+
 def fade_transition(clip1: VideoFileClip, clip2: VideoFileClip, duration: float = 1.0):
     """
     Simple fade transition: clip1 fades out, clip2 fades in
@@ -28,6 +32,10 @@ def fade_transition(clip1: VideoFileClip, clip2: VideoFileClip, duration: float 
         clip2: Second video clip
         duration: Transition duration in seconds
     """
+    duration = _clamp_duration(clip1, clip2, duration)
+    if duration == 0:
+        return concatenate_videoclips([clip1, clip2], method='compose')
+
     # Fade out first clip
     # MoviePy 2.x: Use with_effects([vfx.FadeOut()]) instead of fx(vfx.fadeout)
     clip1 = clip1.with_effects([vfx.FadeOut(duration)])
@@ -52,13 +60,17 @@ def crossfade_transition(clip1: VideoFileClip, clip2: VideoFileClip, duration: f
         clip2: Second video clip
         duration: Transition duration in seconds
     """
+    duration = _clamp_duration(clip1, clip2, duration)
+    if duration == 0:
+        return concatenate_videoclips([clip1, clip2], method='compose')
+
     # Add crossfade
     # MoviePy 2.x: Use with_effects([vfx.CrossFadeOut()]) instead of fx(vfx.crossfadeout)
     clip1 = clip1.with_effects([vfx.CrossFadeOut(duration)])
     clip2 = clip2.with_effects([vfx.CrossFadeIn(duration)])
 
     # Concatenate with overlap
-    result = concatenate_videoclips([clip1, clip2], method='compose')
+    result = concatenate_videoclips([clip1, clip2], method='compose', padding=-duration)
 
     logger.info(f"Crossfade transition applied: {duration}s")
     return result
@@ -77,6 +89,10 @@ def slide_transition(clip1: VideoFileClip, clip2: VideoFileClip,
         duration: Transition duration in seconds
         direction: Slide direction ('left', 'right', 'up', 'down')
     """
+    duration = _clamp_duration(clip1, clip2, duration)
+    if duration == 0:
+        return concatenate_videoclips([clip1, clip2], method='compose')
+
     w, h = clip1.size
 
     def make_frame(t):
@@ -128,6 +144,10 @@ def wipe_transition(clip1: VideoFileClip, clip2: VideoFileClip,
         duration: Transition duration in seconds
         direction: Wipe direction ('left', 'right', 'up', 'down')
     """
+    duration = _clamp_duration(clip1, clip2, duration)
+    if duration == 0:
+        return concatenate_videoclips([clip1, clip2], method='compose')
+
     w, h = clip1.size
     transition_start = clip1.duration - duration
 
@@ -169,7 +189,7 @@ def wipe_transition(clip1: VideoFileClip, clip2: VideoFileClip,
         return mask
 
     # Apply mask to clip1 (disappearing clip)
-    clip1_masked = clip1.fl(lambda gf, t: mask_frame(t) / 255.0 * gf(t), apply_to=['mask'])
+    clip1_masked = clip1.transform(lambda gf, t: mask_frame(t) / 255.0 * gf(t), apply_to=['mask'])
 
     # Composite clips
     # MoviePy 2.x: Use with_start() instead of set_start()
@@ -191,6 +211,10 @@ def zoom_in_transition(clip1: VideoFileClip, clip2: VideoFileClip, duration: flo
         clip2: Second video clip
         duration: Transition duration in seconds
     """
+    duration = _clamp_duration(clip1, clip2, duration)
+    if duration == 0:
+        return concatenate_videoclips([clip1, clip2], method='compose')
+
     def zoom_effect(get_frame, t):
         """Apply zoom effect"""
         if t < clip1.duration - duration:
@@ -220,12 +244,11 @@ def zoom_in_transition(clip1: VideoFileClip, clip2: VideoFileClip, duration: flo
             except ImportError:
                 return frame
 
-    clip1_zoomed = clip1.fl(zoom_effect)
-    # MoviePy 2.x: Use with_effects([vfx.FadeOut()]) instead of fx(vfx.fadeout)
-    clip1_zoomed = clip1_zoomed.with_effects([vfx.FadeOut(duration / 2)])
-    clip2_faded = clip2.with_effects([vfx.FadeIn(duration / 2)])
+    clip1_zoomed = clip1.transform(zoom_effect)
+    clip1_zoomed = clip1_zoomed.with_effects([vfx.CrossFadeOut(duration)])
+    clip2_faded = clip2.with_effects([vfx.CrossFadeIn(duration)])
 
-    result = concatenate_videoclips([clip1_zoomed, clip2_faded], method='compose')
+    result = concatenate_videoclips([clip1_zoomed, clip2_faded], method='compose', padding=-duration)
 
     logger.info(f"Zoom in transition applied: {duration}s")
     return result
@@ -240,6 +263,10 @@ def zoom_out_transition(clip1: VideoFileClip, clip2: VideoFileClip, duration: fl
         clip2: Second video clip
         duration: Transition duration in seconds
     """
+    duration = _clamp_duration(clip1, clip2, duration)
+    if duration == 0:
+        return concatenate_videoclips([clip1, clip2], method='compose')
+
     def zoom_effect(get_frame, t):
         """Apply zoom out effect"""
         if t < clip1.duration - duration:
@@ -267,12 +294,11 @@ def zoom_out_transition(clip1: VideoFileClip, clip2: VideoFileClip, duration: fl
             except ImportError:
                 return frame
 
-    clip1_zoomed = clip1.fl(zoom_effect)
-    # MoviePy 2.x: Use with_effects([vfx.FadeOut()]) instead of fx(vfx.fadeout)
-    clip1_zoomed = clip1_zoomed.with_effects([vfx.FadeOut(duration / 2)])
-    clip2_faded = clip2.with_effects([vfx.FadeIn(duration / 2)])
+    clip1_zoomed = clip1.transform(zoom_effect)
+    clip1_zoomed = clip1_zoomed.with_effects([vfx.CrossFadeOut(duration)])
+    clip2_faded = clip2.with_effects([vfx.CrossFadeIn(duration)])
 
-    result = concatenate_videoclips([clip1_zoomed, clip2_faded], method='compose')
+    result = concatenate_videoclips([clip1_zoomed, clip2_faded], method='compose', padding=-duration)
 
     logger.info(f"Zoom out transition applied: {duration}s")
     return result
@@ -291,6 +317,10 @@ def dissolve_transition(clip1: VideoFileClip, clip2: VideoFileClip,
         duration: Transition duration in seconds
         pattern: Dissolve pattern ('random', 'grid', 'radial')
     """
+    duration = _clamp_duration(clip1, clip2, duration)
+    if duration == 0:
+        return concatenate_videoclips([clip1, clip2], method='compose')
+
     w, h = clip1.size
     transition_start = clip1.duration - duration
 
@@ -327,7 +357,7 @@ def dissolve_transition(clip1: VideoFileClip, clip2: VideoFileClip,
 
             # Get frames
             frame1 = clip1.get_frame(t)
-            frame2 = clip2.get_frame(0)
+            frame2 = clip2.get_frame(t - transition_start)
 
             # Create blend mask based on progress
             blend_mask = (mask_pattern < progress).astype(np.float32)
@@ -339,10 +369,10 @@ def dissolve_transition(clip1: VideoFileClip, clip2: VideoFileClip,
             return result.astype(np.uint8)
 
     result = VideoClip(make_frame, duration=clip1.duration + clip2.duration - duration)
-    result = result.set_fps(clip1.fps)
+    result = result.with_fps(clip1.fps)
 
     if clip1.audio:
-        result = result.set_audio(clip1.audio)
+        result = result.with_audio(clip1.audio)
 
     logger.info(f"Dissolve transition applied: {pattern}, {duration}s")
     return result
@@ -359,6 +389,10 @@ def rotate_transition(clip1: VideoFileClip, clip2: VideoFileClip, duration: floa
         clip2: Second video clip
         duration: Transition duration in seconds
     """
+    duration = _clamp_duration(clip1, clip2, duration)
+    if duration == 0:
+        return concatenate_videoclips([clip1, clip2], method='compose')
+
     def rotate_out(get_frame, t):
         """Rotate out effect"""
         if t < clip1.duration - duration:
@@ -371,13 +405,12 @@ def rotate_transition(clip1: VideoFileClip, clip2: VideoFileClip, duration: floa
             # Simple rotation simulation (would need proper implementation)
             return frame
 
-    clip1_rotated = clip1.fl(rotate_out)
-    # MoviePy 2.x: Use with_effects([vfx.FadeOut()]) instead of fx(vfx.fadeout)
-    clip1_rotated = clip1_rotated.with_effects([vfx.FadeOut(duration / 2)])
+    clip1_rotated = clip1.transform(rotate_out)
+    clip1_rotated = clip1_rotated.with_effects([vfx.CrossFadeOut(duration)])
 
-    clip2_faded = clip2.with_effects([vfx.FadeIn(duration / 2)])
+    clip2_faded = clip2.with_effects([vfx.CrossFadeIn(duration)])
 
-    result = concatenate_videoclips([clip1_rotated, clip2_faded], method='compose')
+    result = concatenate_videoclips([clip1_rotated, clip2_faded], method='compose', padding=-duration)
 
     logger.info(f"Rotate transition applied: {duration}s")
     return result
@@ -397,6 +430,10 @@ def blur_transition(clip1: VideoFileClip, clip2: VideoFileClip, duration: float 
     except ImportError:
         logger.warning("scipy not available, using simple fade instead")
         return crossfade_transition(clip1, clip2, duration)
+
+    duration = _clamp_duration(clip1, clip2, duration)
+    if duration == 0:
+        return concatenate_videoclips([clip1, clip2], method='compose')
 
     def blur_out(get_frame, t):
         """Blur out effect"""
@@ -428,10 +465,12 @@ def blur_transition(clip1: VideoFileClip, clip2: VideoFileClip, duration: float 
 
             return blurred.astype(np.uint8)
 
-    clip1_blurred = clip1.fl(blur_out)
-    clip2_blurred = clip2.fl(blur_in)
+    clip1_blurred = clip1.transform(blur_out)
+    clip2_blurred = clip2.transform(blur_in)
+    clip1_blurred = clip1_blurred.with_effects([vfx.CrossFadeOut(duration)])
+    clip2_blurred = clip2_blurred.with_effects([vfx.CrossFadeIn(duration)])
 
-    result = concatenate_videoclips([clip1_blurred, clip2_blurred], method='compose')
+    result = concatenate_videoclips([clip1_blurred, clip2_blurred], method='compose', padding=-duration)
 
     logger.info(f"Blur transition applied: {duration}s")
     return result

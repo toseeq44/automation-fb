@@ -31,7 +31,7 @@ class VideoMergerWindow(QDialog):
         self.init_ui()
         self.setWindowTitle("🎬 Video Merger")
         self.resize(1400, 950)
-        self.setMinimumSize(1200, 800)
+        self.setMinimumSize(1000, 700)
 
     def init_ui(self):
         """Initialize UI"""
@@ -43,7 +43,7 @@ class VideoMergerWindow(QDialog):
         header_layout = QHBoxLayout()
 
         title_label = QLabel("🎬 Video Merger")
-        title_label.setFont(QFont("Arial", 16, QFont.Bold))
+        title_label.setFont(QFont("Segoe UI", 16, QFont.Bold))
         header_layout.addWidget(title_label)
 
         header_layout.addStretch()
@@ -60,7 +60,7 @@ class VideoMergerWindow(QDialog):
 
         # Tab widget
         self.tabs = QTabWidget()
-        self.tabs.setFont(QFont("Arial", 10))
+        self.tabs.setFont(QFont("Segoe UI", 10))
 
         # Tab 1: Simple Merge
         self.simple_tab = SimpleMergeTab()
@@ -83,6 +83,10 @@ class VideoMergerWindow(QDialog):
         self.progress_widget.cancel_clicked.connect(self._on_cancel)
 
         splitter.addWidget(self.progress_widget)
+
+        splitter.setChildrenCollapsible(False)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 1)
 
         # Set splitter sizes (70% tabs, 30% progress)
         splitter.setSizes([700, 300])
@@ -110,8 +114,10 @@ class VideoMergerWindow(QDialog):
         # Apply dark theme stylesheet matching integrated_editor
         self.setStyleSheet("""
             QDialog {
-                background-color: #1e1e1e;
+                background-color: #1a1a1a;
                 color: #e0e0e0;
+                font-family: 'Segoe UI', 'Arial', sans-serif;
+                font-size: 13px;
             }
             QLabel {
                 color: #e0e0e0;
@@ -133,7 +139,7 @@ class VideoMergerWindow(QDialog):
             }
             QTabWidget::pane {
                 border: 1px solid #3a3a3a;
-                background-color: #2a2a2a;
+                background-color: #1f1f1f;
                 border-radius: 5px;
                 margin-top: -1px;
             }
@@ -148,9 +154,10 @@ class VideoMergerWindow(QDialog):
                 border-bottom: none;
             }
             QTabBar::tab:selected {
-                background-color: #353535;
+                background-color: #2f2f2f;
                 color: #ffffff;
                 font-weight: bold;
+                border-color: #00bcd4;
             }
             QTabBar::tab:hover {
                 background-color: #303030;
@@ -160,7 +167,7 @@ class VideoMergerWindow(QDialog):
                 height: 3px;
             }
             QSplitter::handle:hover {
-                background-color: #0066cc;
+                background-color: #00bcd4;
             }
         """)
 

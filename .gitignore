@@ -30,3 +30,4 @@ api_config.json
 
 # License data (don't commit user licenses)
 modules/license/.license
+nul

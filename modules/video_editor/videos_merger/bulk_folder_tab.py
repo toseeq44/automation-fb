@@ -8,7 +8,7 @@ from pathlib import Path
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QFileDialog, QScrollArea, QGroupBox, QSpinBox, QDoubleSpinBox,
-    QComboBox, QCheckBox, QLineEdit, QMessageBox, QFrame
+    QComboBox, QCheckBox, QLineEdit, QMessageBox, QFrame, QSizePolicy
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont
@@ -41,6 +41,16 @@ class BulkFolderTab(QWidget):
 
     def init_ui(self):
         """Initialize UI"""
+        outer_layout = QVBoxLayout()
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setObjectName("tabScrollArea")
+        scroll_area.setFrameShape(QFrame.NoFrame)
+
+        content_widget = QWidget()
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(10, 10, 10, 10)
         main_layout.setSpacing(10)
@@ -53,13 +63,16 @@ class BulkFolderTab(QWidget):
         add_btn.setFixedHeight(32)
         add_btn.setStyleSheet("""
             QPushButton {
-                background-color: #0066cc;
+                background-color: #00bcd4;
                 color: white;
                 font-weight: bold;
                 border-radius: 5px;
             }
             QPushButton:hover {
-                background-color: #0052a3;
+                background-color: #00d4ea;
+            }
+            QPushButton:pressed {
+                background-color: #00a4b8;
             }
         """)
         add_btn.clicked.connect(self.add_folders)
@@ -100,7 +113,7 @@ class BulkFolderTab(QWidget):
         folder_scroll.setWidgetResizable(True)
         folder_scroll.setWidget(self.folder_list_widget)
         folder_scroll.setMinimumHeight(100)
-        folder_scroll.setMaximumHeight(150)
+        folder_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         folder_frame_layout.addWidget(folder_scroll)
         folder_frame.setLayout(folder_frame_layout)
         main_layout.addWidget(folder_frame)
@@ -111,12 +124,7 @@ class BulkFolderTab(QWidget):
         self.empty_label.setStyleSheet("color: #888; font-size: 10pt; padding: 30px;")
         self.folder_list_layout.addWidget(self.empty_label)
 
-        # Settings section in scroll area
-        settings_scroll = QScrollArea()
-        settings_scroll.setWidgetResizable(True)
-        settings_scroll.setMinimumHeight(300)
-        settings_scroll.setMaximumHeight(420)
-
+        # Settings section
         settings_widget = QWidget()
         settings_main_layout = QVBoxLayout()
         settings_main_layout.setContentsMargins(5, 5, 5, 5)
@@ -130,8 +138,8 @@ class BulkFolderTab(QWidget):
         settings_main_layout.addLayout(settings_row)
 
         settings_widget.setLayout(settings_main_layout)
-        settings_scroll.setWidget(settings_widget)
-        main_layout.addWidget(settings_scroll)
+        settings_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        main_layout.addWidget(settings_widget)
 
         # Summary row
         self.summary_label = QLabel("📊 Batches: 0  |  Folders: 0")
@@ -161,12 +169,15 @@ class BulkFolderTab(QWidget):
         self.start_btn.setEnabled(False)
         main_layout.addWidget(self.start_btn)
 
-        self.setLayout(main_layout)
+        content_widget.setLayout(main_layout)
+        scroll_area.setWidget(content_widget)
+        outer_layout.addWidget(scroll_area)
+        self.setLayout(outer_layout)
 
         # Apply comprehensive dark theme
         self.setStyleSheet("""
             QWidget {
-                background-color: #2a2a2a;
+                background-color: #1a1a1a;
                 color: #e0e0e0;
             }
             QFrame {
@@ -205,7 +216,7 @@ class BulkFolderTab(QWidget):
             }
             QPushButton:hover {
                 background-color: #353535;
-                border-color: #0066cc;
+                border-color: #00bcd4;
             }
             QPushButton:pressed {
                 background-color: #202020;
@@ -219,7 +230,7 @@ class BulkFolderTab(QWidget):
                 min-height: 20px;
             }
             QSpinBox:focus, QDoubleSpinBox:focus, QLineEdit:focus {
-                border-color: #0066cc;
+                border-color: #00bcd4;
             }
             QSpinBox::up-button, QDoubleSpinBox::up-button {
                 background-color: #2a2a2a;
@@ -244,7 +255,7 @@ class BulkFolderTab(QWidget):
                 min-height: 20px;
             }
             QComboBox:hover {
-                border-color: #0066cc;
+                border-color: #00bcd4;
             }
             QComboBox::drop-down {
                 border: none;
@@ -260,7 +271,7 @@ class BulkFolderTab(QWidget):
             QComboBox QAbstractItemView {
                 background-color: #2a2a2a;
                 color: #e0e0e0;
-                selection-background-color: #0066cc;
+                selection-background-color: #00bcd4;
                 border: 1px solid #3a3a3a;
                 outline: none;
             }
@@ -276,8 +287,8 @@ class BulkFolderTab(QWidget):
                 background-color: #1e1e1e;
             }
             QCheckBox::indicator:checked {
-                background-color: #0066cc;
-                border-color: #0066cc;
+                background-color: #00bcd4;
+                border-color: #00bcd4;
                 image: none;
             }
             QCheckBox::indicator:checked:after {
@@ -285,12 +296,15 @@ class BulkFolderTab(QWidget):
                 color: white;
             }
             QCheckBox::indicator:hover {
-                border-color: #0066cc;
+                border-color: #00bcd4;
             }
             QScrollArea {
                 background-color: transparent;
                 border: 1px solid #3a3a3a;
                 border-radius: 6px;
+            }
+            QScrollArea#tabScrollArea {
+                border: none;
             }
             QScrollBar:vertical {
                 background-color: #1e1e1e;
@@ -382,7 +396,14 @@ class BulkFolderTab(QWidget):
         trans_label.setFixedWidth(80)
         trans_layout.addWidget(trans_label)
         self.transition_combo = QComboBox()
-        self.transition_combo.addItems(['Crossfade', 'Fade', 'Slide Left', 'None'])
+        self.transition_combo.addItems([
+            'Crossfade', 'Fade',
+            'Slide Left', 'Slide Right', 'Slide Up', 'Slide Down',
+            'Wipe Left', 'Wipe Right', 'Wipe Up', 'Wipe Down',
+            'Zoom In', 'Zoom Out',
+            'Dissolve (Random)', 'Dissolve (Grid)', 'Dissolve (Radial)',
+            'Blur', 'None'
+        ])
         trans_layout.addWidget(self.transition_combo, 1)
 
         self.transition_duration_spin = QDoubleSpinBox()
@@ -437,8 +458,8 @@ class BulkFolderTab(QWidget):
         quality_layout.addWidget(quality_label)
 
         self.quality_combo = QComboBox()
-        self.quality_combo.addItems(['Low', 'Medium', 'High', 'Ultra'])
-        self.quality_combo.setCurrentIndex(2)
+        self.quality_combo.addItems(['Match Source', 'Low', 'Medium', 'High', 'Ultra'])
+        self.quality_combo.setCurrentIndex(0)
         quality_layout.addWidget(self.quality_combo, 1)
         layout.addLayout(quality_layout)
 
@@ -632,12 +653,31 @@ class BulkFolderTab(QWidget):
             settings.zoom_factor = self.zoom_spin.value()
         settings.flip_horizontal = self.flip_h_check.isChecked()
 
-        transition_map = {'Crossfade': 'crossfade', 'Fade': 'fade',
-                          'Slide Left': 'slide_left', 'None': 'none'}
+        transition_map = {
+            'Crossfade': 'crossfade',
+            'Fade': 'fade',
+            'Slide Left': 'slide_left',
+            'Slide Right': 'slide_right',
+            'Slide Up': 'slide_up',
+            'Slide Down': 'slide_down',
+            'Wipe Left': 'wipe_left',
+            'Wipe Right': 'wipe_right',
+            'Wipe Up': 'wipe_up',
+            'Wipe Down': 'wipe_down',
+            'Zoom In': 'zoom_in',
+            'Zoom Out': 'zoom_out',
+            'Dissolve (Random)': 'dissolve_random',
+            'Dissolve (Grid)': 'dissolve_grid',
+            'Dissolve (Radial)': 'dissolve_radial',
+            'Blur': 'blur',
+            'None': 'none'
+        }
         settings.transition_type = transition_map.get(self.transition_combo.currentText(), 'crossfade')
         settings.transition_duration = self.transition_duration_spin.value()
 
-        settings.output_quality = self.quality_combo.currentText().lower()
+        quality_text = self.quality_combo.currentText()
+        quality_map = {'Match Source': 'source'}
+        settings.output_quality = quality_map.get(quality_text, quality_text.lower())
         settings.output_format = self.format_combo.currentText().lower()
         settings.keep_audio = True
         settings.delete_source = self.delete_check.isChecked()

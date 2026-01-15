@@ -165,18 +165,43 @@ class MetadataFolderScanner:
     """Scans folders and detects structure for metadata removal"""
 
     @staticmethod
-    def get_subfolders(folder_path: str) -> List[str]:
-        """Get list of subfolders in a folder"""
+    def get_subfolders(folder_path: str, recursive: bool = False) -> List[str]:
+        """
+        Get list of subfolders in a folder
+
+        Args:
+            folder_path: Path to scan
+            recursive: If True, scan all nested subfolders recursively
+
+        Returns:
+            List of subfolder paths (relative to folder_path)
+        """
         try:
             path = Path(folder_path).expanduser()
             if not path.exists():
                 return []
 
-            subfolders = [
-                f.name for f in path.iterdir()
-                if f.is_dir() and not f.name.startswith('.')
-            ]
-            return sorted(subfolders)
+            if recursive:
+                # Recursively get all nested subfolders
+                subfolders = []
+                for root, dirs, files in os.walk(path):
+                    # Filter out hidden directories
+                    dirs[:] = [d for d in dirs if not d.startswith('.')]
+
+                    for d in dirs:
+                        # Get relative path from base folder
+                        full_path = Path(root) / d
+                        rel_path = full_path.relative_to(path)
+                        subfolders.append(str(rel_path))
+
+                return sorted(subfolders)
+            else:
+                # Only immediate subfolders
+                subfolders = [
+                    f.name for f in path.iterdir()
+                    if f.is_dir() and not f.name.startswith('.')
+                ]
+                return sorted(subfolders)
         except Exception as e:
             logger.error(f"Error scanning folder {folder_path}: {e}")
             return []
@@ -235,20 +260,23 @@ class MetadataFolderScanner:
     @staticmethod
     def detect_folder_structure(folder_path: str) -> Tuple[str, Dict[str, Any]]:
         """
-        Detect folder structure
+        Detect folder structure (with recursive scanning for nested folders)
 
         Returns:
             Tuple of (mode, info_dict)
             mode: 'SIMPLE' | 'SUBFOLDERS_ONLY' | 'MIXED' | 'EMPTY'
         """
-        subfolders = MetadataFolderScanner.get_subfolders(folder_path)
+        # Get all subfolders recursively (including nested ones)
+        subfolders = MetadataFolderScanner.get_subfolders(folder_path, recursive=True)
         root_videos = MetadataFolderScanner.get_video_files(folder_path)
 
-        # Count videos in each subfolder
+        # Count videos in each subfolder (non-recursive to avoid double-counting)
+        # Since we get nested subfolders, each will be counted individually
         subfolder_counts = {}
         for sf in subfolders:
             sf_path = os.path.join(folder_path, sf)
-            subfolder_counts[sf] = MetadataFolderScanner.count_videos_in_folder(sf_path)
+            # Count only immediate videos in this subfolder (not recursive)
+            subfolder_counts[sf] = MetadataFolderScanner.count_videos_in_folder(sf_path, recursive=False)
 
         info = {
             'subfolders': subfolders,
@@ -277,21 +305,27 @@ class MetadataFolderScanner:
     @staticmethod
     def detect_folder_mode(source_folder: str, dest_folder: str) -> Tuple[str, Dict[str, Any]]:
         """
-        Detect folder mode for source and destination (like video editor)
+        Detect folder mode for source and destination (with recursive scanning)
 
         Returns:
             Tuple of (mode, info_dict)
             mode: 'simple' or 'complex'
         """
-        source_subfolders = MetadataFolderScanner.get_subfolders(source_folder)
-        dest_subfolders = MetadataFolderScanner.get_subfolders(dest_folder) if dest_folder else []
+        # Scan recursively for all nested subfolders
+        source_subfolders = MetadataFolderScanner.get_subfolders(source_folder, recursive=True)
+        dest_subfolders = MetadataFolderScanner.get_subfolders(dest_folder, recursive=True) if dest_folder else []
 
+        # Check videos in root folder
         source_videos = MetadataFolderScanner.get_video_files(source_folder)
+
+        # Count total videos recursively
+        total_video_count = MetadataFolderScanner.count_videos_in_folder(source_folder, recursive=True)
 
         info = {
             'source_subfolders': source_subfolders,
             'dest_subfolders': dest_subfolders,
-            'source_video_count': len(source_videos),
+            'source_video_count': len(source_videos),  # Videos in root only
+            'total_video_count': total_video_count,     # All videos (recursive)
             'source_has_subfolders': len(source_subfolders) > 0,
             'dest_has_subfolders': len(dest_subfolders) > 0
         }
@@ -300,7 +334,7 @@ class MetadataFolderScanner:
         if not source_subfolders and source_videos:
             return 'simple', info
 
-        # Complex mode: Source has subfolders
+        # Complex mode: Source has subfolders (including nested ones)
         if source_subfolders:
             return 'complex', info
 

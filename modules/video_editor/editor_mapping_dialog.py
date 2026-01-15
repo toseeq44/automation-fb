@@ -54,7 +54,7 @@ class BulkProcessingDialog(QDialog):
         """Initialize UI"""
         self.setWindowTitle("Bulk Video Processing")
         self.setMinimumSize(1000, 750)
-        self.resize(1100, 800)
+        self.resize(1200, 850)  # Bigger default size for better visibility
         self.setModal(True)
 
         main_layout = QVBoxLayout()
@@ -65,14 +65,16 @@ class BulkProcessingDialog(QDialog):
         header = self.create_header()
         main_layout.addWidget(header)
 
-        # Scroll area for content
+        # Scroll area for content with better configuration
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setObjectName("mainScrollArea")  # For custom styling
 
         content_widget = QWidget()
         content_layout = QVBoxLayout(content_widget)
         content_layout.setSpacing(15)
+        content_layout.setContentsMargins(5, 5, 5, 5)  # Small margins for content
 
         # Step 1: Folder Selection
         folder_group = self.create_folder_selection_group()
@@ -520,6 +522,59 @@ class BulkProcessingDialog(QDialog):
             QScrollArea {
                 border: none;
                 background-color: transparent;
+            }
+            QScrollArea#mainScrollArea {
+                border: none;
+            }
+            QScrollBar:vertical {
+                background-color: #1e1e1e;
+                width: 12px;
+                border-radius: 6px;
+                margin: 2px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #3a3a3a;
+                border-radius: 6px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #00bcd4;
+            }
+            QScrollBar::handle:vertical:pressed {
+                background-color: #00d4ea;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+                border: none;
+                background: none;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+            }
+            QScrollBar:horizontal {
+                background-color: #1e1e1e;
+                height: 12px;
+                border-radius: 6px;
+                margin: 2px;
+            }
+            QScrollBar::handle:horizontal {
+                background-color: #3a3a3a;
+                border-radius: 6px;
+                min-width: 20px;
+            }
+            QScrollBar::handle:horizontal:hover {
+                background-color: #00bcd4;
+            }
+            QScrollBar::handle:horizontal:pressed {
+                background-color: #00d4ea;
+            }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                width: 0px;
+                border: none;
+                background: none;
+            }
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+                background: none;
             }
         """)
 

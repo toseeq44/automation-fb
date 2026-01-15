@@ -19,6 +19,7 @@ from modules.logging.logger import get_logger
 from modules.metadata_remover.metadata_folder_manager import (
     MetadataFolderMapping, MetadataRemovalSettings, MetadataPlanLimitChecker, VIDEO_EXTENSIONS
 )
+from modules.video_editor.utils import get_ffmpeg_path
 
 logger = get_logger(__name__)
 
@@ -353,9 +354,13 @@ class MetadataBatchWorker(QThread):
             True if successful
         """
         try:
+            # Get FFmpeg path (handles bundled exe mode)
+            ffmpeg_path = get_ffmpeg_path()
+            logger.info(f"Using FFmpeg: {ffmpeg_path}")
+
             # Build FFmpeg command for quick stealth
             cmd = [
-                'ffmpeg',
+                ffmpeg_path,
                 '-i', input_path,
                 '-map_metadata', '-1',  # Remove all metadata
                 '-c:v', 'libx264',  # Re-encode video
@@ -364,17 +369,18 @@ class MetadataBatchWorker(QThread):
                 '-c:a', 'aac',  # Re-encode audio
                 '-b:a', '192k',
                 '-ar', '48000',  # Change sample rate
+                '-movflags', '+faststart',  # Optimize for streaming
                 '-f', 'mp4',  # Force MP4 format
                 '-y',  # Overwrite output
                 output_path
             ]
 
-            # Run FFmpeg
+            # Run FFmpeg with extended timeout
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=600  # 10 minute timeout
+                timeout=1800  # 30 minute timeout
             )
 
             if result.returncode != 0:
@@ -383,18 +389,25 @@ class MetadataBatchWorker(QThread):
                 self.log_message.emit(f"Processing error: {error_msg[:200]}", "error")
                 return False
 
-            return True
+            # Verify output file exists and has content
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                logger.info(f"Quick stealth successful: {os.path.getsize(output_path)} bytes")
+                return True
+            else:
+                logger.error("Output file not created or empty")
+                self.log_message.emit("Output file not created", "error")
+                return False
 
         except subprocess.TimeoutExpired:
-            logger.error("FFmpeg timeout in quick stealth")
-            self.log_message.emit("Processing timeout", "error")
+            logger.error("FFmpeg timeout in quick stealth (>30 min)")
+            self.log_message.emit("Processing timeout (>30 min) - file may be very large", "error")
             return False
         except FileNotFoundError:
             logger.error("FFmpeg not found. Please install FFmpeg.")
-            self.log_message.emit("FFmpeg not found! Please install FFmpeg.", "error")
+            self.log_message.emit("FFmpeg not found! Check installation.", "error")
             return False
         except Exception as e:
-            logger.error(f"Error running FFmpeg quick stealth: {e}")
+            logger.error(f"Error running FFmpeg quick stealth: {e}", exc_info=True)
             self.log_message.emit(f"Processing error: {str(e)}", "error")
             return False
 
@@ -414,10 +427,14 @@ class MetadataBatchWorker(QThread):
             True if successful
         """
         try:
+            # Get FFmpeg path (handles bundled exe mode)
+            ffmpeg_path = get_ffmpeg_path()
+            logger.info(f"Using FFmpeg: {ffmpeg_path}")
+
             # Build FFmpeg command for deep stealth
             # Add video filters for color grading and subtle pixel changes
             cmd = [
-                'ffmpeg',
+                ffmpeg_path,
                 '-i', input_path,
                 '-map_metadata', '-1',  # Remove all metadata
                 '-vf', 'eq=brightness=0.02:saturation=1.05,noise=alls=2:allf=t',  # Color + noise
@@ -427,17 +444,18 @@ class MetadataBatchWorker(QThread):
                 '-c:a', 'aac',
                 '-b:a', '192k',
                 '-ar', '44100',  # Different sample rate
+                '-movflags', '+faststart',  # Optimize for streaming
                 '-f', 'mp4',  # Force MP4 format
                 '-y',
                 output_path
             ]
 
-            # Run FFmpeg
+            # Run FFmpeg with extended timeout (longer due to slow preset)
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=1800  # 30 minute timeout
+                timeout=2400  # 40 minute timeout (slower preset needs more time)
             )
 
             if result.returncode != 0:
@@ -446,18 +464,25 @@ class MetadataBatchWorker(QThread):
                 self.log_message.emit(f"Processing error: {error_msg[:200]}", "error")
                 return False
 
-            return True
+            # Verify output
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                logger.info(f"Deep stealth successful: {os.path.getsize(output_path)} bytes")
+                return True
+            else:
+                logger.error("Output file not created or empty")
+                self.log_message.emit("Output file not created", "error")
+                return False
 
         except subprocess.TimeoutExpired:
-            logger.error("FFmpeg timeout in deep stealth")
-            self.log_message.emit("Processing timeout", "error")
+            logger.error("FFmpeg timeout in deep stealth (>40 min)")
+            self.log_message.emit("Processing timeout (>40 min) - file may be very large", "error")
             return False
         except FileNotFoundError:
             logger.error("FFmpeg not found. Please install FFmpeg.")
-            self.log_message.emit("FFmpeg not found! Please install FFmpeg.", "error")
+            self.log_message.emit("FFmpeg not found! Check installation.", "error")
             return False
         except Exception as e:
-            logger.error(f"Error running FFmpeg deep stealth: {e}")
+            logger.error(f"Error running FFmpeg deep stealth: {e}", exc_info=True)
             self.log_message.emit(f"Processing error: {str(e)}", "error")
             return False
 
@@ -477,10 +502,14 @@ class MetadataBatchWorker(QThread):
             True if successful
         """
         try:
+            # Get FFmpeg path (handles bundled exe mode)
+            ffmpeg_path = get_ffmpeg_path()
+            logger.info(f"Using FFmpeg: {ffmpeg_path}")
+
             # Build FFmpeg command for maximum stealth
             # Complex filter chain with multiple transformations
             cmd = [
-                'ffmpeg',
+                ffmpeg_path,
                 '-i', input_path,
                 '-map_metadata', '-1',  # Remove all metadata
                 '-vf', (
@@ -503,7 +532,10 @@ class MetadataBatchWorker(QThread):
                 output_path
             ]
 
-            # Run FFmpeg
+            # Run FFmpeg with extended timeout (veryslow preset is very slow)
+            logger.info("Starting maximum stealth processing (may take up to 2 hours)...")
+            self.log_message.emit("⏳ Maximum stealth processing (up to 2 hours)...", "info")
+
             result = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -517,18 +549,25 @@ class MetadataBatchWorker(QThread):
                 self.log_message.emit(f"Processing error: {error_msg[:200]}", "error")
                 return False
 
-            return True
+            # Verify output
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                logger.info(f"Maximum stealth successful: {os.path.getsize(output_path)} bytes")
+                return True
+            else:
+                logger.error("Output file not created or empty")
+                self.log_message.emit("Output file not created", "error")
+                return False
 
         except subprocess.TimeoutExpired:
-            logger.error("FFmpeg timeout in maximum stealth")
-            self.log_message.emit("Processing timeout", "error")
+            logger.error("FFmpeg timeout in maximum stealth (>2 hours)")
+            self.log_message.emit("Processing timeout (>2 hours) - file extremely large/complex", "error")
             return False
         except FileNotFoundError:
             logger.error("FFmpeg not found. Please install FFmpeg.")
-            self.log_message.emit("FFmpeg not found! Please install FFmpeg.", "error")
+            self.log_message.emit("FFmpeg not found! Check installation.", "error")
             return False
         except Exception as e:
-            logger.error(f"Error running FFmpeg maximum stealth: {e}")
+            logger.error(f"Error running FFmpeg maximum stealth: {e}", exc_info=True)
             self.log_message.emit(f"Processing error: {str(e)}", "error")
             return False
 

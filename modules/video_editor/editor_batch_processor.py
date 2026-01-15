@@ -839,37 +839,23 @@ class EditorBatchWorker(QThread):
             #
             # Result: Clean voice isolation + music removal + pitch change
 
-            # Get FFmpeg path and probe streams FIRST
+            # Get FFmpeg path
             ffmpeg_path = get_ffmpeg_path()
             logger.info(f"      Using FFmpeg: {ffmpeg_path}")
 
-            # Probe video file for proper stream detection
-            stream_info = self._probe_video_streams(source_path, ffmpeg_path)
-            has_video = stream_info['has_video']
-            has_audio = stream_info['has_audio']
-            video_idx = stream_info['video_index']
-            audio_idx = stream_info['audio_index']
-
-            logger.info(f"      Stream detection: Video={has_video} (idx:{video_idx}), Audio={has_audio} (idx:{audio_idx})")
-
-            if not has_video:
-                logger.error("No video stream detected! Falling back to copy...")
-                self.log_message.emit("⚠️  No video stream detected - copying file", "warning")
-                try:
-                    shutil.copy2(source_path, dest_path if not is_inplace else actual_output)
-                    return True
-                except Exception as e:
-                    logger.error(f"Copy fallback failed: {e}")
-                    return False
-
-            # Complex filter for EDGE BLUR effect (using detected stream index)
+            # Use simple [0:v] notation for video stream (universal compatibility)
+            # This works with MP4, WebM, MKV, AVI - all formats
+            # More reliable than dynamic stream detection which can fail on some files
             video_filter_complex = (
-                f"[0:{video_idx}]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p,split=2[main][bg];"  # Normalize format/dimensions
+                "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p,split=2[main][bg];"  # Normalize format/dimensions
                 "[bg]scale=iw:ih,gblur=sigma=20[blurred];"  # Heavy blur for background
                 "[main]scale=iw*0.97:ih*0.97[scaled];"  # Scale to 97%
                 "[blurred][scaled]overlay=(W-w)/2:(H-h)/2[overlay];"  # Overlay centered
                 "[overlay]scale='trunc(iw*1.1/2)*2:trunc(ih*1.1/2)*2',format=yuv420p[out]"  # 110% zoom, even dimensions
             )
+
+            # Detect if audio exists (simple detection)
+            has_audio = self._detect_audio_stream(source_path, ffmpeg_path)
 
             # PROFESSIONAL AUDIO PROCESSING (Adobe Premiere Pro / After Effects style)
             #
@@ -924,7 +910,7 @@ class EditorBatchWorker(QThread):
             # Add audio processing if audio stream detected
             if has_audio:
                 cmd += [
-                    '-map', f'0:{audio_idx}',  # Map specific audio stream
+                    '-map', '0:a?',  # Map audio stream (optional - ? means skip if not present)
                     '-af', audio_filters,  # PROFESSIONAL audio processing chain
                     '-c:a', 'aac',
                     '-b:a', '192k'  # High quality audio bitrate

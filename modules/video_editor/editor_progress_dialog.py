@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional
 
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QProgressBar, QTextEdit, QFrame, QGroupBox, QMessageBox
+    QProgressBar, QTextEdit, QFrame, QGroupBox, QMessageBox, QScrollArea, QWidget
 )
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont, QTextCursor, QColor
@@ -51,31 +51,47 @@ class EditorProgressDialog(QDialog):
         """Initialize UI"""
         self.setWindowTitle("Batch Processing Progress")
         self.setMinimumSize(800, 650)
-        self.resize(900, 700)
+        self.resize(1000, 750)  # Bigger default size for better visibility
         self.setModal(True)
 
         # Prevent closing during processing
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
 
         main_layout = QVBoxLayout()
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.setSpacing(15)
+        main_layout.setContentsMargins(15, 15, 15, 15)
+        main_layout.setSpacing(10)
+
+        # Scrollable content area
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.NoFrame)
+        scroll_area.setObjectName("progressScrollArea")
+
+        # Content widget inside scroll area
+        content_widget = QWidget()
+        content_layout = QVBoxLayout()
+        content_layout.setContentsMargins(5, 5, 5, 5)
+        content_layout.setSpacing(15)
 
         # Header
         header = self.create_header()
-        main_layout.addWidget(header)
+        content_layout.addWidget(header)
 
         # Progress section
         progress_group = self.create_progress_group()
-        main_layout.addWidget(progress_group)
+        content_layout.addWidget(progress_group)
 
         # Statistics
         stats_group = self.create_stats_group()
-        main_layout.addWidget(stats_group)
+        content_layout.addWidget(stats_group)
 
         # Log output
         log_group = self.create_log_group()
-        main_layout.addWidget(log_group, 1)
+        content_layout.addWidget(log_group, 1)
+
+        content_widget.setLayout(content_layout)
+        scroll_area.setWidget(content_widget)
+        main_layout.addWidget(scroll_area, 1)
 
         # Bottom buttons
         button_layout = QHBoxLayout()
@@ -334,6 +350,63 @@ class EditorProgressDialog(QDialog):
             }
             QLabel[objectName="stat_value_deleted"] {
                 color: #9c27b0;
+            }
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+            QScrollArea#progressScrollArea {
+                border: none;
+            }
+            QScrollBar:vertical {
+                background-color: #1e1e1e;
+                width: 12px;
+                border-radius: 6px;
+                margin: 2px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #3a3a3a;
+                border-radius: 6px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #00bcd4;
+            }
+            QScrollBar::handle:vertical:pressed {
+                background-color: #00d4ea;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+                border: none;
+                background: none;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+            }
+            QScrollBar:horizontal {
+                background-color: #1e1e1e;
+                height: 12px;
+                border-radius: 6px;
+                margin: 2px;
+            }
+            QScrollBar::handle:horizontal {
+                background-color: #3a3a3a;
+                border-radius: 6px;
+                min-width: 20px;
+            }
+            QScrollBar::handle:horizontal:hover {
+                background-color: #00bcd4;
+            }
+            QScrollBar::handle:horizontal:pressed {
+                background-color: #00d4ea;
+            }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                width: 0px;
+                border: none;
+                background: none;
+            }
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+                background: none;
             }
         """)
 

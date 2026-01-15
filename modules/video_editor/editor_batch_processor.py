@@ -599,12 +599,12 @@ class EditorBatchWorker(QThread):
 
             self.log_message.emit(f"🎬 Running FFmpeg (quality: {quality})...", "info")
 
-            # Run FFmpeg
+            # Run FFmpeg with extended timeout
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=600  # 10 minute timeout
+                timeout=1800  # 30 minute timeout for basic conversion
             )
 
             if result.returncode != 0:
@@ -629,9 +629,16 @@ class EditorBatchWorker(QThread):
                 return False
 
         except subprocess.TimeoutExpired:
-            logger.error("FFmpeg timeout")
-            self.log_message.emit(f"⏱️  FFmpeg timeout (>10 min), skipping conversion", "error")
-            return False
+            logger.error("FFmpeg timeout (>30 min)")
+            self.log_message.emit(f"⏱️  Conversion timeout (>30 min) - very large file, using direct copy", "warning")
+            # Fallback to direct copy
+            try:
+                shutil.copy2(source_path, dest_path)
+                self.log_message.emit(f"✅ Timeout fallback: File copied", "success")
+                return True
+            except Exception as copy_err:
+                self.log_message.emit(f"❌ Fallback copy failed: {copy_err}", "error")
+                return False
         except FileNotFoundError:
             # FFmpeg not found, fall back to copy
             logger.warning("FFmpeg not found, copying file instead")
@@ -673,6 +680,77 @@ class EditorBatchWorker(QThread):
         except Exception as exc:
             logger.debug(f"Audio detection failed for {source_path}: {exc}")
         return None
+
+    def _probe_video_streams(self, source_path: str, ffmpeg_path: str) -> Dict[str, Any]:
+        """
+        Probe video file to detect video and audio stream indexes.
+        Returns dict with 'has_video', 'has_audio', 'video_index', 'audio_index'
+        """
+        try:
+            import subprocess
+
+            result = subprocess.run(
+                [ffmpeg_path, '-i', source_path],
+                capture_output=True,
+                text=True,
+                timeout=15
+            )
+
+            probe_output = result.stderr or ""
+
+            # Parse stream information
+            has_video = False
+            has_audio = False
+            video_index = None
+            audio_index = None
+
+            for line in probe_output.split('\n'):
+                line_lower = line.lower().strip()
+                if 'stream' in line_lower:
+                    # Example: "Stream #0:0(eng): Video: h264, yuv420p, 1920x1080"
+                    # Example: "Stream #0:1(eng): Audio: opus, 48000 Hz, stereo"
+                    if ': video:' in line_lower:
+                        has_video = True
+                        # Extract index (e.g., "0:0" from "Stream #0:0")
+                        if '#' in line and ':' in line:
+                            try:
+                                index_part = line.split('#')[1].split(':')[1].split('(')[0].strip()
+                                video_index = index_part
+                                logger.debug(f"Detected video stream index: {video_index}")
+                            except:
+                                video_index = '0'
+                    elif ': audio:' in line_lower:
+                        has_audio = True
+                        if '#' in line and ':' in line:
+                            try:
+                                index_part = line.split('#')[1].split(':')[1].split('(')[0].strip()
+                                audio_index = index_part
+                                logger.debug(f"Detected audio stream index: {audio_index}")
+                            except:
+                                audio_index = '0'
+
+            # Fallback to defaults if not detected
+            if has_video and video_index is None:
+                video_index = '0'
+            if has_audio and audio_index is None:
+                audio_index = '1' if has_video else '0'
+
+            return {
+                'has_video': has_video,
+                'has_audio': has_audio,
+                'video_index': video_index,
+                'audio_index': audio_index
+            }
+
+        except Exception as exc:
+            logger.warning(f"Stream probing failed for {source_path}: {exc}")
+            # Return safe defaults
+            return {
+                'has_video': True,
+                'has_audio': True,
+                'video_index': '0',
+                'audio_index': '1'
+            }
 
     def _process_with_simple_edit(self, source_path: str, dest_path: str) -> bool:
         """
@@ -761,9 +839,32 @@ class EditorBatchWorker(QThread):
             #
             # Result: Clean voice isolation + music removal + pitch change
 
-            # Complex filter for EDGE BLUR effect
+            # Get FFmpeg path and probe streams FIRST
+            ffmpeg_path = get_ffmpeg_path()
+            logger.info(f"      Using FFmpeg: {ffmpeg_path}")
+
+            # Probe video file for proper stream detection
+            stream_info = self._probe_video_streams(source_path, ffmpeg_path)
+            has_video = stream_info['has_video']
+            has_audio = stream_info['has_audio']
+            video_idx = stream_info['video_index']
+            audio_idx = stream_info['audio_index']
+
+            logger.info(f"      Stream detection: Video={has_video} (idx:{video_idx}), Audio={has_audio} (idx:{audio_idx})")
+
+            if not has_video:
+                logger.error("No video stream detected! Falling back to copy...")
+                self.log_message.emit("⚠️  No video stream detected - copying file", "warning")
+                try:
+                    shutil.copy2(source_path, dest_path if not is_inplace else actual_output)
+                    return True
+                except Exception as e:
+                    logger.error(f"Copy fallback failed: {e}")
+                    return False
+
+            # Complex filter for EDGE BLUR effect (using detected stream index)
             video_filter_complex = (
-                "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p,split=2[main][bg];"  # Normalize format/dimensions
+                f"[0:{video_idx}]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p,split=2[main][bg];"  # Normalize format/dimensions
                 "[bg]scale=iw:ih,gblur=sigma=20[blurred];"  # Heavy blur for background
                 "[main]scale=iw*0.97:ih*0.97[scaled];"  # Scale to 97%
                 "[blurred][scaled]overlay=(W-w)/2:(H-h)/2[overlay];"  # Overlay centered
@@ -812,12 +913,7 @@ class EditorBatchWorker(QThread):
                 "volume=1.5"  # 50% boost
             )
 
-            # Get FFmpeg path (handles bundled exe mode)
-            ffmpeg_path = get_ffmpeg_path()
-            logger.info(f"      Using FFmpeg: {ffmpeg_path}")
-            audio_state = self._detect_audio_stream(source_path, ffmpeg_path)
-            has_audio = audio_state is True
-
+            # Build FFmpeg command with proper stream mapping
             cmd = [
                 ffmpeg_path,
                 '-i', source_path,
@@ -825,19 +921,24 @@ class EditorBatchWorker(QThread):
                 '-map', '[out]'  # Map output video
             ]
 
+            # Add audio processing if audio stream detected
             if has_audio:
                 cmd += [
-                    '-map', '0:a?',  # Optional audio stream
+                    '-map', f'0:{audio_idx}',  # Map specific audio stream
                     '-af', audio_filters,  # PROFESSIONAL audio processing chain
                     '-c:a', 'aac',
                     '-b:a', '192k'  # High quality audio bitrate
                 ]
+            else:
+                # No audio stream - silent video output
+                logger.info("      No audio stream - outputting video only")
 
             cmd += [
                 '-c:v', 'libx264',
                 '-pix_fmt', 'yuv420p',
                 *crf_preset,
                 '-map_metadata', '-1',  # Remove all metadata
+                '-movflags', '+faststart',  # Optimize for web streaming
                 '-y',  # Overwrite output
                 actual_output
             ]
@@ -856,21 +957,41 @@ class EditorBatchWorker(QThread):
                     "info"
                 )
 
-            # Run FFmpeg
+            # Run FFmpeg with extended timeout (1 hour for complex processing)
+            logger.info(f"      Starting FFmpeg processing (max 1 hour)...")
+            self.log_message.emit(f"⏳ Processing video (timeout: 1 hour)...", "info")
+
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=600  # 10 minute timeout
+                timeout=3600  # 1 hour timeout for complex processing
             )
 
             if result.returncode != 0:
                 error_msg = result.stderr[-500:] if result.stderr else "Unknown FFmpeg error"
                 logger.error(f"FFmpeg error: {error_msg}")
                 self.log_message.emit(f"❌ FFmpeg failed: {error_msg[:200]}", "error")
-                # Clean up temp file if it exists
-                if is_inplace and os.path.exists(actual_output):
-                    os.remove(actual_output)
+
+                # Try fallback: Simple copy instead of failing completely
+                logger.warning("Attempting fallback to simple copy...")
+                self.log_message.emit(f"⚠️  Processing failed, trying direct copy...", "warning")
+                try:
+                    # Clean up failed temp file if it exists
+                    if is_inplace and os.path.exists(actual_output):
+                        os.remove(actual_output)
+
+                    # Copy original file
+                    fallback_dest = dest_path if not is_inplace else source_path
+                    if source_path != fallback_dest:
+                        shutil.copy2(source_path, fallback_dest)
+                        self.log_message.emit(f"✅ Fallback copy successful", "success")
+                        logger.info("Fallback copy succeeded")
+                        return True
+                except Exception as fallback_err:
+                    logger.error(f"Fallback also failed: {fallback_err}")
+                    self.log_message.emit(f"❌ Fallback copy failed: {fallback_err}", "error")
+
                 return False
 
             # Verify output file exists
@@ -905,11 +1026,29 @@ class EditorBatchWorker(QThread):
                 return False
 
         except subprocess.TimeoutExpired:
-            logger.error("FFmpeg timeout")
-            self.log_message.emit(f"⏱️  FFmpeg timeout (>10 min)", "error")
-            # Clean up temp file if it exists
-            if 'is_inplace' in locals() and is_inplace and 'actual_output' in locals() and os.path.exists(actual_output):
-                os.remove(actual_output)
+            logger.error("FFmpeg timeout (>1 hour)")
+            self.log_message.emit(f"⏱️  Processing timeout (>1 hour) - video may be very large/complex", "error")
+
+            # Try fallback: Simple copy
+            logger.warning("Timeout occurred, attempting fallback to copy...")
+            self.log_message.emit(f"⚠️  Timeout - trying direct copy instead...", "warning")
+            try:
+                # Clean up temp file if it exists
+                if 'is_inplace' in locals() and is_inplace and 'actual_output' in locals() and os.path.exists(actual_output):
+                    os.remove(actual_output)
+
+                # Copy original file
+                if 'source_path' in locals() and 'dest_path' in locals():
+                    fallback_dest = dest_path if not is_inplace else source_path
+                    if source_path != fallback_dest:
+                        shutil.copy2(source_path, fallback_dest)
+                        self.log_message.emit(f"✅ Timeout fallback: Original file copied", "success")
+                        logger.info("Timeout fallback succeeded")
+                        return True
+            except Exception as fallback_err:
+                logger.error(f"Timeout fallback failed: {fallback_err}")
+                self.log_message.emit(f"❌ Timeout fallback failed", "error")
+
             return False
         except FileNotFoundError:
             logger.error("FFmpeg not found")

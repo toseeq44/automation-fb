@@ -6,7 +6,7 @@ Shows creator overview with download options.
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QRadioButton, QButtonGroup, QSpinBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QWidget, QGroupBox, QCheckBox
+    QHeaderView, QWidget, QGroupBox, QCheckBox, QScrollArea
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
@@ -34,12 +34,27 @@ class BulkPreviewDialog(QDialog):
 
     def init_ui(self):
         self.setWindowTitle("📂 Bulk Download Preview")
-        self.setMinimumWidth(700)
-        self.setMinimumHeight(600)
+        self.setMinimumWidth(800)
+        self.setMinimumHeight(700)
+        # Make window resizable
+        self.resize(900, 750)
 
+        # Main layout for dialog
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        # Scrollable area for content
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QScrollArea.NoFrame)
+
+        # Content widget inside scroll area
+        content_widget = QWidget()
         layout = QVBoxLayout()
         layout.setSpacing(15)
         layout.setContentsMargins(20, 20, 20, 20)
+        content_widget.setLayout(layout)
 
         # Dark theme styling
         self.setStyleSheet("""
@@ -123,6 +138,30 @@ class BulkPreviewDialog(QDialog):
                 color: #F5F6F5;
                 font-size: 13px;
                 spacing: 8px;
+            }
+            QScrollArea {
+                border: none;
+                background-color: #23272A;
+            }
+            QScrollBar:vertical {
+                background-color: #2C2F33;
+                width: 12px;
+                border-radius: 6px;
+                margin: 2px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #4B5057;
+                border-radius: 6px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #1ABC9C;
+            }
+            QScrollBar::handle:vertical:pressed {
+                background-color: #16A085;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
             }
         """)
 
@@ -238,7 +277,11 @@ class BulkPreviewDialog(QDialog):
         button_layout.addWidget(cancel_btn)
         layout.addLayout(button_layout)
 
-        self.setLayout(layout)
+        # Set scroll area content and add to main layout
+        scroll_area.setWidget(content_widget)
+        main_layout.addWidget(scroll_area)
+
+        self.setLayout(main_layout)
 
     def create_creator_table(self, parent_layout):
         """Create table showing creator details with skip indicators"""
@@ -252,6 +295,10 @@ class BulkPreviewDialog(QDialog):
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+
+        # Make table scrollable with max height
+        self.table.setMinimumHeight(200)
+        self.table.setMaximumHeight(350)
 
         # Populate table
         for row, (creator, data) in enumerate(sorted(self.creator_data.items())):

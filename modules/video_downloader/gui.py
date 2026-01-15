@@ -3,7 +3,7 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTextEdit, QPushButton,
     QProgressBar, QComboBox, QCheckBox, QFileDialog, QMessageBox,
     QListWidget, QGroupBox, QLineEdit, QMenu, QListWidgetItem, QDialog,
-    QDialogButtonBox, QSpinBox
+    QDialogButtonBox, QSpinBox, QScrollArea
 )
 from PyQt5.QtGui import QClipboard, QDragEnterEvent, QDropEvent
 from PyQt5.QtCore import Qt, QUrl
@@ -29,16 +29,53 @@ class VideoDownloaderPage(QWidget):
         self.init_ui()
 
     def init_ui(self):
+        # Main layout for the widget
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        # Scrollable area
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QScrollArea.NoFrame)
+
+        # Content widget inside scroll area
+        content_widget = QWidget()
         layout = QVBoxLayout()
         layout.setAlignment(Qt.AlignTop)
         layout.setSpacing(15)
         layout.setContentsMargins(15, 15, 15, 15)
+        content_widget.setLayout(layout)
 
         self.setStyleSheet("""
             QWidget {
                 background-color: #23272A;
                 color: #F5F6F5;
                 font-family: Arial, sans-serif;
+            }
+            QScrollArea {
+                border: none;
+                background-color: #23272A;
+            }
+            QScrollBar:vertical {
+                background-color: #2C2F33;
+                width: 12px;
+                border-radius: 6px;
+                margin: 2px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #4B5057;
+                border-radius: 6px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #1ABC9C;
+            }
+            QScrollBar::handle:vertical:pressed {
+                background-color: #16A085;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
             }
         """)
 
@@ -60,7 +97,8 @@ class VideoDownloaderPage(QWidget):
             }
             QTextEdit:focus { border: 2px solid #1ABC9C; }
         """)
-        self.url_input.setMinimumHeight(100)
+        self.url_input.setMinimumHeight(80)
+        self.url_input.setMaximumHeight(120)
         layout.addWidget(self.url_input)
 
         # Separator
@@ -94,7 +132,8 @@ class VideoDownloaderPage(QWidget):
             }
             QTextEdit:focus { border: 2px solid #E67E22; }
         """)
-        self.link_text.setMinimumHeight(120)
+        self.link_text.setMinimumHeight(100)
+        self.link_text.setMaximumHeight(150)
         layout.addWidget(self.link_text)
 
         settings_group = QGroupBox("Download Settings")
@@ -324,9 +363,14 @@ class VideoDownloaderPage(QWidget):
             QTextEdit { background-color: #2C2F33; color: #F5F6F5; border: 2px solid #4B5057;
                         border-radius: 8px; padding: 10px; font-size: 14px; }
         """)
+        self.log_text.setMinimumHeight(150)
         layout.addWidget(self.log_text)
 
-        self.setLayout(layout)
+        # Set scroll area content and add to main layout
+        scroll_area.setWidget(content_widget)
+        main_layout.addWidget(scroll_area)
+
+        self.setLayout(main_layout)
 
         self.back_btn.clicked.connect(self.back_callback if self.back_callback else lambda: None)
         self.start_btn.clicked.connect(self.start_download)

@@ -3,6 +3,7 @@ modules/video_editor/videos_merger/merge_engine.py
 Core video merging engine with trim, crop, zoom, flip, and transitions
 """
 
+import time
 from typing import List, Dict, Any, Optional, Callable
 from pathlib import Path
 from modules.logging.logger import get_logger
@@ -13,10 +14,84 @@ logger = get_logger(__name__)
 # Try to import MoviePy (MoviePy 2.x structure)
 try:
     from moviepy import VideoFileClip, concatenate_videoclips, vfx
+    from proglog import ProgressBarLogger
     MOVIEPY_AVAILABLE = True
 except ImportError:
     MOVIEPY_AVAILABLE = False
+    ProgressBarLogger = None
     logger.warning("MoviePy not available. Install with: pip install moviepy")
+
+
+class MergeCancelled(Exception):
+    """Raised when a merge operation is cancelled."""
+
+
+def _get_control_state(control_callback: Optional[Callable[[], Any]]) -> tuple:
+    if not control_callback:
+        return False, False
+    try:
+        state = control_callback()
+    except Exception:
+        return False, False
+    if isinstance(state, dict):
+        return bool(state.get('paused')), bool(state.get('cancelled'))
+    if isinstance(state, (tuple, list)) and len(state) >= 2:
+        return bool(state[0]), bool(state[1])
+    return bool(state), False
+
+
+def _wait_for_resume(control_callback: Optional[Callable[[], Any]]) -> None:
+    paused, cancelled = _get_control_state(control_callback)
+    if cancelled:
+        raise MergeCancelled()
+    while paused:
+        time.sleep(0.1)
+        paused, cancelled = _get_control_state(control_callback)
+        if cancelled:
+            raise MergeCancelled()
+
+
+if ProgressBarLogger:
+    class _ExportProgressLogger(ProgressBarLogger):
+        def __init__(self,
+                     progress_callback: Optional[Callable[[float], None]],
+                     control_callback: Optional[Callable[[], Any]],
+                     min_emit_interval: float = 0.2):
+            super().__init__(logged_bars=[])
+            self._progress_callback = progress_callback
+            self._control_callback = control_callback
+            self._min_emit_interval = min_emit_interval
+            self._last_emit = 0.0
+            self._total_frames = None
+
+        def bars_callback(self, bar, attr, value, old_value=None):
+            if attr == "index":
+                _wait_for_resume(self._control_callback)
+
+            if bar != "frame_index":
+                return
+
+            if attr == "total":
+                self._total_frames = value
+                return
+
+            if attr != "index":
+                return
+
+            if not self._progress_callback:
+                return
+
+            if not self._total_frames:
+                percent = 0.0
+            else:
+                percent = ((value + 1) / self._total_frames) * 100.0
+
+            now = time.time()
+            if (now - self._last_emit) >= self._min_emit_interval or percent >= 100.0:
+                self._last_emit = now
+                self._progress_callback(percent)
+else:
+    _ExportProgressLogger = None
 
 
 class MergeSettings:
@@ -44,6 +119,9 @@ class MergeSettings:
         self.transition_type: str = 'crossfade'  # 'crossfade', 'fade', 'slide_left', etc.
         self.transition_duration: float = 1.0  # Seconds
 
+        # Per-clip speed settings
+        self.clip_speeds: Optional[List[float]] = None
+
         # Output settings
         self.output_quality: str = 'high'  # 'source', 'low', 'medium', 'high', 'ultra'
         self.output_format: str = 'mp4'
@@ -67,6 +145,7 @@ class MergeSettings:
             'flip_vertical': self.flip_vertical,
             'transition_type': self.transition_type,
             'transition_duration': self.transition_duration,
+            'clip_speeds': self.clip_speeds,
             'output_quality': self.output_quality,
             'output_format': self.output_format,
             'keep_audio': self.keep_audio,
@@ -265,6 +344,22 @@ class VideoMergeEngine:
 
         return clip
 
+    def apply_speed(self, clip: VideoFileClip, speed_factor: float) -> VideoFileClip:
+        """
+        Adjust video playback speed
+
+        Args:
+            clip: Video clip
+            speed_factor: Speed multiplier (1.0 = normal, 1.4 = 40% faster)
+
+        Returns:
+            Speed-adjusted clip
+        """
+        if abs(speed_factor - 1.0) < 0.01:
+            return clip
+        logger.info(f"Applying speed: {speed_factor:.2f}x")
+        return clip.with_effects([vfx.MultiplySpeed(factor=speed_factor)])
+
     def _parse_bitrate(self, value: Any) -> Optional[int]:
         """Normalize bitrate value to bits per second."""
         if value is None:
@@ -353,13 +448,15 @@ class VideoMergeEngine:
         ])
 
     def process_clips(self, settings: MergeSettings,
-                      progress_callback: Optional[Callable[[int, int, str], None]] = None) -> bool:
+                      progress_callback: Optional[Callable[[int, int, str], None]] = None,
+                      control_callback: Optional[Callable[[], Any]] = None) -> bool:
         """
         Process all clips with settings
 
         Args:
             settings: Merge settings
             progress_callback: Callback(current, total, status_msg)
+            control_callback: Callback returning (paused, cancelled)
 
         Returns:
             True if successful
@@ -369,6 +466,7 @@ class VideoMergeEngine:
             total = len(self.clips)
 
             for i, clip in enumerate(self.clips):
+                _wait_for_resume(control_callback)
                 if progress_callback:
                     progress_callback(i, total, f"Processing video {i + 1}/{total}")
 
@@ -390,6 +488,17 @@ class VideoMergeEngine:
                 if settings.flip_horizontal or settings.flip_vertical:
                     processed = self.apply_flip(processed, settings.flip_horizontal, settings.flip_vertical)
 
+                # Apply speed (auto 1.40x for clips longer than 90s when not specified)
+                speed_factor = None
+                if settings.clip_speeds and i < len(settings.clip_speeds):
+                    speed_factor = settings.clip_speeds[i]
+                if speed_factor is None:
+                    speed_factor = 1.4 if processed.duration > 90 else 1.0
+                if speed_factor <= 0:
+                    speed_factor = 1.0
+                if abs(speed_factor - 1.0) > 0.01:
+                    processed = self.apply_speed(processed, speed_factor)
+
                 # Remove audio if needed
                 if not settings.keep_audio:
                     processed = processed.without_audio()
@@ -409,6 +518,9 @@ class VideoMergeEngine:
             logger.info(f"Processed {len(self.processed_clips)} clips")
             return True
 
+        except MergeCancelled:
+            logger.info("Processing cancelled")
+            raise
         except Exception as e:
             logger.error(f"Error processing clips: {e}")
             return False
@@ -451,7 +563,8 @@ class VideoMergeEngine:
 
     def export(self, merged_clip: VideoFileClip, output_path: str,
                settings: MergeSettings,
-               progress_callback: Optional[Callable[[float], None]] = None) -> bool:
+               progress_callback: Optional[Callable[[float], None]] = None,
+               control_callback: Optional[Callable[[], Any]] = None) -> bool:
         """
         Export merged video to file
 
@@ -460,6 +573,7 @@ class VideoMergeEngine:
             output_path: Output file path
             settings: Merge settings
             progress_callback: Callback(percentage)
+            control_callback: Callback returning (paused, cancelled)
 
         Returns:
             True if successful
@@ -509,11 +623,9 @@ class VideoMergeEngine:
             logger.info(f"Exporting to: {output_path}")
             logger.info(f"Quality: {quality_label} ({quality['video_bitrate']} video, {quality['audio_bitrate']} audio)")
 
-            # Progress callback wrapper
-            def progress_wrapper(t):
-                if progress_callback:
-                    percentage = (t / merged_clip.duration) * 100
-                    progress_callback(percentage)
+            export_logger = None
+            if _ExportProgressLogger and (progress_callback or control_callback):
+                export_logger = _ExportProgressLogger(progress_callback, control_callback)
 
             merged_clip.write_videofile(
                 output_path,
@@ -523,12 +635,18 @@ class VideoMergeEngine:
                 audio_bitrate=quality['audio_bitrate'],
                 preset='medium',
                 threads=4,
-                logger=None  # Suppress MoviePy progress bar
+                logger=export_logger
             )
+
+            if progress_callback:
+                progress_callback(100.0)
 
             logger.info(f"Export complete: {output_path}")
             return True
 
+        except MergeCancelled:
+            logger.info("Export cancelled")
+            return False
         except Exception as e:
             logger.error(f"Error exporting video: {e}")
             return False
@@ -554,7 +672,8 @@ class VideoMergeEngine:
 
 def merge_videos(video_paths: List[str], output_path: str,
                  settings: MergeSettings = None,
-                 progress_callback: Optional[Callable[[str, float], None]] = None) -> bool:
+                 progress_callback: Optional[Callable[[str, float], None]] = None,
+                 control_callback: Optional[Callable[[], Any]] = None) -> bool:
     """
     Convenience function to merge videos
 
@@ -563,6 +682,7 @@ def merge_videos(video_paths: List[str], output_path: str,
         output_path: Output file path
         settings: Merge settings (default if None)
         progress_callback: Callback(status_msg, percentage)
+        control_callback: Callback returning (paused, cancelled)
 
     Returns:
         True if successful
@@ -571,6 +691,7 @@ def merge_videos(video_paths: List[str], output_path: str,
         settings = MergeSettings()
 
     engine = VideoMergeEngine()
+    merged = None
 
     try:
         # Load videos
@@ -589,7 +710,7 @@ def merge_videos(video_paths: List[str], output_path: str,
                 pct = 20 + (current / total) * 30
                 progress_callback(msg, pct)
 
-        if not engine.process_clips(settings, process_progress):
+        if not engine.process_clips(settings, process_progress, control_callback):
             return False
 
         # Merge clips
@@ -608,7 +729,7 @@ def merge_videos(video_paths: List[str], output_path: str,
             if progress_callback:
                 progress_callback(f"Exporting... {pct:.1f}%", 60 + (pct / 100) * 40)
 
-        success = engine.export(merged, output_path, settings, export_progress)
+        success = engine.export(merged, output_path, settings, export_progress, control_callback)
 
         # Cleanup
         engine.cleanup()
@@ -626,7 +747,21 @@ def merge_videos(video_paths: List[str], output_path: str,
 
         return success
 
+    except MergeCancelled:
+        logger.info("Merge cancelled")
+        engine.cleanup()
+        if merged:
+            try:
+                merged.close()
+            except Exception:
+                pass
+        return False
     except Exception as e:
         logger.error(f"Error in merge_videos: {e}")
         engine.cleanup()
+        if merged:
+            try:
+                merged.close()
+            except Exception:
+                pass
         return False

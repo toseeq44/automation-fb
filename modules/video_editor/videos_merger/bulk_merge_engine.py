@@ -3,6 +3,7 @@ modules/video_editor/videos_merger/bulk_merge_engine.py
 Intelligent bulk folder merging with round-robin batching
 """
 
+import time
 from typing import List, Dict, Any, Optional, Callable
 from pathlib import Path
 from .merge_engine import merge_videos, MergeSettings
@@ -10,6 +11,20 @@ from .utils import get_videos_from_folder, generate_batch_filename
 from modules.logging.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _get_control_state(control_callback: Optional[Callable[[], Any]]) -> tuple:
+    if not control_callback:
+        return False, False
+    try:
+        state = control_callback()
+    except Exception:
+        return False, False
+    if isinstance(state, dict):
+        return bool(state.get('paused')), bool(state.get('cancelled'))
+    if isinstance(state, (tuple, list)) and len(state) >= 2:
+        return bool(state[0]), bool(state[1])
+    return bool(state), False
 
 
 class BatchInfo:
@@ -159,7 +174,7 @@ class BulkMergeEngine:
 
     def process_batches(self, output_folder: str, settings: MergeSettings,
                         progress_callback: Optional[Callable[[int, int, str, float], None]] = None,
-                        should_pause: Optional[Callable[[], bool]] = None) -> Dict[str, Any]:
+                        control_callback: Optional[Callable[[], Any]] = None) -> Dict[str, Any]:
         """
         Process all batches and create merged videos
 
@@ -167,7 +182,7 @@ class BulkMergeEngine:
             output_folder: Output folder path
             settings: Merge settings
             progress_callback: Callback(current_batch, total_batches, status, percentage)
-            should_pause: Function that returns True if processing should pause
+            control_callback: Callback returning (paused, cancelled)
 
         Returns:
             Dictionary with results
@@ -191,10 +206,22 @@ class BulkMergeEngine:
         }
 
         for i, batch in enumerate(active_batches, 1):
-            # Check if should pause
-            if should_pause and should_pause():
-                logger.info("Processing paused")
-                break
+            if control_callback:
+                paused, cancelled = _get_control_state(control_callback)
+                if cancelled:
+                    results['cancelled'] = True
+                    break
+                was_paused = paused
+                if paused:
+                    logger.info("Processing paused")
+                while paused and not cancelled:
+                    time.sleep(0.1)
+                    paused, cancelled = _get_control_state(control_callback)
+                if cancelled:
+                    results['cancelled'] = True
+                    break
+                if was_paused and not paused:
+                    logger.info("Processing resumed")
 
             batch.status = 'processing'
 
@@ -217,8 +244,20 @@ class BulkMergeEngine:
                 batch.video_paths,
                 str(output_path),
                 settings,
-                batch_progress
+                batch_progress,
+                control_callback
             )
+
+            if control_callback:
+                _, cancelled = _get_control_state(control_callback)
+                if cancelled:
+                    batch.status = 'failed'
+                    batch.error_message = "Cancelled"
+                    results['failed'] += 1
+                    results['errors'].append(f"Batch {batch.batch_number} cancelled")
+                    results['processed'] += 1
+                    results['cancelled'] = True
+                    break
 
             if success:
                 batch.status = 'completed'

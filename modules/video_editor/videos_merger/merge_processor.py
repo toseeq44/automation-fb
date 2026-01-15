@@ -116,7 +116,8 @@ class MergeProcessor(QThread):
                 self.video_paths,
                 self.output_path,
                 self.settings,
-                progress_callback
+                progress_callback,
+                lambda: (self._is_paused, self._is_cancelled)
             )
 
             if self._is_cancelled:
@@ -170,7 +171,7 @@ class MergeProcessor(QThread):
                 self.output_folder,
                 self.settings,
                 batch_progress,
-                lambda: self._is_paused or self._is_cancelled
+                lambda: (self._is_paused, self._is_cancelled)
             )
 
             if self._is_cancelled:

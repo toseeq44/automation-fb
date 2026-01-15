@@ -32,6 +32,7 @@ class VideoClipWidget(QFrame):
     move_down_clicked = pyqtSignal(object)
     transition_changed = pyqtSignal(str)  # New transition type
     transition_duration_changed = pyqtSignal(float)  # New duration
+    speed_changed = pyqtSignal(float)  # New speed
 
     # Available transitions
     TRANSITIONS = [
@@ -67,6 +68,8 @@ class VideoClipWidget(QFrame):
         self.width = 0
         self.height = 0
         self.trimmed_duration = 0.0
+        self.trim_start = 0.0
+        self.trim_end = 0.0
 
         # Load video info
         self._load_video_info()
@@ -157,6 +160,24 @@ class VideoClipWidget(QFrame):
         self.trimmed_label.setStyleSheet("color: #00bcd4; font-size: 9pt; font-weight: bold;")
         main_layout.addWidget(self.trimmed_label)
 
+        # Speed row
+        speed_layout = QHBoxLayout()
+        speed_label = QLabel("Speed:")
+        speed_layout.addWidget(speed_label)
+
+        self.speed_spin = QDoubleSpinBox()
+        self.speed_spin.setRange(0.25, 4.0)
+        self.speed_spin.setSingleStep(0.05)
+        default_speed = 1.4 if self.duration > 90 else 1.0
+        self.speed_spin.setValue(default_speed)
+        self.speed_spin.setSuffix("x")
+        self.speed_spin.setFixedWidth(80)
+        self.speed_spin.setToolTip("Auto 1.40x for videos longer than 90 seconds")
+        self.speed_spin.valueChanged.connect(self._on_speed_changed)
+        speed_layout.addWidget(self.speed_spin)
+        speed_layout.addStretch()
+        main_layout.addLayout(speed_layout)
+
         # Transition row (if enabled)
         if self.show_transition:
             transition_layout = QHBoxLayout()
@@ -183,6 +204,8 @@ class VideoClipWidget(QFrame):
             transition_layout.addWidget(self.duration_spin)
 
             main_layout.addLayout(transition_layout)
+
+        self._refresh_duration_label()
 
         self.setLayout(main_layout)
 
@@ -245,6 +268,11 @@ class VideoClipWidget(QFrame):
         duration = self.duration_spin.value()
         self.transition_duration_changed.emit(duration)
 
+    def _on_speed_changed(self):
+        """Speed changed"""
+        self._refresh_duration_label()
+        self.speed_changed.emit(self.speed_spin.value())
+
     def update_trimmed_duration(self, trim_start: float, trim_end: float):
         """
         Update trimmed duration display
@@ -253,13 +281,28 @@ class VideoClipWidget(QFrame):
             trim_start: Seconds to trim from start
             trim_end: Seconds to trim from end
         """
-        new_duration = max(0, self.duration - trim_start - trim_end)
-        self.trimmed_duration = new_duration
+        self.trim_start = trim_start
+        self.trim_end = trim_end
+        self.trimmed_duration = max(0, self.duration - trim_start - trim_end)
+        self._refresh_duration_label()
 
-        if trim_start > 0 or trim_end > 0:
+    def _refresh_duration_label(self):
+        """Refresh duration label based on trim and speed."""
+        speed = self.get_speed()
+        base_duration = max(0, self.duration - self.trim_start - self.trim_end)
+        effective_duration = base_duration / speed if speed > 0 else base_duration
+
+        details = []
+        if self.trim_start > 0 or self.trim_end > 0:
+            details.append(f"-{self.trim_start:.0f}s start, -{self.trim_end:.0f}s end")
+        if abs(speed - 1.0) > 0.01:
+            details.append(f"{speed:.2f}x")
+
+        if details:
+            details_text = ", ".join(details)
             self.trimmed_label.setText(
-                f"After trim: {self._format_duration(new_duration)} "
-                f"(✂️ -{trim_start:.0f}s start, -{trim_end:.0f}s end)"
+                f"After trim/speed: {self._format_duration(effective_duration)} "
+                f"({details_text})"
             )
             self.trimmed_label.setVisible(True)
         else:
@@ -305,4 +348,13 @@ class VideoClipWidget(QFrame):
 
     def get_trimmed_duration(self) -> float:
         """Get trimmed duration"""
-        return self.trimmed_duration
+        speed = self.get_speed()
+        if speed <= 0:
+            return self.trimmed_duration
+        return self.trimmed_duration / speed
+
+    def get_speed(self) -> float:
+        """Get speed factor"""
+        if hasattr(self, 'speed_spin'):
+            return self.speed_spin.value()
+        return 1.0

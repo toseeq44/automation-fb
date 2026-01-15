@@ -580,6 +580,7 @@ class SimpleMergeTab(QWidget):
         widget.remove_clicked.connect(self._remove_video)
         widget.move_up_clicked.connect(self._move_video_up)
         widget.move_down_clicked.connect(self._move_video_down)
+        widget.speed_changed.connect(self._update_summary)
 
         self.video_widgets.append(widget)
         self.video_list_layout.addWidget(widget)
@@ -825,6 +826,9 @@ class SimpleMergeTab(QWidget):
         settings.output_format = self.format_combo.currentText().lower()
         settings.keep_audio = self.keep_audio_check.isChecked()
         settings.fade_audio = self.fade_audio_check.isChecked()
+
+        # Per-clip speeds
+        settings.clip_speeds = [w.get_speed() for w in self.video_widgets]
 
         # Delete source
         settings.delete_source = self.delete_source_check.isChecked()

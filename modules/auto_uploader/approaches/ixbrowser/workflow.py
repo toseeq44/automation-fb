@@ -764,7 +764,13 @@ class IXBrowserApproach(BaseApproach):
                     logger.info("[IXApproach] Folder Detection")
                     logger.info("[IXApproach] ═══════════════════════════════════════════")
                     logger.info("[IXApproach] Total creator folders detected: %d", total_folders)
-                    logger.info("[IXApproach] Upload mode: UNLIMITED")
+                    if user_type.lower() == "pro":
+                        logger.info("[IXApproach] Upload mode: UNLIMITED (Pro user)")
+                    else:
+                        logger.info(
+                            "[IXApproach] Upload mode: LIMITED (basic, %d bookmarks/day)",
+                            daily_limit,
+                        )
                     logger.info("[IXApproach] Bot will process all videos in all folders")
                     logger.info("[IXApproach] Resume functionality: ENABLED")
                     logger.info("[IXApproach] ═══════════════════════════════════════════")
@@ -865,32 +871,32 @@ class IXBrowserApproach(BaseApproach):
 
                             folder_name = os.path.basename(current_folder)
 
-                            # Check if this folder has a matching bookmark
-                            # IMPROVED: Case-insensitive + trimmed comparison for better matching
+                            # Match bookmarks for video and image workflows (case-insensitive)
                             matching_bookmark = None
+                            image_bookmark = None
                             folder_name_normalized = folder_name.strip().lower()
+                            image_bookmark_normalized = f"{folder_name_normalized}_imag"
 
                             for bookmark in facebook_bookmarks:
                                 bookmark_title_normalized = bookmark['title'].strip().lower()
-                                if bookmark_title_normalized == folder_name_normalized:
+                                if matching_bookmark is None and bookmark_title_normalized == folder_name_normalized:
                                     matching_bookmark = bookmark
-                                    logger.info("✓ MATCHED: Folder '%s' → Bookmark '%s'", folder_name, bookmark['title'])
+                                    logger.info("[IXApproach] MATCHED: Folder '%s' -> Bookmark '%s'", folder_name, bookmark['title'])
+                                if image_bookmark is None and bookmark_title_normalized == image_bookmark_normalized:
+                                    image_bookmark = bookmark
+                                    logger.info("[IXApproach] MATCHED: Folder '%s' -> Image Bookmark '%s'", folder_name, bookmark['title'])
+                                if matching_bookmark and image_bookmark:
                                     break
 
-                            if not matching_bookmark:
-                                logger.warning("✗ SKIPPED: Folder '%s' - No matching bookmark found", folder_name)
-                                logger.debug("Available bookmarks: %s", [b['title'] for b in facebook_bookmarks[:5]])
-                                self._folder_queue.move_to_next_folder()
-                                continue
-
-                            # Get videos in folder (excludes 'uploaded videos' subfolder)
+                            # Get media in folder
                             videos = self._folder_queue.get_videos_in_folder(current_folder)
+                            images = self._folder_queue.get_images_in_folder(current_folder)
 
-                            if not videos:
-                                logger.info("[IXApproach] ───────────────────────────────────────────────")
+                            if not videos and not images:
+                                logger.info("[IXApproach] ----------------------------------------")
                                 logger.info("[IXApproach] Folder: %s", folder_name)
-                                logger.info("[IXApproach] Status: No videos remaining (all uploaded or empty)")
-                                logger.info("[IXApproach] ───────────────────────────────────────────────")
+                                logger.info("[IXApproach] Status: No media remaining (all uploaded or empty)")
+                                logger.info("[IXApproach] ----------------------------------------")
 
                                 # Mark folder complete and move to next
                                 self._folder_queue.mark_current_folder_complete()
@@ -899,21 +905,60 @@ class IXBrowserApproach(BaseApproach):
                                 # Track empty folders
                                 folders_checked_in_cycle += 1
 
-                                # Check if we've gone through ALL folders without finding videos
+                                # Check if we've gone through ALL folders without finding media
                                 if folders_checked_in_cycle >= total_folders:
-                                    logger.info("[IXApproach] ═══════════════════════════════════════════")
-                                    logger.info("[IXApproach] Profile Complete - No Videos Found")
-                                    logger.info("[IXApproach] ═══════════════════════════════════════════")
+                                    logger.info("[IXApproach] ----------------------------------------")
+                                    logger.info("[IXApproach] Profile Complete - No Media Found")
+                                    logger.info("[IXApproach] ----------------------------------------")
                                     logger.info("[IXApproach] Checked all %d folders", total_folders)
-                                    logger.info("[IXApproach] No videos remaining in any folder")
+                                    logger.info("[IXApproach] No media remaining in any folder")
                                     logger.info("[IXApproach] This profile is complete!")
-                                    logger.info("[IXApproach] ═══════════════════════════════════════════")
+                                    logger.info("[IXApproach] ----------------------------------------")
                                     break  # Exit upload loop - profile complete
 
                                 continue
 
-                            # Reset counter - we found videos!
+                            # Reset counter - we found media!
                             folders_checked_in_cycle = 0
+
+                            # Process images first if present
+                            if images:
+                                if not image_bookmark:
+                                    logger.warning("[IXApproach] SKIPPED: Folder '%s' - No matching image bookmark found", folder_name)
+                                    logger.debug("Available bookmarks: %s", [b['title'] for b in facebook_bookmarks[:5]])
+                                    self._folder_queue.move_to_next_folder()
+                                    continue
+
+                                logger.info("[IXApproach] Starting image uploads for: %s", folder_name)
+                                images_ok = upload_helper.upload_images_for_folder(image_bookmark, current_folder)
+                                if not images_ok:
+                                    logger.warning("[IXApproach] Image upload failed, skipping folder for now")
+                                    self._folder_queue.move_to_next_folder()
+                                    continue
+
+                                images = self._folder_queue.get_images_in_folder(current_folder)
+                                if images:
+                                    logger.warning("[IXApproach] Images still remain after processing, skipping videos")
+                                    self._folder_queue.move_to_next_folder()
+                                    continue
+
+                            # Refresh videos after image processing
+                            videos = self._folder_queue.get_videos_in_folder(current_folder)
+                            if not videos:
+                                logger.info("[IXApproach] ----------------------------------------")
+                                logger.info("[IXApproach] Folder: %s", folder_name)
+                                logger.info("[IXApproach] Status: No videos remaining after images")
+                                logger.info("[IXApproach] ----------------------------------------")
+
+                                self._folder_queue.mark_current_folder_complete()
+                                self._folder_queue.move_to_next_folder()
+                                continue
+
+                            if not matching_bookmark:
+                                logger.warning("[IXApproach] SKIPPED: Folder '%s' - No matching video bookmark found", folder_name)
+                                logger.debug("Available bookmarks: %s", [b['title'] for b in facebook_bookmarks[:5]])
+                                self._folder_queue.move_to_next_folder()
+                                continue
 
                             # Check daily limit BEFORE uploading (for basic users)
                             if user_type.lower() == 'basic':

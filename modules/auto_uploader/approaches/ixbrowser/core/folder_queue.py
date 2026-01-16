@@ -54,6 +54,21 @@ class FolderQueueManager:
             '*.3gp', '*.3GP',    # 3GPP
             '*.ts', '*.TS',      # MPEG Transport Stream
             '*.vob', '*.VOB',    # DVD Video
+            '*.gif', '*.GIF',    # GIF (treat as video)
+        ]
+
+        # Image file extensions (exclude GIF - handled as video)
+        self.image_extensions = [
+            '*.jpg', '*.JPG',
+            '*.jpeg', '*.JPEG',
+            '*.png', '*.PNG',
+            '*.webp', '*.WEBP',
+            '*.bmp', '*.BMP',
+            '*.tif', '*.TIF',
+            '*.tiff', '*.TIFF',
+            '*.heic', '*.HEIC',
+            '*.heif', '*.HEIF',
+            '*.jfif', '*.JFIF',
         ]
 
         logger.info("[FolderQueue] Initialized with base_path: %s", self.base_path)
@@ -187,6 +202,28 @@ class FolderQueueManager:
                     logger.info("[FolderQueue] Filtered out %d video(s) from 'uploaded videos' subfolder",
                                filtered_count)
 
+            # Filter out videos already recorded in history (uploaded or failed)
+            if self.state_manager:
+                videos_before = len(videos)
+
+                def is_in_history(path_value: str) -> bool:
+                    try:
+                        if hasattr(self.state_manager, "is_video_uploaded"):
+                            if self.state_manager.is_video_uploaded(path_value):
+                                return True
+                        if hasattr(self.state_manager, "is_video_failed"):
+                            if self.state_manager.is_video_failed(path_value):
+                                return True
+                    except Exception as exc:
+                        logger.debug("[FolderQueue] History check failed for %s: %s", path_value, exc)
+                    return False
+
+                videos = [v for v in videos if not is_in_history(v)]
+                filtered_history = videos_before - len(videos)
+                if filtered_history > 0:
+                    logger.info("[FolderQueue] Filtered out %d video(s) already in history",
+                               filtered_history)
+
             # Sort for consistent ordering
             videos.sort()
 
@@ -197,6 +234,93 @@ class FolderQueueManager:
 
         except Exception as e:
             logger.error("[FolderQueue] Error getting videos: %s", str(e))
+            return []
+
+    def get_images_in_folder(self, folder_path: str, exclude_uploaded: bool = True) -> List[str]:
+        """
+        Get all image files in folder.
+
+        Args:
+            folder_path: Path to folder
+            exclude_uploaded: Skip 'uploaded videos' subfolder (default: True)
+
+        Returns:
+            List of image file paths
+        """
+        try:
+            folder_path = os.path.normpath(folder_path)
+            folder = Path(folder_path)
+
+            if not folder.exists():
+                logger.error("[FolderQueue] Folder not found: %s", folder_path)
+                return []
+
+            images = []
+            seen_images = set()
+
+            for ext in self.image_extensions:
+                pattern = str(folder / ext)
+                found = glob.glob(pattern)
+                found = [os.path.normpath(f) for f in found]
+
+                if found:
+                    logger.debug("[FolderQueue] Found %d file(s) with extension %s", len(found), ext)
+
+                for image_path in found:
+                    if image_path not in seen_images:
+                        images.append(image_path)
+                        seen_images.add(image_path)
+
+            logger.debug("[FolderQueue] Total files found (all extensions): %d", len(images))
+            logger.debug("[FolderQueue] Unique images after deduplication: %d", len(images))
+
+            if exclude_uploaded:
+                uploaded_folder = os.path.normpath(str(folder / "uploaded videos"))
+
+                logger.debug("[FolderQueue] Uploaded folder path: %s", uploaded_folder)
+                logger.debug("[FolderQueue] Total images before filter: %d", len(images))
+
+                images_before = len(images)
+                images = [
+                    img for img in images
+                    if not img.startswith(uploaded_folder)
+                ]
+
+                filtered_count = images_before - len(images)
+                if filtered_count > 0:
+                    logger.info("[FolderQueue] Filtered out %d image(s) from 'uploaded videos' subfolder",
+                               filtered_count)
+
+            if self.state_manager:
+                images_before = len(images)
+
+                def is_in_history(path_value: str) -> bool:
+                    try:
+                        if hasattr(self.state_manager, "is_video_uploaded"):
+                            if self.state_manager.is_video_uploaded(path_value):
+                                return True
+                        if hasattr(self.state_manager, "is_video_failed"):
+                            if self.state_manager.is_video_failed(path_value):
+                                return True
+                    except Exception as exc:
+                        logger.debug("[FolderQueue] History check failed for %s: %s", path_value, exc)
+                    return False
+
+                images = [img for img in images if not is_in_history(img)]
+                filtered_history = images_before - len(images)
+                if filtered_history > 0:
+                    logger.info("[FolderQueue] Filtered out %d image(s) already in history",
+                               filtered_history)
+
+            images.sort()
+
+            logger.info("[FolderQueue] Found %d image(s) in %s",
+                       len(images), os.path.basename(folder_path))
+
+            return images
+
+        except Exception as e:
+            logger.error("[FolderQueue] Error getting images: %s", str(e))
             return []
 
     def mark_current_folder_complete(self):

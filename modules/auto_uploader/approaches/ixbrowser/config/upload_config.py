@@ -99,6 +99,14 @@ UPLOAD_CONFIG = {
     # Progress stuck timeout (seconds)
     # If progress doesn't change for this long, consider it stuck
     "progress_stuck_timeout": 120,  # 2 minutes
+
+    # Image publish click (default: True)
+    # When False, images are moved to failed uploads with reason publish_skipped_test
+    "image_publish_click_enabled": True,
+
+    # Optional explicit ffmpeg path (for image conversion)
+    # If empty, auto-detection will be used
+    "ffmpeg_path": os.getenv("FFMPEG_PATH", ""),
 }
 
 

@@ -4,8 +4,10 @@ Handles bulk video upload to Facebook bookmarks
 """
 
 import logging
+import json
 import os
 import sys
+import subprocess
 import time
 import glob
 import pyautogui
@@ -71,6 +73,22 @@ def get_resource_path(relative_path: str) -> Path:
 ADD_VIDEOS_BUTTON_IMAGE = str(get_resource_path("helper_images/add_videos_button.png"))
 PUBLISH_BUTTON_ENABLED_IMAGE = str(get_resource_path("helper_images/publish_button_after_data.png"))
 PUBLISH_BUTTON_DISABLED_IMAGE = str(get_resource_path("helper_images/publish_button_befor_data.png"))
+ADD_PHOTOS_BUTTON_IMAGE = str(get_resource_path("helper_images/addphoto_imag.png"))
+ADD_PHOTOS_VIDEO_BUTTON_IMAGE = str(get_resource_path("helper_images/addphotoVideo_imag.png"))
+UPLOAD_FROM_DESKTOP_BUTTON_IMAGE = str(get_resource_path("helper_images/uploadfromdesktop_imag.png"))
+ACTIVE_PUBLISH_BUTTON_IMAGE = str(get_resource_path("helper_images/activePublishButton.png"))
+IMAGE_TEXT_AREA_IMAGE = str(get_resource_path("helper_images/testareaforimag_imag.png"))
+
+IMAGE_TEXT_FILENAME = "imageText.txt"
+
+HUMAN_MOUSE_MOVE_MIN = 0.6
+HUMAN_MOUSE_MOVE_MAX = 1.2
+POST_CLICK_WAIT_MIN = 2.0
+POST_CLICK_WAIT_MAX = 6.0
+
+DIRECT_IMAGE_EXTENSIONS = {
+    ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".jfif", ".heic", ".heif"
+}
 
 
 class VideoUploadHelper:
@@ -101,6 +119,14 @@ class VideoUploadHelper:
         self.current_video = None
         self.current_bookmark = None
         self.current_attempt = 0
+        self._last_publish_hover_point = None
+        self._last_publish_hover_time = None
+
+        try:
+            pyautogui.MINIMUM_DURATION = 0.25
+            pyautogui.PAUSE = 0.05
+        except Exception as e:
+            logger.debug("[Mouse] Could not set pyautogui pacing: %s", str(e))
 
         logger.info("[Upload] ✓ VideoUploadHelper initialized with Phase 2 robustness")
 
@@ -184,6 +210,177 @@ class VideoUploadHelper:
         except Exception as e:
             logger.debug("[Upload] Window cleanup error: %s", str(e))
             return 0
+
+    def capture_visible_windows(self) -> Optional[set]:
+        """
+        Capture current visible window handles (Windows only).
+        """
+        try:
+            import platform
+            if platform.system() != "Windows":
+                return None
+
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.windll.user32
+            handles = set()
+
+            def save_windows_callback(hwnd, lParam):
+                if user32.IsWindowVisible(hwnd):
+                    handles.add(hwnd)
+                return True
+
+            WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+            callback = WNDENUMPROC(save_windows_callback)
+            user32.EnumWindows(callback, 0)
+
+            return handles
+        except Exception:
+            return None
+
+    def close_new_file_dialog_windows(self, existing_window_handles: Optional[set]) -> bool:
+        """
+        Close new Windows file dialog windows (class #32770) that appear after a click.
+        """
+        try:
+            import platform
+            if platform.system() != "Windows" or not existing_window_handles:
+                return False
+
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.windll.user32
+            WM_CLOSE = 0x0010
+            dialog_found = False
+
+            for _ in range(30):  # 30 x 100ms = 3 seconds
+                found_dialogs = []
+
+                def check_new_windows(hwnd, lParam):
+                    if user32.IsWindowVisible(hwnd):
+                        if hwnd in existing_window_handles:
+                            return True
+
+                        class_buffer = ctypes.create_string_buffer(256)
+                        user32.GetClassNameA(hwnd, class_buffer, 256)
+                        class_name = class_buffer.value
+
+                        if class_name == b"#32770":
+                            found_dialogs.append(hwnd)
+                    return True
+
+                WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+                callback = WNDENUMPROC(check_new_windows)
+                user32.EnumWindows(callback, 0)
+
+                if found_dialogs:
+                    for hwnd in found_dialogs:
+                        user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+                        dialog_found = True
+                    time.sleep(0.2)
+                    break
+
+                time.sleep(0.1)
+
+            if dialog_found:
+                logger.info("[Upload] Closed new file dialog window")
+            return dialog_found
+
+        except Exception as e:
+            logger.debug("[Upload] New dialog close failed: %s", str(e))
+            return False
+
+    def upload_file_via_dialog(
+        self,
+        file_path: str,
+        existing_window_handles: Optional[set] = None,
+        timeout: float = 6.0,
+    ) -> bool:
+        """
+        Upload a file by pasting the path into a Windows file dialog and pressing Enter.
+        """
+        try:
+            import platform
+            if platform.system() != "Windows":
+                return False
+
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.windll.user32
+            SW_RESTORE = 9
+
+            dialog_titles = {
+                "Open",
+                "Choose File to Upload",
+                "Select File",
+                "Select Files",
+                "Open File",
+            }
+
+            def find_dialog() -> Optional[int]:
+                dialogs = []
+
+                def check_new_windows(hwnd, lParam):
+                    if not user32.IsWindowVisible(hwnd):
+                        return True
+
+                    if existing_window_handles and hwnd in existing_window_handles:
+                        return True
+
+                    class_buffer = ctypes.create_string_buffer(256)
+                    user32.GetClassNameA(hwnd, class_buffer, 256)
+                    class_name = class_buffer.value
+
+                    if class_name != b"#32770":
+                        return True
+
+                    length = user32.GetWindowTextLengthW(hwnd)
+                    title = ""
+                    if length > 0:
+                        buffer = ctypes.create_unicode_buffer(length + 1)
+                        user32.GetWindowTextW(hwnd, buffer, length + 1)
+                        title = buffer.value
+
+                    if not dialog_titles or title.strip() in dialog_titles:
+                        dialogs.append(hwnd)
+
+                    return True
+
+                WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+                callback = WNDENUMPROC(check_new_windows)
+                user32.EnumWindows(callback, 0)
+
+                return dialogs[0] if dialogs else None
+
+            end_time = time.time() + timeout
+            while time.time() < end_time:
+                hwnd = find_dialog()
+                if hwnd:
+                    try:
+                        user32.ShowWindow(hwnd, SW_RESTORE)
+                        user32.SetForegroundWindow(hwnd)
+                    except Exception:
+                        pass
+
+                    time.sleep(0.2)
+                    pyperclip.copy(file_path)
+                    pyautogui.hotkey("ctrl", "v")
+                    time.sleep(0.2)
+                    pyautogui.press("enter")
+                    logger.info("[Upload][Image] File path sent to dialog")
+                    return True
+
+                time.sleep(0.2)
+
+            logger.warning("[Upload][Image] File dialog not detected")
+            return False
+
+        except Exception as e:
+            logger.debug("[Upload][Image] Dialog upload failed: %s", str(e))
+            return False
 
     def enforce_browser_focus(self, close_popups: bool = False) -> bool:
         """
@@ -727,6 +924,191 @@ class VideoUploadHelper:
         logger.error("[Upload] ✗ All detection methods failed (tried Add Videos and Add Reels)")
         return None
 
+    def find_add_photos_button_text(self, retries: int = 3) -> Optional[Any]:
+        """
+        Find 'Add photo(s)' button using text-based detection.
+
+        Args:
+            retries: Number of retry attempts
+
+        Returns:
+            WebElement or None
+        """
+        logger.info("[Upload][Image] Looking for 'Add photo' button (text-based detection)...")
+
+        selectors = [
+            "//*[@aria-label='Select adding photos.']",
+            "//*[contains(@aria-label, 'Select adding photos')]",
+            "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'add photo')]",
+            "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'add photos')]",
+            "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'add photo/video')]",
+            "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'add photo / video')]",
+            "//div[@role='button'][contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'add photo')]",
+            "//button[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'add photo')]",
+        ]
+
+        for attempt in range(1, retries + 1):
+            try:
+                if attempt > 1:
+                    logger.info("[Upload][Image] Retry %d/%d (searching for Add photo)...", attempt, retries)
+                    self.idle_mouse_activity(duration=2.0, base_radius=85)
+
+                for selector in selectors:
+                    elements = self.driver.find_elements(By.XPATH, selector)
+                    for elem in elements:
+                        try:
+                            if elem.is_displayed():
+                                logger.info("[Upload][Image] Found Add photo button (selector: %s)", selector)
+                                return elem
+                        except Exception:
+                            continue
+
+            except Exception as e:
+                logger.debug("[Upload][Image] Add photo text search error: %s", str(e))
+
+        logger.warning("[Upload][Image] Add photo button not found via text detection")
+        return None
+
+    def find_add_photos_button_image(self, retries: int = 3) -> Optional[Tuple[int, int]]:
+        """
+        Find 'Add photo' button using image recognition.
+
+        Args:
+            retries: Number of retry attempts
+
+        Returns:
+            (x, y) center coordinates if found, otherwise None
+        """
+        logger.info("[Upload][Image] Looking for 'Add photo' button (image detection)...")
+
+        for attempt in range(1, retries + 1):
+            try:
+                if attempt > 1:
+                    logger.info("[Upload][Image] Retry %d/%d (image search)...", attempt, retries)
+                    self.idle_mouse_activity(duration=2.0, base_radius=85)
+
+                matches = list(pyautogui.locateAllOnScreen(
+                    ADD_PHOTOS_BUTTON_IMAGE,
+                    confidence=0.8
+                ))
+                if not matches:
+                    matches = list(pyautogui.locateAllOnScreen(
+                        ADD_PHOTOS_VIDEO_BUTTON_IMAGE,
+                        confidence=0.8
+                    ))
+
+                if matches:
+                    logger.info("[Upload][Image] Found %d Add photo match(es)", len(matches))
+
+                    match = matches[len(matches) // 2]
+                    button_x = match.left + match.width // 2
+                    button_y = match.top + match.height // 2
+                    return (button_x, button_y)
+
+            except Exception as e:
+                logger.debug("[Upload][Image] Add photo image search error: %s", str(e))
+
+        logger.warning("[Upload][Image] Add photo button not found via image detection")
+        return None
+
+    def find_add_photos_button(self, retries: int = 3):
+        """
+        Find 'Add photo' button using text detection first, then image recognition.
+
+        Returns:
+            WebElement or (x, y) tuple or None
+        """
+        text_result = self.find_add_photos_button_text(retries=2)
+        if text_result:
+            return text_result
+
+        image_result = self.find_add_photos_button_image(retries=retries)
+        if image_result:
+            return image_result
+
+        return None
+
+    def find_upload_from_desktop_button_text(self, retries: int = 3) -> Optional[Any]:
+        """
+        Find 'Upload from desktop' button using text-based detection.
+        """
+        logger.info("[Upload][Image] Looking for 'Upload from desktop' button (text-based)...")
+
+        selectors = [
+            "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'upload from desktop')]",
+            "//div[@role='button'][contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'upload from desktop')]",
+            "//button[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'upload from desktop')]",
+        ]
+
+        for attempt in range(1, retries + 1):
+            try:
+                if attempt > 1:
+                    logger.info("[Upload][Image] Retry %d/%d (searching for Upload from desktop)...", attempt, retries)
+                    self.idle_mouse_activity(duration=1.5, base_radius=70)
+
+                for selector in selectors:
+                    elements = self.driver.find_elements(By.XPATH, selector)
+                    for elem in elements:
+                        try:
+                            if elem.is_displayed():
+                                logger.info("[Upload][Image] Found Upload from desktop button (selector: %s)", selector)
+                                return elem
+                        except Exception:
+                            continue
+
+            except Exception as e:
+                logger.debug("[Upload][Image] Upload from desktop text search error: %s", str(e))
+
+        logger.info("[Upload][Image] Upload from desktop button not found via text detection")
+        return None
+
+    def find_upload_from_desktop_button_image(self, retries: int = 3) -> Optional[Tuple[int, int]]:
+        """
+        Find 'Upload from desktop' button using image recognition.
+        """
+        logger.info("[Upload][Image] Looking for 'Upload from desktop' button (image detection)...")
+
+        for attempt in range(1, retries + 1):
+            try:
+                if attempt > 1:
+                    logger.info("[Upload][Image] Retry %d/%d (image search)...", attempt, retries)
+                    self.idle_mouse_activity(duration=1.5, base_radius=70)
+
+                matches = list(pyautogui.locateAllOnScreen(
+                    UPLOAD_FROM_DESKTOP_BUTTON_IMAGE,
+                    confidence=0.8
+                ))
+
+                if matches:
+                    logger.info("[Upload][Image] Found %d Upload from desktop match(es)", len(matches))
+                    match = matches[len(matches) // 2]
+                    button_x = match.left + match.width // 2
+                    button_y = match.top + match.height // 2
+                    return (button_x, button_y)
+
+            except Exception as e:
+                logger.debug("[Upload][Image] Upload from desktop image search error: %s", str(e))
+
+        logger.info("[Upload][Image] Upload from desktop button not found via image detection")
+        return None
+
+    def find_upload_from_desktop_button(self, retries: int = 3):
+        """
+        Find 'Upload from desktop' button using text detection first, then image recognition.
+
+        Returns:
+            WebElement or (x, y) tuple or None
+        """
+        text_result = self.find_upload_from_desktop_button_text(retries=2)
+        if text_result:
+            return text_result
+
+        image_result = self.find_upload_from_desktop_button_image(retries=retries)
+        if image_result:
+            return image_result
+
+        return None
+
     def get_first_video_from_folder(self, folder_path: str) -> Optional[str]:
         """
         Get first video file from folder using FolderQueueManager for consistency.
@@ -748,7 +1130,10 @@ class VideoUploadHelper:
             # This ensures same video formats are supported everywhere
             from .core.folder_queue import FolderQueueManager
 
-            temp_queue = FolderQueueManager(base_path=os.path.dirname(folder_path))
+            temp_queue = FolderQueueManager(
+                base_path=os.path.dirname(folder_path),
+                state_manager=self.state_manager,
+            )
             videos = temp_queue.get_videos_in_folder(folder_path, exclude_uploaded=True)
 
             if not videos:
@@ -769,6 +1154,404 @@ class VideoUploadHelper:
         except Exception as e:
             logger.error("[Upload] Error finding video: %s", str(e))
             return None
+
+    def get_first_image_from_folder(self, folder_path: str) -> Optional[str]:
+        """
+        Get first image file from folder using FolderQueueManager for consistency.
+
+        Args:
+            folder_path: Path to creator folder
+
+        Returns:
+            Full path to image file or None
+        """
+        try:
+            logger.info("[Upload][Image] Searching for images in: %s", folder_path)
+
+            if not os.path.exists(folder_path):
+                logger.error("[Upload][Image] Folder not found: %s", folder_path)
+                return None
+
+            from .core.folder_queue import FolderQueueManager
+
+            temp_queue = FolderQueueManager(
+                base_path=os.path.dirname(folder_path),
+                state_manager=self.state_manager,
+            )
+            images = temp_queue.get_images_in_folder(folder_path, exclude_uploaded=True)
+
+            if not images:
+                logger.warning("[Upload][Image] No images found in folder")
+                logger.debug("[Upload][Image] Folder checked: %s", folder_path)
+                return None
+
+            images.sort()
+            first_image = images[0]
+
+            logger.info("[Upload][Image] Found image: %s", os.path.basename(first_image))
+            logger.info("[Upload][Image] Total images in folder: %d", len(images))
+
+            return first_image
+
+        except Exception as e:
+            logger.error("[Upload][Image] Error finding image: %s", str(e))
+            return None
+
+    def load_image_text_map(self, folder_path: str) -> Dict[str, str]:
+        """
+        Load image captions from imageText.txt (JSON format, case-insensitive keys).
+
+        Args:
+            folder_path: Creator folder path
+
+        Returns:
+            Dict mapping lowercase image title to caption text
+        """
+        caption_file = Path(folder_path) / IMAGE_TEXT_FILENAME
+
+        if not caption_file.exists():
+            logger.info("[Upload][Image] imageText.txt not found; captions default to image title")
+            return {}
+
+        try:
+            raw = caption_file.read_text(encoding="utf-8")
+            data = json.loads(raw)
+        except Exception as e:
+            logger.warning("[Upload][Image] Failed to parse imageText.txt: %s", str(e))
+            return {}
+
+        if not isinstance(data, dict):
+            logger.warning("[Upload][Image] imageText.txt must be a JSON object (title -> caption)")
+            return {}
+
+        normalized: Dict[str, str] = {}
+        for key, value in data.items():
+            if key is None:
+                continue
+            key_text = str(key).strip()
+            if not key_text:
+                continue
+            if value is None:
+                continue
+            caption_text = value if isinstance(value, str) else str(value)
+            normalized[key_text.casefold()] = caption_text
+
+        logger.info("[Upload][Image] Loaded %d caption(s) from imageText.txt", len(normalized))
+        return normalized
+
+    def get_image_caption_for_file(self, image_file: str, caption_map: Dict[str, str]) -> str:
+        """
+        Resolve caption text for an image file.
+
+        Args:
+            image_file: Full path to image
+            caption_map: Case-insensitive caption map
+
+        Returns:
+            Caption text (fallback to image title if not found)
+        """
+        image_title = Path(image_file).stem or ""
+        if not image_title:
+            return ""
+
+        if caption_map:
+            caption = caption_map.get(image_title.casefold())
+            if caption:
+                return caption
+
+        return image_title
+
+    def resolve_ffmpeg_path(self) -> Optional[str]:
+        """
+        Resolve ffmpeg executable path from config, env, repo, or PATH.
+
+        Returns:
+            Absolute ffmpeg path if found, else None
+        """
+        try:
+            from .config.upload_config import UPLOAD_CONFIG
+
+            config_path = (UPLOAD_CONFIG.get("ffmpeg_path") or "").strip()
+            if config_path and os.path.exists(config_path):
+                return config_path
+        except Exception:
+            pass
+
+        env_path = os.getenv("FFMPEG_PATH")
+        if env_path and os.path.exists(env_path):
+            return env_path
+
+        repo_root = Path(__file__).resolve().parents[4]
+        exe_name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+        repo_path = repo_root / "ffmpeg" / "bin" / exe_name
+        if repo_path.exists():
+            return str(repo_path)
+
+        which_path = shutil.which("ffmpeg")
+        if which_path:
+            return which_path
+
+        if os.name == "nt":
+            fallback = Path("C:/ffmpeg/bin/ffmpeg.exe")
+            if fallback.exists():
+                return str(fallback)
+
+        return None
+
+    def convert_image_if_needed(self, image_file: str, folder_path: str) -> Tuple[str, Optional[str]]:
+        """
+        Convert image to a supported format if needed.
+
+        Args:
+            image_file: Full path to image
+            folder_path: Creator folder path (for temp output)
+
+        Returns:
+            (upload_path, temp_path_to_cleanup or None)
+        """
+        try:
+            ext = Path(image_file).suffix.lower()
+            if ext in DIRECT_IMAGE_EXTENSIONS:
+                return image_file, None
+
+            ffmpeg_path = self.resolve_ffmpeg_path()
+            if not ffmpeg_path:
+                logger.warning("[Upload][Image] ffmpeg not found; uploading original image: %s", os.path.basename(image_file))
+                return image_file, None
+
+            output_dir = Path(folder_path) / "converted images"
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            base_name = Path(image_file).stem
+            output_path = output_dir / f"{base_name}_converted.jpg"
+
+            if output_path.exists():
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                output_path = output_dir / f"{base_name}_converted_{timestamp}.jpg"
+
+            cmd = [ffmpeg_path, "-y", "-i", image_file, str(output_path)]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+
+            if result.returncode != 0 or not output_path.exists():
+                logger.warning("[Upload][Image] Image conversion failed; using original file: %s", os.path.basename(image_file))
+                return image_file, None
+
+            logger.info("[Upload][Image] Converted image to: %s", output_path)
+            return str(output_path), str(output_path)
+
+        except Exception as e:
+            logger.warning("[Upload][Image] Image conversion error: %s", str(e))
+            return image_file, None
+
+    def paste_caption_text(self, caption: str) -> bool:
+        """
+        Paste caption text into the active input area using clipboard.
+        """
+        try:
+            pyperclip.copy(caption)
+            time.sleep(0.2)
+            pyautogui.hotkey("ctrl", "v")
+            time.sleep(0.3)
+            return True
+        except Exception as e:
+            logger.error("[Upload][Image] Caption paste failed: %s", str(e))
+            return False
+
+    def focus_image_caption_area_dom(self) -> bool:
+        """
+        Focus caption area using DOM selector.
+        """
+        try:
+            containers = self.driver.find_elements(By.XPATH, "//div[@data-pagelet='BusinessComposerTextEditor']")
+            for container in containers:
+                try:
+                    if not container.is_displayed():
+                        continue
+
+                    editable = container.find_elements(By.XPATH, ".//*[@contenteditable='true']")
+                    target = editable[0] if editable else container
+
+                    self.driver.execute_script(
+                        "arguments[0].scrollIntoView({block: 'center'});",
+                        target
+                    )
+                    time.sleep(0.3)
+
+                    ActionChains(self.driver).move_to_element(target).click().perform()
+                    time.sleep(0.2)
+                    return True
+                except Exception:
+                    continue
+
+        except Exception as e:
+            logger.debug("[Upload][Image] DOM caption focus failed: %s", str(e))
+        return False
+
+    def focus_image_caption_area_text(self) -> bool:
+        """
+        Focus caption area using nearby 'Text' label with offset.
+        """
+        try:
+            elements = self.driver.find_elements(
+                By.XPATH,
+                "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'text')]"
+            )
+            for elem in elements:
+                try:
+                    if not elem.is_displayed():
+                        continue
+
+                    self.driver.execute_script(
+                        "arguments[0].scrollIntoView({block: 'center'});",
+                        elem
+                    )
+                    time.sleep(0.3)
+
+                    ActionChains(self.driver).move_to_element_with_offset(elem, 15, 5).click().perform()
+                    time.sleep(0.2)
+                    return True
+                except Exception:
+                    continue
+
+        except Exception as e:
+            logger.debug("[Upload][Image] Text-based caption focus failed: %s", str(e))
+        return False
+
+    def focus_image_caption_area_image(self) -> bool:
+        """
+        Focus caption area using image recognition.
+        """
+        try:
+            location = pyautogui.locateOnScreen(IMAGE_TEXT_AREA_IMAGE, confidence=0.8)
+            if not location:
+                return False
+
+            center_x, center_y = pyautogui.center(location)
+            pyautogui.click(center_x, center_y)
+            time.sleep(0.2)
+            return True
+        except Exception as e:
+            logger.debug("[Upload][Image] Image-based caption focus failed: %s", str(e))
+            return False
+
+    def set_image_caption(self, caption: str) -> bool:
+        """
+        Set caption for an image post. Focus attempts: DOM, text, image.
+        """
+        if not caption:
+            logger.info("[Upload][Image] No caption provided; skipping caption step")
+            return True
+
+        preview = caption if len(caption) <= 60 else f"{caption[:60]}..."
+        logger.info("[Upload][Image] Setting image caption: %s", preview)
+
+        focused = (
+            self.focus_image_caption_area_dom()
+            or self.focus_image_caption_area_text()
+            or self.focus_image_caption_area_image()
+        )
+        if not focused:
+            logger.warning("[Upload][Image] Could not focus caption area")
+            return False
+
+        return self.paste_caption_text(caption)
+
+    def _human_move_to(self, x: int, y: int, min_duration: float = None,
+                       max_duration: float = None) -> None:
+        """
+        Move mouse with slower, human-like pacing.
+        """
+        if min_duration is None:
+            min_duration = HUMAN_MOUSE_MOVE_MIN
+        if max_duration is None:
+            max_duration = HUMAN_MOUSE_MOVE_MAX
+
+        duration = random.uniform(min_duration, max_duration)
+        pyautogui.moveTo(int(x), int(y), duration=duration)
+
+    def _post_click_wait(self) -> None:
+        """
+        Randomized wait after clicking a publish button.
+        """
+        delay = random.uniform(POST_CLICK_WAIT_MIN, POST_CLICK_WAIT_MAX)
+        logger.info("[Upload] Waiting %.1f seconds after click", delay)
+        time.sleep(delay)
+
+    def hover_on_active_publish_button_image(self, location: Any) -> None:
+        """
+        Move mouse to the active Publish button detected via image recognition.
+        """
+        if not location:
+            return
+
+        try:
+            # Skip if user is moving the mouse.
+            try:
+                initial_pos = pyautogui.position()
+                time.sleep(0.15)
+                if pyautogui.position() != initial_pos:
+                    logger.info("[Upload][Image] User mouse activity detected; skipping publish hover")
+                    return
+            except Exception as e:
+                logger.debug("[Upload][Image] Mouse activity check failed: %s", str(e))
+
+            center_x, center_y = pyautogui.center(location)
+            logger.info("[Upload][Image] Moving mouse to active Publish button (%d, %d)", center_x, center_y)
+            self._human_move_to(center_x, center_y)
+            time.sleep(0.25)
+
+            # Small hover jitter to show focus.
+            for offset_x, offset_y in [(8, 0), (-8, 0), (0, 6), (0, -6)]:
+                pyautogui.moveTo(int(center_x + offset_x), int(center_y + offset_y),
+                                 duration=random.uniform(0.12, 0.2))
+            pyautogui.moveTo(int(center_x), int(center_y), duration=random.uniform(0.12, 0.2))
+        except Exception as e:
+            logger.debug("[Upload][Image] Active publish hover failed: %s", str(e))
+
+    def wait_for_active_publish_button(self, timeout: int = 180) -> Optional[Any]:
+        """
+        Wait for active publish button image to appear.
+        Returns the matched location when found, otherwise None.
+        """
+        logger.info("[Upload][Image] Waiting for Publish button to become active...")
+        start_time = time.time()
+
+        while (time.time() - start_time) < timeout:
+            try:
+                location = pyautogui.locateOnScreen(
+                    ACTIVE_PUBLISH_BUTTON_IMAGE,
+                    confidence=0.8
+                )
+                if location:
+                    logger.info("[Upload][Image] Active Publish button detected")
+                    self.hover_on_active_publish_button_image(location)
+                    return location
+            except Exception as e:
+                logger.debug("[Upload][Image] Active publish detection error: %s", str(e))
+
+            self.idle_mouse_activity(duration=2.0, base_radius=80)
+
+        logger.warning("[Upload][Image] Timed out waiting for active Publish button")
+        return None
+
+    def click_active_publish_button_image(self, location: Any) -> bool:
+        """
+        Click active publish button using image coordinates.
+        """
+        if not location:
+            logger.warning("[Upload][Image] Active publish location missing; cannot click")
+            return False
+
+        try:
+            center_x, center_y = pyautogui.center(location)
+            logger.info("[Upload][Image] Clicking active Publish button (%d, %d)", center_x, center_y)
+            self._human_move_to(center_x, center_y)
+            pyautogui.click()
+            self._post_click_wait()
+            return True
+        except Exception as e:
+            logger.warning("[Upload][Image] Active publish click failed: %s", str(e))
+            return False
 
     def move_video_to_uploaded_folder(self, video_file: str, creator_folder: str) -> bool:
         """
@@ -943,6 +1726,66 @@ class VideoUploadHelper:
             logger.error("[Upload] ═══════════════════════════════════════════")
             import traceback
             logger.error("[Upload] Traceback: %s", traceback.format_exc())
+            return False
+
+    def upload_image_file(self, image_path: str) -> bool:
+        """
+        Upload image via file input element WITHOUT opening file dialog.
+        Uses direct file path injection to avoid UI dialog.
+
+        Args:
+            image_path: Full path to image file
+
+        Returns:
+            True if upload initiated
+        """
+        try:
+            logger.info("[Upload][Image] Uploading Image File (NO DIALOG)")
+            logger.info("[Upload][Image] File: %s", image_path)
+
+            if not os.path.exists(image_path):
+                logger.error("[Upload][Image] File not found: %s", image_path)
+                return False
+
+            file_inputs = self.driver.find_elements(By.XPATH, "//input[@type='file']")
+            if not file_inputs:
+                logger.error("[Upload][Image] File input element not found")
+                return False
+
+            logger.info("[Upload][Image] Found %d file input(s)", len(file_inputs))
+
+            for idx, file_input in enumerate(file_inputs, 1):
+                try:
+                    try:
+                        self.driver.execute_script("""
+                            arguments[0].style.display = 'block';
+                            arguments[0].style.visibility = 'visible';
+                            arguments[0].style.opacity = '1';
+                        """, file_input)
+                    except Exception:
+                        pass
+
+                    file_input.send_keys(image_path)
+                    time.sleep(0.5)
+
+                    value = file_input.get_attribute("value") or ""
+                    if os.path.basename(image_path) in value:
+                        logger.info("[Upload][Image] File injected into input #%d", idx)
+                        return True
+
+                    try:
+                        self.driver.execute_script("arguments[0].style.display = 'none';", file_input)
+                    except Exception:
+                        pass
+
+                except Exception:
+                    continue
+
+            logger.warning("[Upload][Image] File injection not confirmed")
+            return False
+
+        except Exception as e:
+            logger.error("[Upload][Image] Image upload failed: %s", str(e))
             return False
 
     def _clear_field_with_human_behavior(self, field) -> bool:
@@ -1750,17 +2593,15 @@ class VideoUploadHelper:
 
             # Step 5: Move ACTUAL physical mouse using PyAutoGUI
             logger.info("[Upload] Moving PHYSICAL mouse to button...")
+            self._last_publish_hover_point = (int(screen_x), int(screen_y))
+            self._last_publish_hover_time = time.time()
 
             # Get current mouse position
             current_x, current_y = pyautogui.position()
             logger.info("[Upload] Current mouse position: x=%d, y=%d", current_x, current_y)
 
             # Smooth movement to button (duration makes it visible)
-            pyautogui.moveTo(
-                int(screen_x),
-                int(screen_y),
-                duration=0.5  # 0.5 seconds smooth movement (very visible!)
-            )
+            self._human_move_to(int(screen_x), int(screen_y), min_duration=0.7, max_duration=1.4)
 
             logger.info("[Upload] ✓ Physical mouse moved to Publish button!")
 
@@ -1780,11 +2621,11 @@ class VideoUploadHelper:
                 pyautogui.moveTo(
                     int(screen_x + offset_x),
                     int(screen_y + offset_y),
-                    duration=0.05  # Fast small movements
+                    duration=random.uniform(0.12, 0.2)
                 )
 
             # Return to button center
-            pyautogui.moveTo(int(screen_x), int(screen_y), duration=0.1)
+            self._human_move_to(int(screen_x), int(screen_y), min_duration=0.3, max_duration=0.6)
 
             logger.info("[Upload] ✓ Hover complete!")
             logger.info("[Upload] (Production mode: NOT clicking button)")
@@ -1814,6 +2655,22 @@ class VideoUploadHelper:
         try:
             logger.info("[Upload] ═══════════════════════════════════════════")
             logger.info("[Upload] CLICKING PUBLISH BUTTON")
+            # Method 0: Physical mouse click at last hover point (most human-like)
+            if self._last_publish_hover_point and self._last_publish_hover_time:
+                try:
+                    if (time.time() - self._last_publish_hover_time) > 10:
+                        self._last_publish_hover_point = None
+                        self._last_publish_hover_time = None
+                        raise Exception("Last hover point is stale")
+                    logger.info("[Upload] Attempting physical mouse click...")
+                    hover_x, hover_y = self._last_publish_hover_point
+                    self._human_move_to(hover_x, hover_y, min_duration=0.4, max_duration=0.9)
+                    pyautogui.click()
+                    logger.info("[Upload] Physical mouse click executed")
+                    self._post_click_wait()
+                    return True
+                except Exception as e:
+                    logger.debug("[Upload] Physical mouse click failed: %s", str(e))
             logger.info("[Upload] ═══════════════════════════════════════════")
 
             # Method 1: Try Selenium click first
@@ -1821,7 +2678,7 @@ class VideoUploadHelper:
                 logger.info("[Upload] Attempting Selenium click...")
                 button.click()
                 logger.info("[Upload] ✓ Selenium click executed")
-                time.sleep(1)  # Wait for response
+                self._post_click_wait()
                 return True
             except Exception as e:
                 logger.debug("[Upload] Selenium click failed: %s", str(e))
@@ -1831,7 +2688,7 @@ class VideoUploadHelper:
                 logger.info("[Upload] Attempting JavaScript click...")
                 self.driver.execute_script("arguments[0].click();", button)
                 logger.info("[Upload] ✓ JavaScript click executed")
-                time.sleep(1)
+                self._post_click_wait()
                 return True
             except Exception as e:
                 logger.debug("[Upload] JavaScript click failed: %s", str(e))
@@ -1842,7 +2699,7 @@ class VideoUploadHelper:
                 actions = ActionChains(self.driver)
                 actions.move_to_element(button).click().perform()
                 logger.info("[Upload] ✓ ActionChains click executed")
-                time.sleep(1)
+                self._post_click_wait()
                 return True
             except Exception as e:
                 logger.debug("[Upload] ActionChains click failed: %s", str(e))
@@ -1856,7 +2713,7 @@ class VideoUploadHelper:
                 center_y = int(location['y'] + size['height'] / 2)
                 pyautogui.click(center_x, center_y)
                 logger.info("[Upload] ✓ Pyautogui click executed at (%d, %d)", center_x, center_y)
-                time.sleep(1)
+                self._post_click_wait()
                 return True
             except Exception as e:
                 logger.debug("[Upload] Pyautogui click failed: %s", str(e))
@@ -1961,7 +2818,6 @@ class VideoUploadHelper:
 
                 if self.click_publish_button(button):
                     logger.info("✓ Publish button clicked!")
-                    time.sleep(1)  # Minimal wait - prevent session timeout
                 else:
                     logger.warning("⚠ Click failed, but continuing...")
 
@@ -2341,10 +3197,316 @@ class VideoUploadHelper:
             center_y = screen_height // 2
 
             logger.debug("[Mouse] Returning to mid-screen (%d, %d)", center_x, center_y)
-            pyautogui.moveTo(center_x, center_y, duration=0.4)
+            self._human_move_to(center_x, center_y, min_duration=0.5, max_duration=0.9)
 
         except Exception as e:
             logger.warning("[Mouse] Failed to return to mid-screen: %s", str(e))
+
+    def mark_image_failed(self, image_file: str, folder_path: str, bookmark_title: str, reason: str) -> None:
+        """
+        Move image to failed uploads and mark history.
+        """
+        failed_path = self.file_handler.move_video_to_failed(
+            image_file,
+            folder_path,
+            reason=reason,
+        )
+        if failed_path:
+            self.state_manager.mark_video_failed(
+                video_file=image_file,
+                bookmark=bookmark_title,
+                reason=reason,
+                moved_to=failed_path,
+            )
+            logger.warning("[Upload][Image] Image moved to failed uploads: %s", os.path.basename(image_file))
+        else:
+            self.state_manager.mark_video_failed(
+                video_file=image_file,
+                bookmark=bookmark_title,
+                reason=reason,
+            )
+            logger.warning("[Upload][Image] Image marked failed (move failed): %s", os.path.basename(image_file))
+
+    def upload_images_for_folder(self, bookmark: Dict[str, str], folder_path: str, max_retries: int = 3) -> bool:
+        """
+        Upload all images in a folder, one by one.
+        """
+        caption_map = self.load_image_text_map(folder_path)
+        processed_any = False
+
+        while True:
+            image_file = self.get_first_image_from_folder(folder_path)
+            if not image_file:
+                if not processed_any:
+                    logger.info("[Upload][Image] No images found for folder: %s", os.path.basename(folder_path))
+                return True
+
+            processed_any = True
+            success = self.upload_image_to_bookmark(
+                bookmark=bookmark,
+                folder_path=folder_path,
+                image_file=image_file,
+                caption_map=caption_map,
+                max_retries=max_retries,
+            )
+            if not success:
+                return False
+
+    def upload_image_to_bookmark(
+        self,
+        bookmark: Dict[str, str],
+        folder_path: str,
+        image_file: str,
+        caption_map: Optional[Dict[str, str]] = None,
+        max_retries: int = 3,
+    ) -> bool:
+        """
+        Upload a single image to a bookmark (test mode skips publish click).
+        """
+        bookmark_title = bookmark["title"]
+        image_name = Path(image_file).stem or "unknown"
+        caption_map = caption_map or {}
+
+        if not self.network_monitor.is_network_stable():
+            logger.warning("[Upload][Image] Network unstable, waiting for recovery...")
+            if not self.network_monitor.wait_for_reconnection(max_wait=300):
+                logger.error("[Upload][Image] Network timeout, cannot start image upload")
+                return False
+
+        for attempt in range(1, max_retries + 1):
+            temp_cleanup_path = None
+            try:
+                logger.info("[Upload][Image] Attempt %d/%d: %s", attempt, max_retries, bookmark_title)
+
+                # Step 1: Navigate to image bookmark
+                logger.info("[Upload][Image] Step 1: Navigating to image bookmark...")
+                if not self.navigate_to_bookmark(bookmark):
+                    if attempt < max_retries:
+                        logger.warning("[Upload][Image] Navigation failed, retrying...")
+                        continue
+                    raise Exception("Failed to navigate to image bookmark")
+
+                # Step 2: Verify image file exists
+                if not os.path.exists(image_file):
+                    raise Exception(f"Image file not found: {image_file}")
+
+                logger.info("[Upload][Image] Step 2: Image found: %s", os.path.basename(image_file))
+
+                self.state_manager.update_current_upload(
+                    video_file=image_file,
+                    video_name=image_name,
+                    bookmark=bookmark_title,
+                    status="uploading",
+                    progress=0,
+                    attempt=attempt,
+                )
+
+                # Step 3: Stabilize page
+                logger.info("[Upload][Image] Step 3: Waiting for page to stabilize...")
+                self.idle_mouse_activity(duration=2.5, base_radius=90)
+
+                # Step 4: Convert if needed
+                upload_path, temp_cleanup_path = self.convert_image_if_needed(image_file, folder_path)
+
+                # Step 5: Preload file input
+                logger.info("[Upload][Image] Step 4: Pre-loading image file input...")
+                file_inputs = self.driver.find_elements(By.XPATH, "//input[@type='file']")
+                file_preloaded = False
+
+                if file_inputs:
+                    for idx, file_input in enumerate(file_inputs, 1):
+                        try:
+                            try:
+                                self.driver.execute_script("""
+                                    arguments[0].style.display = 'block';
+                                    arguments[0].style.visibility = 'visible';
+                                    arguments[0].style.opacity = '1';
+                                """, file_input)
+                            except Exception:
+                                pass
+
+                            file_input.send_keys(upload_path)
+                            time.sleep(0.4)
+
+                            value = file_input.get_attribute("value")
+                            if value and os.path.basename(upload_path) in value:
+                                file_preloaded = True
+
+                            try:
+                                self.driver.execute_script("arguments[0].style.display = 'none';", file_input)
+                            except Exception:
+                                pass
+
+                        except Exception:
+                            continue
+
+                if file_preloaded:
+                    logger.info("[Upload][Image] Image pre-loaded into file input")
+                else:
+                    logger.info("[Upload][Image] Image pre-load not confirmed")
+
+                # Step 6: Find and click Add photo button
+                logger.info("[Upload][Image] Step 5: Finding Add photo button...")
+                existing_windows = self.capture_visible_windows()
+                button_result = self.find_add_photos_button()
+                if not button_result:
+                    if file_preloaded:
+                        logger.warning("[Upload][Image] Add photo button not found, continuing with preloaded file")
+                    else:
+                        raise Exception("Add photo button not found")
+                else:
+                    if isinstance(button_result, tuple):
+                        pyautogui.click(button_result[0], button_result[1])
+                    else:
+                        button_result.click()
+                    logger.info("[Upload][Image] Add photo button clicked")
+
+                time.sleep(0.8)
+
+                upload_button = self.find_upload_from_desktop_button()
+                if upload_button and not file_preloaded:
+                    try:
+                        if isinstance(upload_button, tuple):
+                            self._human_move_to(upload_button[0], upload_button[1], min_duration=0.4, max_duration=0.9)
+                            pyautogui.click()
+                        else:
+                            try:
+                                upload_button.click()
+                            except Exception:
+                                self.driver.execute_script("arguments[0].click();", upload_button)
+                        logger.info("[Upload][Image] Upload from desktop button clicked")
+                        time.sleep(1)
+                    except Exception as e:
+                        logger.warning("[Upload][Image] Upload from desktop click failed: %s", str(e))
+
+                time.sleep(1.2)
+
+                if not file_preloaded:
+                    logger.info("[Upload][Image] Step 5b: Injecting image file after click...")
+                    injected = self.upload_image_file(upload_path)
+                    if not injected:
+                        logger.info("[Upload][Image] Step 5c: Trying file dialog paste...")
+                        if not self.upload_file_via_dialog(upload_path, existing_windows):
+                            self.close_new_file_dialog_windows(existing_windows)
+                            self.close_unwanted_windows()
+                            raise Exception("Image file upload failed")
+
+                self.close_new_file_dialog_windows(existing_windows)
+                self.close_unwanted_windows()
+
+                # Step 7: Find publish button (text-based)
+                logger.info("[Upload][Image] Step 6: Locating Publish button...")
+                publish_button = self.find_publish_button()
+                if not publish_button:
+                    raise Exception("Publish button not found")
+
+                # Step 8: Set caption before publish becomes active
+                logger.info("[Upload][Image] Step 7: Setting image caption...")
+                caption = self.get_image_caption_for_file(image_file, caption_map)
+                if not self.set_image_caption(caption):
+                    logger.warning("[Upload][Image] Caption may not have been set")
+
+                # Step 9: Wait for publish to become active
+                logger.info("[Upload][Image] Step 8: Waiting for active Publish button...")
+                active_location = self.wait_for_active_publish_button(timeout=self.upload_timeout)
+                if not active_location:
+                    raise Exception("Publish button did not become active")
+
+                from .config.upload_config import UPLOAD_CONFIG
+                publish_click_enabled = bool(UPLOAD_CONFIG.get("image_publish_click_enabled", False))
+
+                if not publish_click_enabled:
+                    logger.warning("[Upload][Image] Publish click disabled (test mode)")
+                    self.mark_image_failed(
+                        image_file=image_file,
+                        folder_path=folder_path,
+                        bookmark_title=bookmark_title,
+                        reason="publish_skipped_test",
+                    )
+                    self.state_manager.clear_current_upload()
+                    return True
+
+                # Step 10: Click publish (enabled mode)
+                logger.info("[Upload][Image] Step 9: Clicking Publish button...")
+                if not self.click_active_publish_button_image(active_location):
+                    logger.warning("[Upload][Image] Active publish click failed; trying DOM click")
+                    fallback_button = self.find_publish_button() or publish_button
+                    if not fallback_button or not self.click_publish_button(fallback_button):
+                        logger.warning("[Upload][Image] Publish click failed")
+                        self.mark_image_failed(
+                            image_file=image_file,
+                            folder_path=folder_path,
+                            bookmark_title=bookmark_title,
+                            reason="publish_button_failed",
+                        )
+                        self.state_manager.clear_current_upload()
+                        return True
+
+                delete_after_publish = self.settings.get_delete_after_publish()
+                if delete_after_publish:
+                    try:
+                        if os.path.exists(image_file):
+                            os.remove(image_file)
+                            logger.info("[Upload][Image] Image deleted after publish: %s", os.path.basename(image_file))
+                            self.state_manager.mark_video_uploaded(
+                                video_file=image_file,
+                                bookmark=bookmark_title,
+                                moved_to="DELETED_AFTER_PUBLISH",
+                            )
+                        else:
+                            self.state_manager.mark_video_uploaded(
+                                video_file=image_file,
+                                bookmark=bookmark_title,
+                                moved_to="DELETE_MISSING",
+                            )
+                    except Exception as e:
+                        logger.warning("[Upload][Image] Image delete failed: %s", str(e))
+                        self.state_manager.mark_video_uploaded(
+                            video_file=image_file,
+                            bookmark=bookmark_title,
+                            moved_to="DELETE_FAILED",
+                        )
+                else:
+                    moved_to = self.file_handler.move_video_to_uploaded(image_file, folder_path)
+                    if moved_to:
+                        self.state_manager.mark_video_uploaded(
+                            video_file=image_file,
+                            bookmark=bookmark_title,
+                            moved_to=moved_to,
+                        )
+                    else:
+                        self.state_manager.mark_video_uploaded(
+                            video_file=image_file,
+                            bookmark=bookmark_title,
+                            moved_to="MOVE_FAILED",
+                        )
+
+                self.state_manager.clear_current_upload()
+                return True
+
+            except Exception as e:
+                logger.error("[Upload][Image] Attempt %d failed: %s", attempt, str(e))
+                self.state_manager.update_current_upload(status="failed", attempt=attempt)
+
+                if attempt < max_retries:
+                    time.sleep(5)
+                    continue
+
+                logger.warning("[Upload][Image] Image upload failed after %d attempts", max_retries)
+                self.mark_image_failed(
+                    image_file=image_file,
+                    folder_path=folder_path,
+                    bookmark_title=bookmark_title,
+                    reason="image_upload_failed",
+                )
+                self.state_manager.clear_current_upload()
+                return True
+            finally:
+                if temp_cleanup_path and os.path.exists(temp_cleanup_path):
+                    try:
+                        os.remove(temp_cleanup_path)
+                    except Exception:
+                        pass
 
     def upload_to_bookmark(self, bookmark: Dict[str, str], folder_path: str, max_retries: int = 3) -> bool:
         """
@@ -2662,9 +3824,30 @@ class VideoUploadHelper:
                     logger.warning("⚠ PUBLISH BUTTON NOT CLICKED")
                     logger.warning("   Video uploaded to Facebook (100%)")
                     logger.warning("   But publish button failed")
-                    logger.warning("   Video STAYS in folder (will retry next run)")
+                    logger.warning("   Moving video to failed uploads folder")
                     logger.warning("   Moving to next video...")
                     logger.warning("═══════════════════════════════════════════")
+
+                    failed_path = self.file_handler.move_video_to_failed(
+                        video_file,
+                        folder_path,
+                        reason="publish_button_failed",
+                    )
+                    if failed_path:
+                        self.state_manager.mark_video_failed(
+                            video_file=video_file,
+                            bookmark=bookmark_title,
+                            reason="publish_button_failed",
+                            moved_to=failed_path,
+                        )
+                        logger.warning("   Video moved to failed uploads folder")
+                    else:
+                        self.state_manager.mark_video_failed(
+                            video_file=video_file,
+                            bookmark=bookmark_title,
+                            reason="publish_button_failed",
+                        )
+                        logger.warning("   Failed to move video; marked as failed to avoid repeat upload")
 
                     # Clear state and return success to move to next video
                     # Don't throw exception - that causes retry and page reload!
@@ -2694,9 +3877,19 @@ class VideoUploadHelper:
                             )
                         else:
                             logger.warning("[Upload] ⚠ Video file not found for deletion")
+                            self.state_manager.mark_video_uploaded(
+                                video_file=video_file,
+                                bookmark=bookmark_title,
+                                moved_to="DELETE_MISSING"
+                            )
                     except Exception as e:
                         logger.error("[Upload] ✗ Error deleting video: %s", str(e))
                         logger.warning("[Upload] Continuing anyway...")
+                        self.state_manager.mark_video_uploaded(
+                            video_file=video_file,
+                            bookmark=bookmark_title,
+                            moved_to="DELETE_FAILED"
+                        )
                 else:
                     # Move video to uploaded folder (default behavior)
                     logger.info("📦 Moving video to 'uploaded videos' folder...")
@@ -2714,6 +3907,11 @@ class VideoUploadHelper:
                     else:
                         logger.warning("[Upload] ⚠ Could not move video (continuing anyway)")
 
+                        self.state_manager.mark_video_uploaded(
+                            video_file=video_file,
+                            bookmark=bookmark_title,
+                            moved_to="MOVE_FAILED"
+                        )
                 # Phase 2: Clear current upload state
                 self.state_manager.clear_current_upload()
                 logger.debug("[Upload] ✓ State cleared after successful upload")

@@ -11,6 +11,7 @@ IMPORTANT: Before building, ensure these files exist:
 
 import os
 from pathlib import Path
+from PyInstaller.utils.hooks import collect_submodules
 
 block_cipher = None
 
@@ -84,7 +85,7 @@ a = Analysis(
         # Configs to bundle
         ('api_config.json', '.'),
     ] + optional_datas,  # Add optional data files
-    hiddenimports=[
+    hiddenimports=collect_submodules('encodings') + [
         # PyQt5 essentials
         'PyQt5.sip',
         'PyQt5.QtWebEngineWidgets',
@@ -185,7 +186,7 @@ a = Analysis(
     ],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=['rth_clear_python_env.py'],
     excludes=[
         'server',  # Exclude server folder (separate app)
         'instance',

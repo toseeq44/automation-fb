@@ -360,7 +360,10 @@ def _apply_instaloader_session(loader, cookie_file: str, platform_key: str, prox
 
     try:
         cookies = _load_cookies_from_file(cookie_file, platform_key)
+        csrf_token = None
         for cookie in cookies:
+            if cookie.get('name') == 'csrftoken':
+                csrf_token = cookie.get('value')
             loader.context._session.cookies.set(
                 cookie.get('name', ''),
                 cookie.get('value', ''),
@@ -369,6 +372,10 @@ def _apply_instaloader_session(loader, cookie_file: str, platform_key: str, prox
                 secure=bool(cookie.get('secure', False)),
                 expires=cookie.get('expires'),
             )
+        if csrf_token:
+            loader.context._session.headers.update({'X-CSRFToken': csrf_token})
+        loader.context._session.headers.setdefault('X-IG-App-ID', '936619743392459')
+        loader.context._session.headers.setdefault('Referer', 'https://www.instagram.com/')
         return len(cookies)
     except Exception:
         return 0
@@ -408,6 +415,143 @@ def _get_instagram_expected_count(url: str, cookie_file: str, proxy: str = None)
         return None
 
     return None
+
+
+def _build_requests_session(
+    cookie_file: str,
+    platform_key: str,
+    proxy: str = None,
+    user_agent: str = None,
+):
+    """Create a requests session with cookies and headers applied."""
+    try:
+        import requests
+    except Exception:
+        return None
+
+    session = requests.Session()
+
+    if not user_agent:
+        user_agent = _get_random_user_agent()
+
+    session.headers.update({
+        'User-Agent': user_agent,
+        'Accept': '*/*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://www.instagram.com/',
+        'X-IG-App-ID': '936619743392459',
+        'X-Requested-With': 'XMLHttpRequest',
+    })
+
+    if proxy:
+        try:
+            proxy_url = _parse_proxy_format(proxy)
+            session.proxies.update({'http': proxy_url, 'https': proxy_url})
+        except Exception:
+            pass
+
+    if cookie_file:
+        cookies = _load_cookies_from_file(cookie_file, platform_key)
+        for cookie in cookies:
+            try:
+                session.cookies.set(
+                    cookie.get('name', ''),
+                    cookie.get('value', ''),
+                    domain=cookie.get('domain'),
+                    path=cookie.get('path', '/') or '/',
+                )
+            except Exception:
+                continue
+
+        csrf_token = session.cookies.get('csrftoken')
+        if csrf_token:
+            session.headers['X-CSRFToken'] = csrf_token
+
+    return session
+
+
+def _find_instagram_profile_doc_id(session, username: str) -> typing.Optional[str]:
+    """Best-effort discovery of Instagram profile posts doc_id from HTML."""
+    try:
+        response = session.get(f"https://www.instagram.com/{username}/", timeout=20)
+        if response.status_code != 200 or not response.text:
+            return None
+
+        html = response.text
+        operation_names = [
+            'PolarisProfilePostsTabQuery',
+            'PolarisProfilePostsPageQuery',
+            'PolarisProfilePostsQuery',
+        ]
+
+        for op_name in operation_names:
+            idx = html.find(op_name)
+            if idx == -1:
+                continue
+            snippet = html[idx:idx + 600]
+            match = re.search(r'doc_id\\?":\\?"(\d+)"', snippet)
+            if match:
+                return match.group(1)
+
+        # Fallback: look for doc_id near "ProfilePosts" text
+        match = re.search(r'ProfilePosts.{0,200}?doc_id\\?":\\?"(\d+)"', html, re.IGNORECASE)
+        if match:
+            return match.group(1)
+
+    except Exception:
+        return None
+
+    return None
+
+
+def _instagram_entry_from_node(node: dict) -> typing.Optional[dict]:
+    """Convert a GraphQL/JSON node into a link entry."""
+    shortcode = node.get('shortcode') or node.get('code')
+    if not shortcode:
+        return None
+
+    product_type = (node.get('product_type') or '').lower()
+    typename = node.get('__typename', '')
+    is_video = bool(node.get('is_video'))
+
+    if product_type == 'clips' or 'GraphReel' in typename:
+        path = '/reel/'
+    elif product_type == 'igtv':
+        path = '/tv/'
+    elif is_video and 'GraphVideo' in typename:
+        path = '/reel/'
+    else:
+        path = '/p/'
+
+    url = f"https://www.instagram.com{path}{shortcode}/"
+
+    date_str = '00000000'
+    timestamp = node.get('taken_at_timestamp') or node.get('taken_at') or node.get('date')
+    if isinstance(timestamp, (int, float)) and timestamp > 0:
+        date_str = datetime.utcfromtimestamp(timestamp).strftime('%Y%m%d')
+
+    caption = ''
+    caption_edges = node.get('edge_media_to_caption', {}).get('edges', [])
+    if caption_edges:
+        caption = caption_edges[0].get('node', {}).get('text', '') or ''
+
+    return {
+        'url': url,
+        'title': caption[:100] if caption else 'Instagram Post',
+        'date': date_str,
+    }
+
+
+def _instagram_entries_from_media(media: dict) -> typing.List[dict]:
+    """Extract entries from an Instagram media edge container."""
+    entries: typing.List[dict] = []
+    edges = media.get('edges', []) or []
+    for edge in edges:
+        node = edge.get('node', {}) if isinstance(edge, dict) else {}
+        entry = _instagram_entry_from_node(node)
+        if entry:
+            entries.append(entry)
+    return entries
 
 
 def _normalize_url(url: str) -> str:
@@ -1481,6 +1625,155 @@ def _method_ytdlp_user_agent(url: str, platform_key: str, cookie_file: str = Non
     return []
 
 
+def _method_instagram_web_api(
+    url: str,
+    platform_key: str,
+    cookie_file: str = None,
+    max_videos: int = 0,
+    proxy: str = None,
+) -> typing.List[dict]:
+    """METHOD 6b: Instagram Web API (cookies + GraphQL)"""
+    if platform_key != 'instagram':
+        return []
+
+    if not cookie_file or not os.path.exists(cookie_file):
+        logging.debug("Method 6b: No cookie file available for Instagram web API")
+        return []
+
+    username_match = re.search(r'instagram\.com/([^/?#]+)', url, flags=re.IGNORECASE)
+    if not username_match or username_match.group(1) in ['p', 'reel', 'tv', 'stories']:
+        return []
+
+    username = username_match.group(1)
+
+    session = _build_requests_session(cookie_file, platform_key, proxy=proxy)
+    if not session:
+        logging.debug("Method 6b: requests session unavailable")
+        return []
+
+    entries: typing.List[dict] = []
+
+    # Step 1: fetch profile info (web API)
+    profile_url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={username}"
+    response = session.get(profile_url, timeout=30)
+
+    if response.status_code != 200:
+        # Fallback: try legacy __a=1 endpoint
+        legacy_url = f"https://www.instagram.com/{username}/?__a=1&__d=dis"
+        response = session.get(legacy_url, timeout=30)
+
+    if response.status_code != 200:
+        logging.debug(f"Method 6b: Profile info failed ({response.status_code})")
+        return []
+
+    try:
+        payload = response.json()
+    except Exception:
+        logging.debug("Method 6b: Profile info JSON decode failed")
+        return []
+
+    user_data = payload.get('data', {}).get('user') or payload.get('graphql', {}).get('user')
+    if not user_data:
+        logging.debug("Method 6b: Profile info missing user data")
+        return []
+
+    media = user_data.get('edge_owner_to_timeline_media', {}) or {}
+    entries.extend(_instagram_entries_from_media(media))
+
+    if max_videos > 0 and len(entries) >= max_videos:
+        return entries[:max_videos]
+
+    page_info = media.get('page_info', {}) or {}
+    end_cursor = page_info.get('end_cursor')
+    has_next_page = bool(page_info.get('has_next_page'))
+    user_id = user_data.get('id')
+
+    if not user_id or not end_cursor or not has_next_page:
+        return entries
+
+    doc_id = _find_instagram_profile_doc_id(session, username)
+    fallback_doc_ids = [
+        "17888483320059182",
+        "7898261790222653",
+    ]
+
+    doc_id_candidates = [doc_id] if doc_id else []
+    doc_id_candidates.extend([d for d in fallback_doc_ids if d not in doc_id_candidates])
+
+    graphql_url = "https://www.instagram.com/graphql/query/"
+
+    for candidate in doc_id_candidates:
+        cursor = end_cursor
+        has_next = has_next_page
+        pagination_added = False
+
+        while has_next and cursor:
+            remaining = max_videos - len(entries) if max_videos > 0 else 50
+            batch_size = min(50, remaining) if remaining > 0 else 50
+
+            variables = {
+                'id': user_id,
+                'first': batch_size,
+                'after': cursor,
+            }
+
+            _apply_rate_limit('instagram')
+
+            try:
+                resp = session.get(
+                    graphql_url,
+                    params={'doc_id': candidate, 'variables': json.dumps(variables)},
+                    timeout=30,
+                )
+            except Exception:
+                logging.debug("Method 6b: GraphQL request error")
+                break
+
+            if resp.status_code != 200:
+                logging.debug(f"Method 6b: GraphQL failed ({resp.status_code}) with doc_id {candidate}")
+                break
+
+            try:
+                data = resp.json()
+            except Exception:
+                logging.debug("Method 6b: GraphQL JSON decode failed")
+                break
+
+            if data.get('status') == 'fail':
+                logging.debug(f"Method 6b: GraphQL status fail: {data.get('message', '')[:120]}")
+                break
+
+            user_block = data.get('data', {}).get('user')
+            if not user_block:
+                logging.debug("Method 6b: GraphQL response missing user block")
+                break
+
+            media = user_block.get('edge_owner_to_timeline_media', {}) or {}
+            new_entries = _instagram_entries_from_media(media)
+
+            if new_entries:
+                entries.extend(new_entries)
+                pagination_added = True
+            else:
+                break
+
+            if max_videos > 0 and len(entries) >= max_videos:
+                return entries[:max_videos]
+
+            page_info = media.get('page_info', {}) or {}
+            has_next = bool(page_info.get('has_next_page'))
+            cursor = page_info.get('end_cursor')
+
+        if max_videos > 0 and len(entries) >= max_videos:
+            break
+
+        # If we fetched additional pages with this doc_id, stop trying other doc_ids
+        if pagination_added:
+            break
+
+    return entries
+
+
 def _method_instaloader(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, proxy: str = None) -> typing.List[dict]:
     """METHOD 5: Instaloader (INSTAGRAM SPECIALIST) - No artificial limits"""
     if platform_key != 'instagram':
@@ -1945,7 +2238,8 @@ def _method_selenium(
     max_videos: int = 0,
     cookie_file: str = None,
     proxy: str = None,
-    progress_callback=None
+    progress_callback=None,
+    expected_count: int = 0
 ) -> typing.List[dict]:
     """
     METHOD 8: Selenium Headless (ENHANCED with Proxy + Cookies + Stealth)
@@ -2044,22 +2338,78 @@ def _method_selenium(
         # Wait for page to load
         time.sleep(5)
 
+        target_count = max_videos if max_videos > 0 else (expected_count or 0)
+
         # Platform-specific selectors
         selector_map = {
             'tiktok': 'a[href*="/video/"]',
-            'instagram': 'a[href*="/p/"], a[href*="/reel/"]',
+            'instagram': 'a[href*="/p/"], a[href*="/reel/"], a[href*="/tv/"]',
             'youtube': 'a[href*="/watch?v="], a[href*="/shorts/"]'  # FIXED: Added Shorts support
         }
         selector = selector_map.get(platform_key, 'a')
 
+        def _normalize_instagram_href(href: str) -> str:
+            if href.startswith('/'):
+                href = f"https://www.instagram.com{href}"
+            href = href.split('?')[0].split('#')[0].rstrip('/')
+            return href + '/' if not href.endswith('/') else href
+
+        def _instagram_login_gate() -> bool:
+            try:
+                if 'accounts/login' in (driver.current_url or ''):
+                    return True
+                if driver.find_elements(By.CSS_SELECTOR, 'a[href*="/accounts/login"]'):
+                    return True
+                if driver.find_elements(By.XPATH, "//*[contains(text(),'Log in') or contains(text(),'Login')]"):
+                    return True
+            except Exception:
+                return False
+            return False
+
+        def _try_click_load_more() -> bool:
+            if platform_key != 'instagram':
+                return False
+            try:
+                buttons = driver.find_elements(
+                    By.XPATH,
+                    "//button//*[contains(text(),'Load more') or contains(text(),'Show more')]/.."
+                )
+                for btn in buttons:
+                    try:
+                        btn.click()
+                        return True
+                    except Exception:
+                        continue
+            except Exception:
+                return False
+            return False
+
         seen_urls: typing.Set[str] = set()
         scroll_attempts = 0
         stagnant_rounds = 0
+        stagnant_limit = 3
+        max_scrolls = 20
+
+        if platform_key == 'instagram':
+            stagnant_limit = 5
+            if target_count:
+                max_scrolls = min(200, max(40, target_count // 8 + 6))
+            else:
+                max_scrolls = 60
+        elif platform_key == 'tiktok':
+            max_scrolls = 40 if max_videos == 0 else min(60, max_videos // 5 + 5)
+        elif platform_key == 'youtube':
+            max_scrolls = 30 if max_videos == 0 else min(50, max_videos // 10 + 5)
+
+        try:
+            last_height = driver.execute_script("return document.body.scrollHeight")
+        except Exception:
+            last_height = None
 
         if progress_callback:
-            progress_callback(f"📜 Selenium: Scrolling and extracting links...")
+            progress_callback("Selenium: Scrolling and extracting links...")
 
-        while scroll_attempts < 20 and stagnant_rounds < 3:
+        while scroll_attempts < max_scrolls and stagnant_rounds < stagnant_limit:
             links = driver.find_elements(By.CSS_SELECTOR, selector)
             before_count = len(seen_urls)
 
@@ -2069,32 +2419,58 @@ def _method_selenium(
                     continue
                 if platform_key == 'tiktok' and '/video/' not in href:
                     continue
+                if platform_key == 'instagram':
+                    if '/p/' not in href and '/reel/' not in href and '/tv/' not in href:
+                        continue
+                    href = _normalize_instagram_href(href)
                 seen_urls.add(href)
-                if max_videos and len(seen_urls) >= max_videos:
+                if target_count and len(seen_urls) >= target_count:
                     break
 
-            if max_videos and len(seen_urls) >= max_videos:
+            if target_count and len(seen_urls) >= target_count:
                 if progress_callback:
-                    progress_callback(f"✓ Selenium: Reached limit of {max_videos} videos")
+                    progress_callback(f"Selenium: Reached limit of {target_count} items")
                 break
 
-            # Check if we found new links this round
             new_links_found = len(seen_urls) - before_count
-            if new_links_found == 0:
+            try:
+                current_height = driver.execute_script("return document.body.scrollHeight")
+            except Exception:
+                current_height = last_height
+
+            height_changed = (
+                current_height is not None
+                and last_height is not None
+                and current_height > last_height
+            )
+
+            if new_links_found == 0 and not height_changed:
                 stagnant_rounds += 1
+                if platform_key == 'instagram' and stagnant_rounds >= 2:
+                    if _instagram_login_gate():
+                        if progress_callback:
+                            progress_callback("Selenium: Instagram login required - check cookies")
+                        break
+                    if _try_click_load_more():
+                        stagnant_rounds = 0
+                        time.sleep(random.uniform(1.5, 2.5))
                 if progress_callback and stagnant_rounds == 1:
-                    progress_callback(f"⏳ Selenium: No new links, continuing... ({len(seen_urls)} total)")
+                    progress_callback(f"Selenium: No new links, continuing... ({len(seen_urls)} total)")
             else:
                 stagnant_rounds = 0
                 if progress_callback and scroll_attempts % 5 == 0:
-                    progress_callback(f"📊 Selenium: Found {len(seen_urls)} links so far...")
+                    progress_callback(f"Selenium: Found {len(seen_urls)} links so far...")
 
-            # Human-like scrolling with random variation
-            scroll_amount = random.randint(1200, 1800)
+            last_height = current_height
+
+            if platform_key == 'instagram':
+                scroll_amount = random.randint(800, 1400)
+                delay = random.uniform(2.0, 3.5)
+            else:
+                scroll_amount = random.randint(1200, 1800)
+                delay = random.uniform(1.5, 2.5)
+
             driver.execute_script(f"window.scrollBy(0, {scroll_amount})")
-
-            # Random delay to mimic human behavior
-            delay = random.uniform(1.5, 2.5)
             time.sleep(delay)
             scroll_attempts += 1
 
@@ -2562,6 +2938,10 @@ def extract_links_intelligent(
              lambda: _method_gallery_dl(url, platform_key, cookie_file, active_proxy),
              platform_key in ['instagram', 'tiktok']),
 
+            ("Method 6b: Instagram Web API (cookies)",
+             lambda: _method_instagram_web_api(url, platform_key, cookie_file, max_videos, active_proxy),
+             platform_key == 'instagram'),
+
             ("Method 5: Instaloader",
              lambda: _method_instaloader(url, platform_key, cookie_file, max_videos, active_proxy),
              platform_key == 'instagram'),
@@ -2571,7 +2951,7 @@ def extract_links_intelligent(
              platform_key in ['tiktok', 'instagram', 'youtube']),
 
             ("Method 8: Selenium Headless (ENHANCED: Proxy + Cookies + Stealth)",
-             lambda: _method_selenium(url, platform_key, max_videos, cookie_file, active_proxy, progress_callback),
+             lambda: _method_selenium(url, platform_key, max_videos, cookie_file, active_proxy, progress_callback, expected_count),
              True),
         ]
 

@@ -5,6 +5,7 @@ import subprocess
 import re
 import time
 import random
+import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -98,6 +99,59 @@ def _get_chrome120_headers() -> list:
     headers.extend(['--add-header', 'DNT:1'])
 
     return headers
+
+def _resolve_ffmpeg_path() -> Optional[str]:
+    """
+    Resolve ffmpeg executable path from bundle, repo, env, or PATH.
+    Returns absolute path when possible, else None.
+    """
+    try:
+        from modules.video_editor.utils import check_ffmpeg, get_ffmpeg_path
+        if check_ffmpeg():
+            path = get_ffmpeg_path()
+            if path:
+                if path == 'ffmpeg':
+                    which_path = shutil.which("ffmpeg")
+                    if which_path:
+                        return which_path
+                elif Path(path).exists():
+                    return path
+    except Exception:
+        pass
+
+    env_path = os.getenv("FFMPEG_PATH")
+    if env_path:
+        if env_path == 'ffmpeg':
+            which_path = shutil.which("ffmpeg")
+            if which_path:
+                return which_path
+        elif Path(env_path).exists():
+            return env_path
+
+    repo_root = Path(__file__).resolve().parents[2]
+    exe_name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+    candidates = [
+        repo_root / "ffmpeg" / "bin" / exe_name,
+        repo_root / "ffmpeg" / exe_name,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+
+    which_path = shutil.which("ffmpeg")
+    if which_path:
+        return which_path
+
+    if os.name == "nt":
+        fallbacks = [
+            Path("C:/ffmpeg/bin/ffmpeg.exe"),
+            Path("C:/ffmpeg/ffmpeg.exe"),
+        ]
+        for fallback in fallbacks:
+            if fallback.exists():
+                return str(fallback)
+
+    return None
 
 def _validate_cookie_file(cookie_file: str, max_age_days: int = 14) -> dict:
     """
@@ -274,6 +328,12 @@ class VideoDownloaderThread(QThread):
             quality_pref = self.options.get('quality')
             format_override = quality_to_format(quality_pref)
         self.format_override = format_override
+        self.ffmpeg_path = _resolve_ffmpeg_path()
+        self._format_fallback_applied = False
+        if not self.ffmpeg_path and self.format_override:
+            if 'bestvideo' in self.format_override or '+' in self.format_override:
+                self.format_override = 'best[ext=mp4]/best'
+                self._format_fallback_applied = True
 
         # Proxy configuration (for IP block bypass) - ENHANCED
         # Priority: Options → Link Grabber config → Environment variable
@@ -549,11 +609,40 @@ class VideoDownloaderThread(QThread):
         try:
             from modules.config.paths import find_ytdlp_executable
             cmd = find_ytdlp_executable()
+            if cmd and not self._verify_cli(cmd, ['--version']):
+                self.progress.emit("ERROR: yt-dlp found but not runnable. Check installation.")
+                cmd = None
             self._ytdlp_cmd_cache = cmd
             return cmd
         except Exception:
             self._ytdlp_cmd_cache = None
             return None
+
+    def _verify_cli(self, cmd: str, args: list) -> bool:
+        if not cmd:
+            return False
+        try:
+            result = subprocess.run(
+                [cmd] + list(args),
+                capture_output=True,
+                text=True,
+                timeout=5,
+                encoding='utf-8',
+                errors='replace',
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    def _ffmpeg_cli_args(self) -> list:
+        if not self.ffmpeg_path:
+            return []
+        return ['--ffmpeg-location', self.ffmpeg_path]
+
+    def _apply_ffmpeg_ydl_opts(self, ydl_opts: dict) -> None:
+        if not self.ffmpeg_path:
+            return
+        ydl_opts['ffmpeg_location'] = self.ffmpeg_path
 
     def _cleanup_tracking_files(self, folder_path: str):
         """Remove any leftover tracking files (for single mode cleanup)"""
@@ -725,6 +814,7 @@ class VideoDownloaderThread(QThread):
 
             # ENHANCED: Add realistic Chrome 120 headers to avoid detection
             cmd.extend(_get_chrome120_headers())
+            cmd.extend(self._ffmpeg_cli_args())
 
             # Add proxy if available
             if current_proxy:
@@ -909,6 +999,7 @@ class VideoDownloaderThread(QThread):
 
                     # ENHANCED: Add realistic Chrome 120 headers + TikTok-specific referer
                     cmd.extend(_get_chrome120_headers())
+                    cmd.extend(self._ffmpeg_cli_args())
                     cmd.extend(['--add-header', 'Referer:https://www.tiktok.com/'])
 
                     # Add proxy if requested
@@ -1006,6 +1097,7 @@ class VideoDownloaderThread(QThread):
                 'progress_hooks': [self._progress_hook],
                 'http_headers': {'User-Agent': user_agent},  # UA rotation
             }
+            self._apply_ffmpeg_ydl_opts(ydl_opts)
 
             # Add proxy if available
             if current_proxy:
@@ -1125,6 +1217,7 @@ class VideoDownloaderThread(QThread):
 
                 # ENHANCED: Add realistic Chrome 120 headers to avoid detection
                 cmd.extend(_get_chrome120_headers())
+                cmd.extend(self._ffmpeg_cli_args())
 
                 # Add proxy
                 if current_proxy:
@@ -1289,6 +1382,7 @@ class VideoDownloaderThread(QThread):
                 '--continue',
                 '--no-check-certificate'
             ]
+            cmd.extend(self._ffmpeg_cli_args())
 
             if cookie_file:
                 cmd.extend(['--cookies', cookie_file])
@@ -1335,7 +1429,11 @@ class VideoDownloaderThread(QThread):
                 self.progress.emit(f"   ⚠️ No proxy (IP blocks possible)")
             self.progress.emit(f"   🎭 UA: {user_agent[:45]}...")
 
-            format_options = ['best[ext=mp4]', 'bestvideo+bestaudio', 'best']
+            format_options = [
+                'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+                'best[ext=mp4]',
+                'best',
+            ]
             if self.format_override and self.format_override not in format_options:
                 format_options.insert(0, self.format_override)
             elif self.format_override:
@@ -1354,6 +1452,7 @@ class VideoDownloaderThread(QThread):
                     if current_proxy:
                         ydl_opts['proxy'] = current_proxy
                     if cookie_file: ydl_opts['cookiefile'] = cookie_file
+                    self._apply_ffmpeg_ydl_opts(ydl_opts)
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                         ydl.download([url])
                     self.progress.emit(f"✅ Method 4 SUCCESS (format: {fmt})")
@@ -1393,6 +1492,7 @@ class VideoDownloaderThread(QThread):
 
             # ENHANCED: Add realistic Chrome 120 headers to avoid detection
             cmd.extend(_get_chrome120_headers())
+            cmd.extend(self._ffmpeg_cli_args())
 
             # Add proxy
             if current_proxy:
@@ -1457,6 +1557,20 @@ class VideoDownloaderThread(QThread):
                 self.finished.emit(False, "❌ No URLs provided")
                 return
             total = len(self.urls)
+            ytdlp_cmd = self._get_ytdlp_command()
+            if not ytdlp_cmd:
+                self.progress.emit("ERROR: yt-dlp not found; using Python API fallback.")
+            if self.ffmpeg_path and not self._verify_cli(self.ffmpeg_path, ['-version']):
+                self.progress.emit("ERROR: ffmpeg found but not runnable. Check installation.")
+                self.ffmpeg_path = None
+                if self.format_override and not self._format_fallback_applied:
+                    if 'bestvideo' in self.format_override or '+' in self.format_override:
+                        self.format_override = 'best[ext=mp4]/best'
+                        self._format_fallback_applied = True
+            if not self.ffmpeg_path:
+                self.progress.emit("ERROR: ffmpeg not found; audio/video may download separately.")
+            if self._format_fallback_applied:
+                self.progress.emit("WARNING: ffmpeg missing; using single-file format (lower quality).")
 
             # Show mode clearly
             mode_name = "🔹 BULK MODE" if self.is_bulk_mode else "🔸 SINGLE MODE"

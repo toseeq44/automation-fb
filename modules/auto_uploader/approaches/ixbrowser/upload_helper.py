@@ -119,8 +119,6 @@ class VideoUploadHelper:
         self.current_video = None
         self.current_bookmark = None
         self.current_attempt = 0
-        self._last_publish_hover_point = None
-        self._last_publish_hover_time = None
 
         try:
             pyautogui.MINIMUM_DURATION = 0.25
@@ -2394,38 +2392,6 @@ class VideoUploadHelper:
         except Exception as e:
             logger.debug("[Upload] Method 3 failed: %s", str(e))
 
-        # Method 4: Image recognition (enabled state)
-        try:
-            logger.info("[Upload] Method 4: Image recognition (enabled button)")
-
-            # Take screenshot to search in
-            screenshot = pyautogui.screenshot()
-
-            # Find button using image matching
-            button_location = pyautogui.locateOnScreen(
-                PUBLISH_BUTTON_ENABLED_IMAGE,
-                confidence=0.8
-            )
-
-            if button_location:
-                logger.info("[Upload] ✓ Found Publish button via image recognition!")
-                logger.info("[Upload]   Location: %s", button_location)
-
-                # Get center coordinates
-                center_x, center_y = pyautogui.center(button_location)
-
-                # Find element at those coordinates using JavaScript
-                element = self.driver.execute_script("""
-                    return document.elementFromPoint(arguments[0], arguments[1]);
-                """, center_x, center_y)
-
-                if element:
-                    logger.info("[Upload] ✓ Got WebElement from image coordinates")
-                    return element
-
-        except Exception as e:
-            logger.debug("[Upload] Method 4 (image recognition) failed: %s", str(e))
-
         logger.warning("[Upload] ⚠ Publish button NOT found after trying all methods")
         return None
 
@@ -2593,9 +2559,6 @@ class VideoUploadHelper:
 
             # Step 5: Move ACTUAL physical mouse using PyAutoGUI
             logger.info("[Upload] Moving PHYSICAL mouse to button...")
-            self._last_publish_hover_point = (int(screen_x), int(screen_y))
-            self._last_publish_hover_time = time.time()
-
             # Get current mouse position
             current_x, current_y = pyautogui.position()
             logger.info("[Upload] Current mouse position: x=%d, y=%d", current_x, current_y)
@@ -2653,31 +2616,13 @@ class VideoUploadHelper:
             True if click succeeded, False otherwise
         """
         try:
-            logger.info("[Upload] ═══════════════════════════════════════════")
             logger.info("[Upload] CLICKING PUBLISH BUTTON")
-            # Method 0: Physical mouse click at last hover point (most human-like)
-            if self._last_publish_hover_point and self._last_publish_hover_time:
-                try:
-                    if (time.time() - self._last_publish_hover_time) > 10:
-                        self._last_publish_hover_point = None
-                        self._last_publish_hover_time = None
-                        raise Exception("Last hover point is stale")
-                    logger.info("[Upload] Attempting physical mouse click...")
-                    hover_x, hover_y = self._last_publish_hover_point
-                    self._human_move_to(hover_x, hover_y, min_duration=0.4, max_duration=0.9)
-                    pyautogui.click()
-                    logger.info("[Upload] Physical mouse click executed")
-                    self._post_click_wait()
-                    return True
-                except Exception as e:
-                    logger.debug("[Upload] Physical mouse click failed: %s", str(e))
-            logger.info("[Upload] ═══════════════════════════════════════════")
 
             # Method 1: Try Selenium click first
             try:
                 logger.info("[Upload] Attempting Selenium click...")
                 button.click()
-                logger.info("[Upload] ✓ Selenium click executed")
+                logger.info("[Upload] Selenium click executed")
                 self._post_click_wait()
                 return True
             except Exception as e:
@@ -2687,7 +2632,7 @@ class VideoUploadHelper:
             try:
                 logger.info("[Upload] Attempting JavaScript click...")
                 self.driver.execute_script("arguments[0].click();", button)
-                logger.info("[Upload] ✓ JavaScript click executed")
+                logger.info("[Upload] JavaScript click executed")
                 self._post_click_wait()
                 return True
             except Exception as e:
@@ -2698,31 +2643,52 @@ class VideoUploadHelper:
                 logger.info("[Upload] Attempting ActionChains click...")
                 actions = ActionChains(self.driver)
                 actions.move_to_element(button).click().perform()
-                logger.info("[Upload] ✓ ActionChains click executed")
+                logger.info("[Upload] ActionChains click executed")
                 self._post_click_wait()
                 return True
             except Exception as e:
                 logger.debug("[Upload] ActionChains click failed: %s", str(e))
 
-            # Method 4: Try pyautogui click (last resort)
-            try:
-                logger.info("[Upload] Attempting pyautogui click...")
-                location = button.location
-                size = button.size
-                center_x = int(location['x'] + size['width'] / 2)
-                center_y = int(location['y'] + size['height'] / 2)
-                pyautogui.click(center_x, center_y)
-                logger.info("[Upload] ✓ Pyautogui click executed at (%d, %d)", center_x, center_y)
-                self._post_click_wait()
+            # Method 4: Image-based click (last resort)
+            if self.click_publish_button_image():
                 return True
-            except Exception as e:
-                logger.debug("[Upload] Pyautogui click failed: %s", str(e))
 
-            logger.error("[Upload] ✗ All click methods failed!")
+            logger.error("[Upload] All click methods failed!")
             return False
 
         except Exception as e:
             logger.error("[Upload] Error clicking publish button: %s", str(e))
+            return False
+
+    def click_publish_button_image(self) -> bool:
+        """
+        Click publish button using image recognition.
+        """
+        try:
+            enabled_match = pyautogui.locateOnScreen(
+                PUBLISH_BUTTON_ENABLED_IMAGE,
+                confidence=0.8
+            )
+            if not enabled_match:
+                disabled_match = pyautogui.locateOnScreen(
+                    PUBLISH_BUTTON_DISABLED_IMAGE,
+                    confidence=0.8
+                )
+                if disabled_match:
+                    logger.warning("[Upload] Publish button appears disabled (image match)")
+                else:
+                    logger.warning("[Upload] Publish button image not found")
+                return False
+
+            center_x, center_y = pyautogui.center(enabled_match)
+            logger.info("[Upload] Clicking Publish button via image detection at (%d, %d)", center_x, center_y)
+            self._human_move_to(center_x, center_y, min_duration=0.4, max_duration=0.9)
+            pyautogui.click()
+            self._post_click_wait()
+            return True
+
+        except Exception as e:
+            logger.debug("[Upload] Image-based publish click failed: %s", str(e))
             return False
 
     def verify_publish_success(self, timeout: int = 10) -> bool:
@@ -2784,57 +2750,67 @@ class VideoUploadHelper:
         This is called after upload completes.
 
         Returns:
-            True if button found and hovered, False otherwise
+            True if publish click succeeded, False otherwise
         """
         try:
-            # Step 1: Find the button
+            publish_clicked = False
+
+            # Step 1: Find the button via DOM
             button = self.find_publish_button()
-
             if not button:
-                logger.warning("[Upload] ⚠ Could not find Publish button")
-                logger.warning("[Upload] Continuing to next bookmark anyway...")
-                return False
+                logger.warning("[Upload] Publish button not found via DOM; trying image detection")
+                publish_clicked = self.click_publish_button_image()
+                if publish_clicked:
+                    logger.info("[Upload] Publish button clicked via image detection")
+                else:
+                    logger.warning("[Upload] Could not click Publish button via image detection")
+                return publish_clicked
 
-            logger.info("[Upload] ✓ Publish button found!")
+            logger.info("[Upload] Publish button found")
 
             # Step 2: Check if enabled
             logger.info("[Upload] Checking button state...")
             is_enabled = self.is_publish_button_enabled(button)
-
             if is_enabled:
-                logger.info("[Upload] ✓ Publish button is ENABLED")
+                logger.info("[Upload] Publish button is ENABLED")
             else:
-                logger.warning("[Upload] ⚠ Publish button is DISABLED")
+                logger.warning("[Upload] Publish button is DISABLED")
                 logger.warning("[Upload] (Upload might not be complete yet)")
 
-            # Step 3: Hover on button (regardless of enabled state, for visual confirmation)
+            # Step 3: Hover for visual confirmation
             hover_success = self.hover_on_publish_button(button)
+            if not hover_success:
+                logger.warning("[Upload] Hover failed; continuing click flow")
 
-            # Step 4: CLICK the publish button if enabled
+            # Step 4: Click publish if enabled
             if is_enabled:
-                logger.info("[Upload] ═══════════════════════════════════════════")
                 logger.info("[Upload] CLICKING PUBLISH BUTTON")
-                logger.info("[Upload] ═══════════════════════════════════════════")
-
                 if self.click_publish_button(button):
-                    logger.info("✓ Publish button clicked!")
+                    logger.info("[Upload] Publish button clicked")
+                    publish_clicked = True
                 else:
-                    logger.warning("⚠ Click failed, but continuing...")
+                    logger.warning("[Upload] DOM click failed; trying image detection")
+                    if self.click_publish_button_image():
+                        logger.info("[Upload] Publish button clicked via image detection")
+                        publish_clicked = True
+                    else:
+                        logger.warning("[Upload] Image-based publish click failed")
+            else:
+                # If DOM says disabled, try image detection in case it's already active
+                if self.click_publish_button_image():
+                    logger.info("[Upload] Publish button clicked via image detection")
+                    publish_clicked = True
 
             # Step 5: Brief wait for Facebook (reduced to prevent session timeout)
             try:
                 from .config.upload_config import NOTIFICATION_CONFIG
-                post_publish_wait = NOTIFICATION_CONFIG.get('post_publish_wait', 1)  # Reduced to 1 second
-
+                post_publish_wait = NOTIFICATION_CONFIG.get('post_publish_wait', 1)
                 time.sleep(post_publish_wait)
-
-                # Optional: Try to dismiss any notifications that appeared
                 self.dismiss_notifications()
-
             except Exception as e:
                 logger.debug("[Upload] Post-publish wait failed: %s", str(e))
 
-            return hover_success
+            return publish_clicked
 
         except Exception as e:
             logger.error("[Upload] Error in detect_and_hover_publish_button: %s", str(e))

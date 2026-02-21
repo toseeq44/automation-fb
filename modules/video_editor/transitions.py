@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 modules/video_editor/transitions.py
 Video Transitions and Effects

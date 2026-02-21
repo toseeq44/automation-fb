@@ -11,6 +11,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 from .simple_merge_tab import SimpleMergeTab
 from .bulk_folder_tab import BulkFolderTab
+from .smart_clip_tab import SmartClipMergeTab
 from .progress_widget import ProgressWidget
 from modules.logging.logger import get_logger
 
@@ -73,6 +74,12 @@ class VideoMergerWindow(QDialog):
         self.bulk_tab.merge_started.connect(self._on_merge_started)
         self.bulk_tab.merge_completed.connect(self._on_merge_completed)
         self.tabs.addTab(self.bulk_tab, "📁 Bulk Folder Merge")
+
+        # Tab 3: Smart Clip Merge
+        self.smart_clip_tab = SmartClipMergeTab()
+        self.smart_clip_tab.merge_started.connect(self._on_merge_started)
+        self.smart_clip_tab.merge_completed.connect(self._on_merge_completed)
+        self.tabs.addTab(self.smart_clip_tab, "✂️ Smart Clip Merge")
 
         splitter.addWidget(self.tabs)
 
@@ -225,6 +232,8 @@ class VideoMergerWindow(QDialog):
     def reset_all(self):
         """Reset all tabs"""
         self.simple_tab.reset()
+        self.bulk_tab.clear_all()
+        self.smart_clip_tab.reset()
         self.progress_widget.reset()
         logger.info("Reset all")
 
@@ -262,6 +271,13 @@ class VideoMergerWindow(QDialog):
 📊 PREVIEW BATCHES:
 • (Bulk mode only) Preview how videos will be batched
   before starting the merge
+
+✂️ SMART CLIP MERGE:
+• Select videos (simple) or folders (bulk)
+• Review table summary with check/uncheck and duration
+• Set global/per-video clip seconds
+• Extract exact-center or random clip section
+• Merge clips and save to Smart Clip Merge output
         """
 
         QMessageBox.information(self, "Help", help_text)

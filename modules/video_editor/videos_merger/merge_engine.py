@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 modules/video_editor/videos_merger/merge_engine.py
 Core video merging engine with trim, crop, zoom, flip, and transitions
@@ -14,12 +16,26 @@ logger = get_logger(__name__)
 # Try to import MoviePy (MoviePy 2.x structure)
 try:
     from moviepy import VideoFileClip, concatenate_videoclips, vfx
-    from proglog import ProgressBarLogger
     MOVIEPY_AVAILABLE = True
 except ImportError:
     MOVIEPY_AVAILABLE = False
-    ProgressBarLogger = None
     logger.warning("MoviePy not available. Install with: pip install moviepy")
+
+# proglog is optional for export progress. Do not fail merge engine if missing.
+try:
+    from proglog import ProgressBarLogger
+except ImportError:
+    ProgressBarLogger = None
+
+try:
+    import numpy as np
+except ImportError:
+    np = None
+
+try:
+    from scipy.ndimage import gaussian_filter
+except ImportError:
+    gaussian_filter = None
 
 
 class MergeCancelled(Exception):
@@ -115,6 +131,18 @@ class MergeSettings:
         self.flip_horizontal: bool = False  # Mirror (left-right)
         self.flip_vertical: bool = False  # Upside down
 
+        # Color enhancement settings
+        self.color_enhance_enabled: bool = False
+        self.brightness: float = 1.0
+        self.contrast: float = 1.0
+        self.saturation: float = 1.0
+
+        # Blur sides settings
+        self.blur_sides_enabled: bool = False
+        self.blur_sides_strength: float = 6.0
+        self.blur_sides_width_percent: int = 18
+        self.blur_sides_feather_percent: int = 60
+
         # Transition settings
         self.transition_type: str = 'crossfade'  # 'crossfade', 'fade', 'slide_left', etc.
         self.transition_duration: float = 1.0  # Seconds
@@ -143,6 +171,14 @@ class MergeSettings:
             'zoom_factor': self.zoom_factor,
             'flip_horizontal': self.flip_horizontal,
             'flip_vertical': self.flip_vertical,
+            'color_enhance_enabled': self.color_enhance_enabled,
+            'brightness': self.brightness,
+            'contrast': self.contrast,
+            'saturation': self.saturation,
+            'blur_sides_enabled': self.blur_sides_enabled,
+            'blur_sides_strength': self.blur_sides_strength,
+            'blur_sides_width_percent': self.blur_sides_width_percent,
+            'blur_sides_feather_percent': self.blur_sides_feather_percent,
             'transition_type': self.transition_type,
             'transition_duration': self.transition_duration,
             'clip_speeds': self.clip_speeds,
@@ -360,6 +396,122 @@ class VideoMergeEngine:
         logger.info(f"Applying speed: {speed_factor:.2f}x")
         return clip.with_effects([vfx.MultiplySpeed(factor=speed_factor)])
 
+    def apply_color_enhancement(
+        self,
+        clip: VideoFileClip,
+        brightness: float = 1.0,
+        contrast: float = 1.0,
+        saturation: float = 1.0,
+    ) -> VideoFileClip:
+        """
+        Apply basic color enhancement.
+        """
+        if np is None:
+            logger.warning("NumPy unavailable; skipping color enhancement")
+            return clip
+
+        if (
+            abs(brightness - 1.0) < 0.01
+            and abs(contrast - 1.0) < 0.01
+            and abs(saturation - 1.0) < 0.01
+        ):
+            return clip
+
+        brightness = max(0.2, min(2.5, brightness))
+        contrast = max(0.2, min(2.5, contrast))
+        saturation = max(0.0, min(2.5, saturation))
+        logger.info(
+            f"Applying color enhancement: brightness={brightness:.2f}, "
+            f"contrast={contrast:.2f}, saturation={saturation:.2f}"
+        )
+
+        def color_transform(get_frame, t):
+            frame = get_frame(t)
+            arr = frame.astype(np.float32)
+
+            # Brightness
+            if abs(brightness - 1.0) > 0.01:
+                arr = arr * brightness
+
+            # Contrast
+            if abs(contrast - 1.0) > 0.01:
+                arr = (arr - 127.5) * contrast + 127.5
+
+            # Saturation
+            if abs(saturation - 1.0) > 0.01 and arr.ndim == 3 and arr.shape[2] >= 3:
+                gray = (
+                    arr[:, :, 0] * 0.299
+                    + arr[:, :, 1] * 0.587
+                    + arr[:, :, 2] * 0.114
+                )[:, :, None]
+                arr[:, :, :3] = gray + (arr[:, :, :3] - gray) * saturation
+
+            arr = np.clip(arr, 0, 255).astype(np.uint8)
+            return arr
+
+        return clip.transform(color_transform)
+
+    def apply_blur_sides(
+        self,
+        clip: VideoFileClip,
+        strength: float = 6.0,
+        width_percent: int = 18,
+        feather_percent: int = 60,
+    ) -> VideoFileClip:
+        """
+        Blur only left and right side bands.
+        """
+        if np is None or gaussian_filter is None:
+            logger.warning("NumPy/SciPy unavailable; skipping blur sides effect")
+            return clip
+
+        width_percent = max(1, min(45, int(width_percent)))
+        strength = max(0.5, min(20.0, float(strength)))
+        feather_percent = max(0, min(100, int(feather_percent)))
+        logger.info(
+            f"Applying blur sides: width={width_percent}%, strength={strength:.1f}, "
+            f"feather={feather_percent}%"
+        )
+
+        def blur_sides_transform(get_frame, t):
+            frame = get_frame(t)
+            if frame.ndim != 3 or frame.shape[1] < 10:
+                return frame
+
+            h, w = frame.shape[:2]
+            side_w = int((w * width_percent) / 100.0)
+            if side_w <= 0 or (side_w * 2) >= w:
+                return frame
+
+            arr = frame.astype(np.float32)
+            blurred = np.empty_like(arr)
+            channels = min(arr.shape[2], 3)
+            for c in range(channels):
+                blurred[:, :, c] = gaussian_filter(arr[:, :, c], sigma=strength)
+            if arr.shape[2] > 3:
+                blurred[:, :, 3:] = arr[:, :, 3:]
+
+            # Build smooth side blend mask so blur ends naturally.
+            feather_w = int(side_w * (feather_percent / 100.0))
+            edge_distance = np.minimum(np.arange(w), np.arange(w)[::-1]).astype(np.float32)
+
+            alpha_1d = np.zeros(w, dtype=np.float32)
+            if feather_w <= 0:
+                alpha_1d[edge_distance < side_w] = 1.0
+            else:
+                full_blur_limit = max(0, side_w - feather_w)
+                full_mask = edge_distance <= full_blur_limit
+                alpha_1d[full_mask] = 1.0
+
+                feather_mask = (edge_distance > full_blur_limit) & (edge_distance < side_w)
+                alpha_1d[feather_mask] = (side_w - edge_distance[feather_mask]) / max(feather_w, 1)
+
+            alpha = alpha_1d.reshape(1, w, 1)
+            result = (arr * (1.0 - alpha)) + (blurred * alpha)
+            return np.clip(result, 0, 255).astype(np.uint8)
+
+        return clip.transform(blur_sides_transform)
+
     def _parse_bitrate(self, value: Any) -> Optional[int]:
         """Normalize bitrate value to bits per second."""
         if value is None:
@@ -487,6 +639,24 @@ class VideoMergeEngine:
                 # Apply flip
                 if settings.flip_horizontal or settings.flip_vertical:
                     processed = self.apply_flip(processed, settings.flip_horizontal, settings.flip_vertical)
+
+                # Apply color enhancement
+                if settings.color_enhance_enabled:
+                    processed = self.apply_color_enhancement(
+                        processed,
+                        settings.brightness,
+                        settings.contrast,
+                        settings.saturation,
+                    )
+
+                # Apply side blur effect
+                if settings.blur_sides_enabled:
+                    processed = self.apply_blur_sides(
+                        processed,
+                        settings.blur_sides_strength,
+                        settings.blur_sides_width_percent,
+                        settings.blur_sides_feather_percent,
+                    )
 
                 # Apply speed (auto 1.40x for clips longer than 90s when not specified)
                 speed_factor = None

@@ -2,7 +2,7 @@
 # Set to True during development to skip license checks
 # Set to False for production
 
-DEV_MODE = False  # Change to True only for local debugging
+DEV_MODE = True  # Change to True only for local debugging
 
 # Development settings
 DEV_CONFIG = {

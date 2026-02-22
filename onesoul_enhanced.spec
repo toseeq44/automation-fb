@@ -116,6 +116,7 @@ a = Analysis(
         'moviepy.editor',
         'imageio',
         'imageio_ffmpeg',
+        'proglog',
         'numpy',
         'scipy',
         'PIL',

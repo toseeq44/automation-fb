@@ -1,3 +1,5 @@
+﻿from __future__ import annotations
+
 """
 modules/video_editor/videos_merger/merge_engine.py
 Core video merging engine with trim, crop, zoom, flip, and transitions
@@ -14,12 +16,16 @@ logger = get_logger(__name__)
 # Try to import MoviePy (MoviePy 2.x structure)
 try:
     from moviepy import VideoFileClip, concatenate_videoclips, vfx
-    from proglog import ProgressBarLogger
     MOVIEPY_AVAILABLE = True
 except ImportError:
     MOVIEPY_AVAILABLE = False
-    ProgressBarLogger = None
     logger.warning("MoviePy not available. Install with: pip install moviepy")
+
+# proglog is optional for export progress. Do not fail merge engine if missing.
+try:
+    from proglog import ProgressBarLogger
+except ImportError:
+    ProgressBarLogger = None
 
 try:
     import numpy as np
@@ -929,3 +935,4 @@ def merge_videos(video_paths: List[str], output_path: str,
             except Exception:
                 pass
         return False
+

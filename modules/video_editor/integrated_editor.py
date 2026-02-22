@@ -308,6 +308,13 @@ class IntegratedVideoEditor(QWidget):
         merging_btn.clicked.connect(self.open_video_merger)
         layout.addWidget(merging_btn)
 
+        # Video Splitter Button
+        splitter_btn = QPushButton("✂️ Video Splitter")
+        splitter_btn.setStyleSheet(button_style)
+        splitter_btn.setToolTip("Split videos in single or bulk mode")
+        splitter_btn.clicked.connect(self.open_video_splitter)
+        layout.addWidget(splitter_btn)
+
         # Title Generator Button
         title_gen_btn = QPushButton("🪄 Title Generator")
         title_gen_btn.setStyleSheet(button_style)
@@ -1246,6 +1253,58 @@ class IntegratedVideoEditor(QWidget):
                 self,
                 "Error",
                 f"Failed to open video merger window:\n{str(e)}"
+            )
+
+    def open_video_splitter(self):
+        """Open video splitter workflow with mode selection."""
+        try:
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("Video Splitter")
+            msg_box.setText("Select splitting mode:")
+            single_btn = msg_box.addButton("Single Video", QMessageBox.AcceptRole)
+            bulk_btn = msg_box.addButton("Bulk Folder", QMessageBox.AcceptRole)
+            msg_box.addButton("Cancel", QMessageBox.RejectRole)
+            msg_box.exec_()
+
+            clicked = msg_box.clickedButton()
+            if clicked not in (single_btn, bulk_btn):
+                return
+
+            from modules.video_editor.video_splitter_dialog import VideoSplitterDialog
+
+            dialog = VideoSplitterDialog(self)
+
+            if clicked == single_btn:
+                video_path, _ = QFileDialog.getOpenFileName(
+                    self,
+                    "Select Video",
+                    "",
+                    "Video Files (*.mp4 *.mov *.avi *.mkv *.webm *.flv *.wmv *.m4v)",
+                )
+                if not video_path:
+                    return
+                dialog.load_single_video(video_path)
+            else:
+                folder_path = QFileDialog.getExistingDirectory(
+                    self,
+                    "Select Folder",
+                    "",
+                )
+                if not folder_path:
+                    return
+                dialog.load_bulk_folder(folder_path)
+
+            dialog.exec_()
+            logger.info("Video splitter dialog closed")
+
+        except Exception as e:
+            logger.error(f"Failed to open video splitter: {e}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to open video splitter:\n{str(e)}"
             )
 
     def open_title_generator(self):

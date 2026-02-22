@@ -59,6 +59,32 @@ def ensure_moviepy_available():
 
 # ==================== VIDEO INFO ====================
 
+def get_ffprobe_path() -> str:
+    """
+    Resolve FFprobe path using the same strategy as FFmpeg.
+    """
+    ffmpeg_path = get_ffmpeg_path()
+
+    # If ffmpeg is a command alias, try ffprobe from PATH.
+    if ffmpeg_path == "ffmpeg":
+        try:
+            result = subprocess.run(["ffprobe", "-version"], capture_output=True, timeout=5)
+            if result.returncode == 0:
+                return "ffprobe"
+        except Exception:
+            return "ffprobe"
+        return "ffprobe"
+
+    ffmpeg_file = Path(ffmpeg_path)
+    if ffmpeg_file.exists():
+        probe_name = "ffprobe.exe" if ffmpeg_file.suffix.lower() == ".exe" else "ffprobe"
+        candidate = ffmpeg_file.with_name(probe_name)
+        if candidate.exists():
+            return str(candidate)
+
+    # Final fallback to PATH command.
+    return "ffprobe"
+
 def get_video_info(video_path: str) -> Dict[str, Any]:
     """
     Get comprehensive video information using FFprobe
@@ -75,7 +101,7 @@ def get_video_info(video_path: str) -> Dict[str, Any]:
     try:
         # Try using ffprobe if available
         cmd = [
-            'ffprobe',
+            get_ffprobe_path(),
             '-v', 'quiet',
             '-print_format', 'json',
             '-show_format',
@@ -453,7 +479,10 @@ def get_ffmpeg_path() -> str:
     common_paths = [
         r'C:\ffmpeg\bin\ffmpeg.exe',
         r'C:\Program Files\ffmpeg\bin\ffmpeg.exe',
+        os.path.join(os.getcwd(), 'ffmpeg', 'bin', 'ffmpeg.exe'),
         os.path.join(os.getcwd(), 'ffmpeg', 'ffmpeg.exe'),
+        str(Path(__file__).resolve().parents[2] / 'ffmpeg' / 'bin' / 'ffmpeg.exe'),
+        str(Path(__file__).resolve().parents[2] / 'ffmpeg' / 'ffmpeg.exe'),
     ]
 
     for path in common_paths:

@@ -52,6 +52,20 @@ def get_default_output_folder() -> str:
     return str(output_folder)
 
 
+def get_default_smart_clip_output_folder() -> str:
+    """
+    Get default output folder for Smart Clip Merge (Desktop/Smart Clip Merge/)
+    Creates folder if it doesn't exist.
+
+    Returns:
+        Path to output folder
+    """
+    desktop = Path.home() / "Desktop"
+    output_folder = desktop / "Smart Clip Merge"
+    output_folder.mkdir(parents=True, exist_ok=True)
+    return str(output_folder)
+
+
 def generate_output_filename(prefix: str = "merged", extension: str = "mp4") -> str:
     """
     Generate unique output filename with timestamp

@@ -166,6 +166,26 @@ class EditCreatorDialog(QDialog):
         rnd_w.setLayout(rnd_row)
         form.addRow("Randomize:", rnd_w)
 
+        # Keep original after edit
+        keep_row = QHBoxLayout()
+        self.keep_btn = QPushButton("ON")
+        self.keep_btn.setCheckable(True)
+        self.keep_btn.setFixedWidth(76)
+        self.keep_btn.clicked.connect(lambda: self._apply_toggle_style(self.keep_btn))
+        keep_note = QLabel("ON = keep original video, OFF = delete original after edit.")
+        keep_note.setStyleSheet(
+            "color: rgba(255,255,255,0.38); font-size: 10px;"
+            " background: transparent; border: none;"
+        )
+        keep_row.addWidget(self.keep_btn)
+        keep_row.addSpacing(8)
+        keep_row.addWidget(keep_note)
+        keep_row.addStretch()
+        keep_w = QWidget()
+        keep_w.setStyleSheet("background: transparent; border: none;")
+        keep_w.setLayout(keep_row)
+        form.addRow("Keep Original:", keep_w)
+
         outer.addLayout(form)
         outer.addWidget(self._div())
 
@@ -205,9 +225,11 @@ class EditCreatorDialog(QDialog):
         self.dup_btn.setChecked(c.duplication_control)
         self.pop_btn.setChecked(c.popular_fallback)
         self.rnd_btn.setChecked(c.randomize_links)
+        self.keep_btn.setChecked(c.keep_original_after_edit)
         self._apply_toggle_style(self.dup_btn)
         self._apply_toggle_style(self.pop_btn)
         self._apply_toggle_style(self.rnd_btn)
+        self._apply_toggle_style(self.keep_btn)
         self._on_mode_change()
 
     def _on_mode_change(self):
@@ -241,6 +263,7 @@ class EditCreatorDialog(QDialog):
             "duplication_control": self.dup_btn.isChecked(),
             "popular_fallback":    self.pop_btn.isChecked(),
             "randomize_links":     self.rnd_btn.isChecked(),
+            "keep_original_after_edit": self.keep_btn.isChecked(),
         })
         self.config.save()
         self.accept()

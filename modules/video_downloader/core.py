@@ -1,4 +1,4 @@
-"""Core implementation for the smart video downloader."""
+﻿"""Core implementation for the smart video downloader."""
 
 import os
 import subprocess
@@ -12,6 +12,7 @@ from typing import Optional
 
 import yt_dlp
 from PyQt5.QtCore import QThread, pyqtSignal
+from modules.shared.auth_network_hub import AuthNetworkHub
 
 from .url_utils import (
     coerce_bool,
@@ -194,12 +195,12 @@ def _validate_cookie_file(cookie_file: str, max_age_days: int = 14) -> dict:
 
         # Check 1: File exists and has content
         if not cookie_path.exists():
-            result['warnings'].append(f"❌ Cookie file not found: {cookie_file}")
+            result['warnings'].append(f"âŒ Cookie file not found: {cookie_file}")
             return result
 
         file_size = cookie_path.stat().st_size
         if file_size < 10:
-            result['warnings'].append(f"⚠️ Cookie file too small ({file_size} bytes)")
+            result['warnings'].append(f"âš ï¸ Cookie file too small ({file_size} bytes)")
             return result
 
         # Check 2: File freshness (modification time)
@@ -210,9 +211,9 @@ def _validate_cookie_file(cookie_file: str, max_age_days: int = 14) -> dict:
         if file_age.days > max_age_days:
             result['fresh'] = False
             result['warnings'].append(
-                f"⚠️ Cookie file is {file_age.days} days old (older than {max_age_days} days)"
+                f"âš ï¸ Cookie file is {file_age.days} days old (older than {max_age_days} days)"
             )
-            result['warnings'].append(f"   💡 Consider refreshing cookies for better success rate")
+            result['warnings'].append(f"   ðŸ’¡ Consider refreshing cookies for better success rate")
 
         # Check 3: Valid Netscape format and cookie expiration
         current_timestamp = int(time.time())
@@ -224,7 +225,7 @@ def _validate_cookie_file(cookie_file: str, max_age_days: int = 14) -> dict:
         result['total_cookies'] = len(cookie_lines)
 
         if result['total_cookies'] == 0:
-            result['warnings'].append(f"⚠️ No cookies found in file (only comments/blank lines)")
+            result['warnings'].append(f"âš ï¸ No cookies found in file (only comments/blank lines)")
             return result
 
         # Check cookie expiration dates
@@ -245,19 +246,19 @@ def _validate_cookie_file(cookie_file: str, max_age_days: int = 14) -> dict:
             expiry_pct = (expired_count / result['total_cookies']) * 100
             if expiry_pct > 50:
                 result['warnings'].append(
-                    f"⚠️ {expired_count}/{result['total_cookies']} cookies expired ({expiry_pct:.0f}%)"
+                    f"âš ï¸ {expired_count}/{result['total_cookies']} cookies expired ({expiry_pct:.0f}%)"
                 )
-                result['warnings'].append(f"   💡 Cookie refresh recommended")
+                result['warnings'].append(f"   ðŸ’¡ Cookie refresh recommended")
 
         # All checks passed
         result['valid'] = True
 
         # Add success message if fresh and minimal warnings
         if result['fresh'] and len(result['warnings']) == 0:
-            logging.debug(f"✓ Cookie validation passed: {result['total_cookies']} cookies, {result['age_days']} days old")
+            logging.debug(f"âœ“ Cookie validation passed: {result['total_cookies']} cookies, {result['age_days']} days old")
 
     except Exception as e:
-        result['warnings'].append(f"❌ Cookie validation error: {str(e)[:100]}")
+        result['warnings'].append(f"âŒ Cookie validation error: {str(e)[:100]}")
 
     return result
 
@@ -299,6 +300,7 @@ class VideoDownloaderThread(QThread):
 
     def __init__(self, urls, save_path, options, parent=None, bulk_mode_data=None):
         super().__init__(parent)
+        self.auth_hub = AuthNetworkHub()
         # Accept flexible input for URLs (string, list, dicts from Link Grabber, etc.)
         self.urls = extract_urls(urls)
         self.save_path = save_path
@@ -308,7 +310,7 @@ class VideoDownloaderThread(QThread):
         elif isinstance(options, dict):
             self.options = options
         else:
-            # Some legacy callers pass QVariants/objects – fall back to empty dict but keep reference
+            # Some legacy callers pass QVariants/objects â€“ fall back to empty dict but keep reference
             try:
                 self.options = dict(options)
             except Exception:
@@ -336,7 +338,7 @@ class VideoDownloaderThread(QThread):
                 self._format_fallback_applied = True
 
         # Proxy configuration (for IP block bypass) - ENHANCED
-        # Priority: Options → Link Grabber config → Environment variable
+        # Priority: Options â†’ Link Grabber config â†’ Environment variable
         self.proxies = self._load_proxies_from_config()
         self.current_proxy_index = 0
         self.proxy_url = self.options.get('proxy_url', os.environ.get('HTTPS_PROXY', ''))  # Legacy support
@@ -395,7 +397,7 @@ class VideoDownloaderThread(QThread):
             with open(self.downloaded_links_file, 'a', encoding='utf-8') as f:
                 f.write(f"{normalized}\n")
         except Exception as e:
-            self.progress.emit(f"⚠️ Could not save download record: {str(e)[:50]}")
+            self.progress.emit(f"âš ï¸ Could not save download record: {str(e)[:50]}")
 
     def _is_already_downloaded(self, url: str) -> bool:
         """Check if already downloaded (bulk mode only)"""
@@ -407,56 +409,22 @@ class VideoDownloaderThread(QThread):
 
     def _load_proxies_from_config(self) -> list:
         """
-        Load proxy settings from Link Grabber's config file.
-
-        Priority:
-        1. Link Grabber config (config/proxy_settings.json)
-        2. Empty list (no proxies)
+        Load proxy settings from shared config.
 
         Returns:
-            list: List of parsed proxy URLs ready to use
+            list: Parsed proxy URLs ready for use.
         """
         try:
-            from modules.config.paths import get_config_dir
-            import json
             import logging
 
-            config_file = get_config_dir() / "proxy_settings.json"
-
-            if not config_file.exists():
-                logging.info(f"⚠️ Proxy config not found: {config_file}")
-                return []
-
-            with open(config_file, 'r', encoding='utf-8') as f:
-                settings = json.load(f)
-
-            proxies = []
-
-            # Load proxy1
-            proxy1 = settings.get('proxy1', '').strip()
-            if proxy1:
-                parsed = self._parse_proxy_format(proxy1)
-                if parsed:
-                    proxies.append(parsed)
-                    logging.info(f"✓ Proxy 1 loaded: {parsed.split('@')[-1][:30]}")
-
-            # Load proxy2
-            proxy2 = settings.get('proxy2', '').strip()
-            if proxy2:
-                parsed = self._parse_proxy_format(proxy2)
-                if parsed:
-                    proxies.append(parsed)
-                    logging.info(f"✓ Proxy 2 loaded: {parsed.split('@')[-1][:30]}")
-
+            proxies = list(self.auth_hub.get_proxy_pool())
             if proxies:
-                logging.info(f"✅ Loaded {len(proxies)} proxy(ies) from config")
+                logging.info(f"âœ… Loaded {len(proxies)} proxy(ies) from shared config")
             else:
-                logging.warning("⚠️ No proxies found in config file")
-
+                logging.warning("âš ï¸ No proxies found in shared config")
             return proxies
-
         except Exception as e:
-            logging.error(f"❌ Failed to load proxies from config: {e}")
+            logging.error(f"âŒ Failed to load proxies from shared config: {e}")
             return []
 
     def _parse_proxy_format(self, proxy: str) -> str:
@@ -465,11 +433,11 @@ class VideoDownloaderThread(QThread):
         Synced with Link Grabber for consistency.
 
         Supports ALL 5 formats:
-        1. ip:port                                    → http://ip:port
-        2. user:pass@ip:port                          → http://user:pass@ip:port
-        3. ip:port:user:pass (provider format)        → http://user:pass@ip:port
-        4. socks5://user:pass@ip:port                 → socks5://user:pass@ip:port
-        5. With URL encoding for special chars        → http://user:P%40ss@ip:port
+        1. ip:port                                    â†’ http://ip:port
+        2. user:pass@ip:port                          â†’ http://user:pass@ip:port
+        3. ip:port:user:pass (provider format)        â†’ http://user:pass@ip:port
+        4. socks5://user:pass@ip:port                 â†’ socks5://user:pass@ip:port
+        5. With URL encoding for special chars        â†’ http://user:P%40ss@ip:port
 
         Special features:
         - Automatically detects and preserves SOCKS5 protocol
@@ -543,11 +511,11 @@ class VideoDownloaderThread(QThread):
 
             else:
                 # Unknown format, return empty to skip
-                logging.warning(f"⚠️ Unknown proxy format (parts={len(parts)}): {proxy[:30]}...")
+                logging.warning(f"âš ï¸ Unknown proxy format (parts={len(parts)}): {proxy[:30]}...")
                 return ""
 
         except Exception as e:
-            logging.error(f"❌ Failed to parse proxy format: {e}")
+            logging.error(f"âŒ Failed to parse proxy format: {e}")
             return ""
 
     def _get_current_proxy(self) -> Optional[str]:
@@ -566,7 +534,7 @@ class VideoDownloaderThread(QThread):
         """Switch to next proxy in the pool (circular rotation)"""
         if len(self.proxies) > 1:
             self.current_proxy_index = (self.current_proxy_index + 1) % len(self.proxies)
-            self.progress.emit(f"   🔄 Switched to proxy {self.current_proxy_index + 1}/{len(self.proxies)}")
+            self.progress.emit(f"   ðŸ”„ Switched to proxy {self.current_proxy_index + 1}/{len(self.proxies)}")
             return True
         return False
 
@@ -582,7 +550,7 @@ class VideoDownloaderThread(QThread):
         if elapsed < self.rate_limit_delay:
             wait_time = self.rate_limit_delay - elapsed
             if wait_time > 0.1:  # Only show message if waiting more than 100ms
-                self.progress.emit(f"   ⏳ Rate limiting: waiting {wait_time:.1f}s...")
+                self.progress.emit(f"   â³ Rate limiting: waiting {wait_time:.1f}s...")
             time.sleep(wait_time)
 
         self.last_request_times[domain] = time.time()
@@ -591,29 +559,31 @@ class VideoDownloaderThread(QThread):
 
     def _get_ytdlp_command(self):
         """
-        Get yt-dlp command with smart detection and fallbacks.
-
-        Priority:
-        1. Bundled with EXE (OneSoul/_internal/yt-dlp.exe)
-        2. System PATH (yt-dlp or yt-dlp.exe)
-        3. Common Windows install locations
-        4. None (use Python library API as final fallback)
+        Get yt-dlp command with shared resolver and validation.
 
         Returns:
-            str or None: Command to use, or None to trigger Python API fallback
+            str or None: Runnable command path or None for Python API fallback.
         """
         # Cache the result to avoid repeated lookups
         if hasattr(self, '_ytdlp_cmd_cache'):
             return self._ytdlp_cmd_cache
 
         try:
-            from modules.config.paths import find_ytdlp_executable
-            cmd = find_ytdlp_executable()
-            if cmd and not self._verify_cli(cmd, ['--version']):
-                self.progress.emit("ERROR: yt-dlp found but not runnable. Check installation.")
-                cmd = None
-            self._ytdlp_cmd_cache = cmd
-            return cmd
+            resolved = self.auth_hub.resolve_ytdlp()
+            cmd = resolved.get("path")
+
+            if cmd and resolved.get("usable"):
+                self._ytdlp_cmd_cache = cmd
+                return cmd
+
+            if cmd and not resolved.get("usable"):
+                self.progress.emit("ERROR: yt-dlp found but not runnable.")
+                if resolved.get("error"):
+                    self.progress.emit(f"ERROR: {resolved['error']}")
+                self.progress.emit("INFO: Install/update yt-dlp at C:\\yt-dlp\\yt-dlp.exe or fix PATH.")
+
+            self._ytdlp_cmd_cache = None
+            return None
         except Exception:
             self._ytdlp_cmd_cache = None
             return None
@@ -665,7 +635,7 @@ class VideoDownloaderThread(QThread):
                 file_path = folder / filename
                 if file_path.exists():
                     file_path.unlink()
-                    self.progress.emit(f"🧹 Removed leftover file: {filename}")
+                    self.progress.emit(f"ðŸ§¹ Removed leftover file: {filename}")
 
         except Exception as e:
             # Silent fail - not critical
@@ -696,7 +666,7 @@ class VideoDownloaderThread(QThread):
                     if len(new_lines) != len(lines):
                         with open(txt_file, 'w', encoding='utf-8') as f:
                             f.writelines(new_lines)
-                        self.progress.emit(f"🗑️ Removed from {txt_file.name}")
+                        self.progress.emit(f"ðŸ—‘ï¸ Removed from {txt_file.name}")
                 except Exception:
                     continue
         except Exception:
@@ -704,75 +674,16 @@ class VideoDownloaderThread(QThread):
 
     def get_cookie_file(self, url, source_folder=None):
         """
-        Return the most relevant cookies file for the given URL.
+        Return the most relevant cookie file for a URL using shared hub priority.
 
-        Priority (in order):
-        1. chrome_cookies.txt (Link Grabber master file)
-        2. Platform-specific files (tiktok.txt, instagram.txt, etc.)
-        3. Generic fallback (cookies.txt)
-        4. Desktop fallback (toseeq-cookies.txt)
-
-        Also stores all valid cookies in self._all_cookie_files for fallback attempts.
+        Also stores all valid cookie files in self._all_cookie_files for fallback attempts.
         """
         try:
-            from modules.config.paths import get_cookies_dir
-
-            candidates = []
             platform = _detect_platform(url)
-
-            # Get persistent cookies directory
-            cookies_dir = get_cookies_dir()
-
-            # === PRIORITY 1: chrome_cookies.txt (Link Grabber saves here) ===
-            master_cookie = cookies_dir / "chrome_cookies.txt"
-            candidates.append(master_cookie)
-
-            # === PRIORITY 2: Platform-specific cookies ===
-            if platform != 'other':
-                platform_cookie = cookies_dir / f"{platform}.txt"
-                candidates.append(platform_cookie)
-
-            # === PRIORITY 3: Generic fallback ===
-            universal_cookie = cookies_dir / "cookies.txt"
-            candidates.append(universal_cookie)
-
-            # === PRIORITY 4: Desktop fallback (user convenience) ===
-            desktop_cookie = Path.home() / "Desktop" / "toseeq-cookies.txt"
-            candidates.append(desktop_cookie)
-
-            # === PRIORITY 5: Source folder cookies (for bulk mode compatibility) ===
-            if source_folder:
-                folder_path = Path(source_folder)
-
-                # Check source folder directly
-                for name in ["chrome_cookies.txt", f"{platform}.txt", "cookies.txt"]:
-                    candidate = folder_path / name
-                    if candidate not in candidates:
-                        candidates.append(candidate)
-
-                # Check source_folder/cookies/ subdirectory
-                cookies_sub = folder_path / "cookies"
-                for name in ["chrome_cookies.txt", f"{platform}.txt", "cookies.txt"]:
-                    candidate = cookies_sub / name
-                    if candidate not in candidates:
-                        candidates.append(candidate)
-
-            # Find all valid cookie files
-            valid_cookies = []
-            for candidate in candidates:
-                try:
-                    if candidate and candidate.exists() and candidate.stat().st_size > 10:
-                        valid_cookies.append(str(candidate))
-                except Exception:
-                    continue
-
-            # Store for fallback use by other methods
+            valid_cookies = self.auth_hub.valid_cookie_files(platform, source_folder)
             self._all_cookie_files = valid_cookies
-
-            # Return first valid cookie (highest priority)
             if valid_cookies:
                 return valid_cookies[0]
-
         except Exception:
             pass
 
@@ -785,12 +696,12 @@ class VideoDownloaderThread(QThread):
         try:
             from datetime import datetime
             start_time = datetime.now()
-            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] 🚀 Method 1: YT-DLP Standard")
+            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] ðŸš€ Method 1: YT-DLP Standard")
 
             # Smart yt-dlp detection
             ytdlp_cmd = self._get_ytdlp_command()
             if not ytdlp_cmd:
-                self.progress.emit(f"   ⚠️ yt-dlp not found, skipping command-based method")
+                self.progress.emit(f"   âš ï¸ yt-dlp not found, skipping command-based method")
                 return False
 
             format_string = self.format_override or 'best'
@@ -819,36 +730,36 @@ class VideoDownloaderThread(QThread):
             # Add proxy if available
             if current_proxy:
                 cmd.extend(['--proxy', current_proxy])
-                self.progress.emit(f"   🌐 Proxy: {current_proxy.split('@')[-1][:20]}...")  # Hide credentials
+                self.progress.emit(f"   ðŸŒ Proxy: {current_proxy.split('@')[-1][:20]}...")  # Hide credentials
             else:
-                self.progress.emit(f"   ⚠️ No proxy (IP blocks possible)")
+                self.progress.emit(f"   âš ï¸ No proxy (IP blocks possible)")
 
             if cookie_file:
                 cmd.extend(['--cookies', cookie_file])
-                self.progress.emit(f"   🍪 Cookies: {Path(cookie_file).name}")
+                self.progress.emit(f"   ðŸª Cookies: {Path(cookie_file).name}")
 
-            self.progress.emit(f"   🎭 UA: {user_agent[:45]}...")
+            self.progress.emit(f"   ðŸŽ­ UA: {user_agent[:45]}...")
 
             cmd.append(url)
 
-            self.progress.emit(f"   ⏳ Starting download...")
+            self.progress.emit(f"   â³ Starting download...")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, encoding='utf-8', errors='replace')
 
             elapsed = (datetime.now() - start_time).total_seconds()
 
             if result.returncode == 0:
-                self.progress.emit(f"   ✅ SUCCESS in {elapsed:.1f}s")
+                self.progress.emit(f"   âœ… SUCCESS in {elapsed:.1f}s")
                 return True
             else:
                 error_msg = result.stderr[:300] if result.stderr else "Unknown error"
-                self.progress.emit(f"   ❌ FAILED ({elapsed:.1f}s)")
-                self.progress.emit(f"   📝 Error: {error_msg}")
+                self.progress.emit(f"   âŒ FAILED ({elapsed:.1f}s)")
+                self.progress.emit(f"   ðŸ“ Error: {error_msg}")
             return False
         except subprocess.TimeoutExpired:
-            self.progress.emit(f"   ⏱️ TIMEOUT (30min limit)")
+            self.progress.emit(f"   â±ï¸ TIMEOUT (30min limit)")
             return False
         except Exception as e:
-            self.progress.emit(f"   ❌ Exception: {str(e)[:100]}")
+            self.progress.emit(f"   âŒ Exception: {str(e)[:100]}")
             return False
 
     def _method2_tiktok_special(self, url, output_path, cookie_file=None):
@@ -866,7 +777,7 @@ class VideoDownloaderThread(QThread):
 
             from datetime import datetime
             start_time = datetime.now()
-            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] 🎵 TikTok Enhanced (Multi-Strategy)")
+            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] ðŸŽµ TikTok Enhanced (Multi-Strategy)")
 
             # Apply rate limiting
             self._apply_rate_limit('tiktok.com')
@@ -874,9 +785,9 @@ class VideoDownloaderThread(QThread):
             # UPDATED: Modern TikTok formats (2025) - old format IDs removed
             # Old 'http-264-hd-1' and 'http-264-hd-0' no longer work with new TikTok API
             tiktok_formats = [
-                ('best[ext=mp4]/best', '🎥 Best MP4'),
-                ('bestvideo+bestaudio/best', '🎬 Best Quality'),
-                ('best', '✨ Best Available'),
+                ('best[ext=mp4]/best', 'ðŸŽ¥ Best MP4'),
+                ('bestvideo+bestaudio/best', 'ðŸŽ¬ Best Quality'),
+                ('best', 'âœ¨ Best Available'),
             ]
 
             # Collect all available cookies
@@ -893,12 +804,12 @@ class VideoDownloaderThread(QThread):
                 cookie_files_to_try.append(None)
 
             # STRATEGY 1: Try direct download (fast, works 70% of time)
-            self.progress.emit(f"   📥 Strategy 1: Direct download")
+            self.progress.emit(f"   ðŸ“¥ Strategy 1: Direct download")
             result = self._try_tiktok_download(url, output_path, cookie_files_to_try,
                                                tiktok_formats, use_proxy=False, retry_count=0)
             if result['success']:
                 elapsed = (datetime.now() - start_time).total_seconds()
-                self.progress.emit(f"   ✅ SUCCESS ({elapsed:.1f}s) {result['message']}")
+                self.progress.emit(f"   âœ… SUCCESS ({elapsed:.1f}s) {result['message']}")
                 return True
 
             # Check if IP blocked
@@ -906,23 +817,23 @@ class VideoDownloaderThread(QThread):
 
             # STRATEGY 2: Try with proxy (if available and IP blocked)
             if ip_blocked and self.proxy_url:
-                self.progress.emit(f"   🌐 Strategy 2: Trying with proxy (IP block detected)")
+                self.progress.emit(f"   ðŸŒ Strategy 2: Trying with proxy (IP block detected)")
                 time.sleep(2)  # Brief delay before retry
 
                 result = self._try_tiktok_download(url, output_path, cookie_files_to_try,
                                                    tiktok_formats, use_proxy=True, retry_count=0)
                 if result['success']:
                     elapsed = (datetime.now() - start_time).total_seconds()
-                    self.progress.emit(f"   ✅ SUCCESS via proxy ({elapsed:.1f}s) {result['message']}")
+                    self.progress.emit(f"   âœ… SUCCESS via proxy ({elapsed:.1f}s) {result['message']}")
                     return True
 
             # STRATEGY 3: Retry with exponential backoff (if IP blocked)
             if ip_blocked:
-                self.progress.emit(f"   🔄 Strategy 3: Retry with exponential backoff")
+                self.progress.emit(f"   ðŸ”„ Strategy 3: Retry with exponential backoff")
 
                 for retry_attempt in range(2):  # Try 2 more times
                     wait_time = 2 ** (retry_attempt + 1)  # 2s, 4s
-                    self.progress.emit(f"   ⏳ Waiting {wait_time}s before retry {retry_attempt + 1}/2...")
+                    self.progress.emit(f"   â³ Waiting {wait_time}s before retry {retry_attempt + 1}/2...")
                     time.sleep(wait_time)
 
                     # Try with enhanced headers and random user agent
@@ -931,26 +842,26 @@ class VideoDownloaderThread(QThread):
                                                        retry_count=retry_attempt + 1)
                     if result['success']:
                         elapsed = (datetime.now() - start_time).total_seconds()
-                        self.progress.emit(f"   ✅ SUCCESS on retry {retry_attempt + 1} ({elapsed:.1f}s) {result['message']}")
+                        self.progress.emit(f"   âœ… SUCCESS on retry {retry_attempt + 1} ({elapsed:.1f}s) {result['message']}")
                         return True
 
             # ALL STRATEGIES FAILED
             elapsed = (datetime.now() - start_time).total_seconds()
-            self.progress.emit(f"   ❌ All strategies failed ({elapsed:.1f}s)")
+            self.progress.emit(f"   âŒ All strategies failed ({elapsed:.1f}s)")
 
             # Show specific error message
             if ip_blocked:
                 self._show_tiktok_ip_block_help()
             else:
-                self.progress.emit(f"   💡 Tips:")
-                self.progress.emit(f"      • Make sure cookies/tiktok.txt exists")
-                self.progress.emit(f"      • Video might be private or age-restricted")
-                self.progress.emit(f"      • Try adding TikTok cookies (same as Link Grabber)")
+                self.progress.emit(f"   ðŸ’¡ Tips:")
+                self.progress.emit(f"      â€¢ Make sure cookies/tiktok.txt exists")
+                self.progress.emit(f"      â€¢ Video might be private or age-restricted")
+                self.progress.emit(f"      â€¢ Try adding TikTok cookies (same as Link Grabber)")
 
             return False
 
         except Exception as e:
-            self.progress.emit(f"   ❌ TikTok error: {str(e)[:100]}")
+            self.progress.emit(f"   âŒ TikTok error: {str(e)[:100]}")
             return False
 
     def _try_tiktok_download(self, url, output_path, cookie_files, formats, use_proxy=False, retry_count=0):
@@ -972,15 +883,15 @@ class VideoDownloaderThread(QThread):
 
         for cookie_attempt_idx, current_cookie in enumerate(cookie_files, 1):
             if cookie_attempt_idx > 1:
-                self.progress.emit(f"   🔄 Cookie {cookie_attempt_idx}/{len(cookie_files)}")
+                self.progress.emit(f"   ðŸ”„ Cookie {cookie_attempt_idx}/{len(cookie_files)}")
                 if current_cookie:
-                    self.progress.emit(f"   🍪 Using: {Path(current_cookie).name}")
+                    self.progress.emit(f"   ðŸª Using: {Path(current_cookie).name}")
 
             for i, (fmt, desc) in enumerate(formats, 1):
                 try:
                     # Only show format on first attempt to reduce noise
                     if retry_count == 0 and cookie_attempt_idx == 1:
-                        self.progress.emit(f"   🔄 Format {i}/{len(formats)}: {desc}")
+                        self.progress.emit(f"   ðŸ”„ Format {i}/{len(formats)}: {desc}")
 
                     # Build command with enhanced headers
                     user_agent = _get_random_user_agent()
@@ -1015,7 +926,7 @@ class VideoDownloaderThread(QThread):
                                           timeout=300, encoding='utf-8', errors='replace')
 
                     if result.returncode == 0:
-                        watermark_status = "🎉 NO WATERMARK!" if "hd-1" in fmt else ""
+                        watermark_status = "ðŸŽ‰ NO WATERMARK!" if "hd-1" in fmt else ""
                         proxy_status = " via proxy" if use_proxy else ""
                         return {
                             'success': True,
@@ -1030,7 +941,7 @@ class VideoDownloaderThread(QThread):
                         # Show error on last attempt for debugging
                         if i == len(formats) and cookie_attempt_idx == len(cookie_files):
                             error_snippet = error_output[:150] if error_output else "Unknown error"
-                            self.progress.emit(f"   ❌ Error: {error_snippet}")
+                            self.progress.emit(f"   âŒ Error: {error_snippet}")
 
                         # Check if IP blocked
                         if _is_ip_block_error(error_output):
@@ -1049,35 +960,35 @@ class VideoDownloaderThread(QThread):
     def _show_tiktok_ip_block_help(self):
         """Show helpful message when IP block detected"""
         self.progress.emit("")
-        self.progress.emit("   ╔═══════════════════════════════════════════════╗")
-        self.progress.emit("   ║  🚫 TIKTOK IP BLOCK DETECTED                  ║")
-        self.progress.emit("   ╚═══════════════════════════════════════════════╝")
+        self.progress.emit("   â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—")
+        self.progress.emit("   â•‘  ðŸš« TIKTOK IP BLOCK DETECTED                  â•‘")
+        self.progress.emit("   â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•")
         self.progress.emit("")
-        self.progress.emit("   🔧 SOLUTIONS:")
+        self.progress.emit("   ðŸ”§ SOLUTIONS:")
         self.progress.emit("")
-        self.progress.emit("   1️⃣ Use VPN or Proxy:")
-        self.progress.emit("      • Enable VPN on your computer")
-        self.progress.emit("      • Or set proxy: export HTTPS_PROXY=socks5://127.0.0.1:1080")
-        self.progress.emit("      • Try different proxy location")
+        self.progress.emit("   1ï¸âƒ£ Use VPN or Proxy:")
+        self.progress.emit("      â€¢ Enable VPN on your computer")
+        self.progress.emit("      â€¢ Or set proxy: export HTTPS_PROXY=socks5://127.0.0.1:1080")
+        self.progress.emit("      â€¢ Try different proxy location")
         self.progress.emit("")
-        self.progress.emit("   2️⃣ Wait and Retry:")
-        self.progress.emit("      • TikTok may have rate-limited your IP")
-        self.progress.emit("      • Wait 15-60 minutes and try again")
-        self.progress.emit("      • Temporary blocks usually expire")
+        self.progress.emit("   2ï¸âƒ£ Wait and Retry:")
+        self.progress.emit("      â€¢ TikTok may have rate-limited your IP")
+        self.progress.emit("      â€¢ Wait 15-60 minutes and try again")
+        self.progress.emit("      â€¢ Temporary blocks usually expire")
         self.progress.emit("")
-        self.progress.emit("   3️⃣ Check Video Availability:")
-        self.progress.emit("      • Video might be private/deleted")
-        self.progress.emit("      • Try opening in browser first")
-        self.progress.emit("      • Check if region-locked")
+        self.progress.emit("   3ï¸âƒ£ Check Video Availability:")
+        self.progress.emit("      â€¢ Video might be private/deleted")
+        self.progress.emit("      â€¢ Try opening in browser first")
+        self.progress.emit("      â€¢ Check if region-locked")
         self.progress.emit("")
-        self.progress.emit("   💡 Quick fix: Switch to different network (WiFi ↔ Mobile data)")
+        self.progress.emit("   ðŸ’¡ Quick fix: Switch to different network (WiFi â†” Mobile data)")
         self.progress.emit("")
 
     def _method3_optimized_ytdlp(self, url, output_path, cookie_file=None):
         try:
             from datetime import datetime
             start_time = datetime.now()
-            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] 🔄 Method 3: yt-dlp with Cookies")
+            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] ðŸ”„ Method 3: yt-dlp with Cookies")
 
             # Get user agent and proxy
             user_agent = _get_random_user_agent()
@@ -1102,37 +1013,37 @@ class VideoDownloaderThread(QThread):
             # Add proxy if available
             if current_proxy:
                 ydl_opts['proxy'] = current_proxy
-                self.progress.emit(f"   🌐 Proxy: {current_proxy.split('@')[-1][:20]}...")
+                self.progress.emit(f"   ðŸŒ Proxy: {current_proxy.split('@')[-1][:20]}...")
             else:
-                self.progress.emit(f"   ⚠️ No proxy (IP blocks possible)")
+                self.progress.emit(f"   âš ï¸ No proxy (IP blocks possible)")
 
             if cookie_file:
                 ydl_opts['cookiefile'] = cookie_file
-                self.progress.emit(f"   🍪 Cookies: {Path(cookie_file).name}")
+                self.progress.emit(f"   ðŸª Cookies: {Path(cookie_file).name}")
             else:
-                self.progress.emit(f"   ⚠️ No cookies (may fail for private content)")
+                self.progress.emit(f"   âš ï¸ No cookies (may fail for private content)")
 
-            self.progress.emit(f"   🎭 UA: {user_agent[:45]}...")
+            self.progress.emit(f"   ðŸŽ­ UA: {user_agent[:45]}...")
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
 
             elapsed = (datetime.now() - start_time).total_seconds()
-            self.progress.emit(f"   ✅ SUCCESS in {elapsed:.1f}s")
+            self.progress.emit(f"   âœ… SUCCESS in {elapsed:.1f}s")
             return True
 
         except Exception as e:
             elapsed = (datetime.now() - start_time).total_seconds() if 'start_time' in locals() else 0
             error_msg = str(e)
-            self.progress.emit(f"   ❌ FAILED ({elapsed:.1f}s)")
+            self.progress.emit(f"   âŒ FAILED ({elapsed:.1f}s)")
 
             # Give specific hints based on error
             if 'login required' in error_msg.lower() or 'rate' in error_msg.lower():
-                self.progress.emit(f"   💡 Hint: Need cookies for this content")
+                self.progress.emit(f"   ðŸ’¡ Hint: Need cookies for this content")
             elif 'private' in error_msg.lower():
-                self.progress.emit(f"   💡 Hint: Content is private")
+                self.progress.emit(f"   ðŸ’¡ Hint: Content is private")
 
-            self.progress.emit(f"   📝 Error: {error_msg[:200]}")
+            self.progress.emit(f"   ðŸ“ Error: {error_msg[:200]}")
             return False
 
     def _method_instagram_enhanced(self, url, output_path, cookie_file=None):
@@ -1143,7 +1054,7 @@ class VideoDownloaderThread(QThread):
 
             from datetime import datetime
             start_time = datetime.now()
-            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] 📸 Instagram Enhanced Method")
+            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] ðŸ“¸ Instagram Enhanced Method")
 
             # IMPROVED: Collect ALL available cookie files to try
             cookie_files_to_try = []
@@ -1161,14 +1072,14 @@ class VideoDownloaderThread(QThread):
                             cookie_files_to_try.append(cf)
 
             total_cookies = len(cookie_files_to_try)
-            self.progress.emit(f"   🍪 Found {total_cookies} cookie file(s) to try")
+            self.progress.emit(f"   ðŸª Found {total_cookies} cookie file(s) to try")
 
             # Try each cookie file
             for cookie_idx, current_cookie_file in enumerate(cookie_files_to_try, 1):
                 if cookie_idx > 1:
-                    self.progress.emit(f"   🔄 Trying alternate cookie file ({cookie_idx}/{total_cookies})")
+                    self.progress.emit(f"   ðŸ”„ Trying alternate cookie file ({cookie_idx}/{total_cookies})")
 
-                self.progress.emit(f"   🍪 Using: {Path(current_cookie_file).name}")
+                self.progress.emit(f"   ðŸª Using: {Path(current_cookie_file).name}")
 
                 # Validate cookie
                 cookie_is_valid = False
@@ -1176,28 +1087,28 @@ class VideoDownloaderThread(QThread):
                 validation = validator.validate_cookie_file(current_cookie_file)
 
                 if validation['is_valid']:
-                    self.progress.emit(f"   🔑 Valid Instagram cookies!")
+                    self.progress.emit(f"   ðŸ”‘ Valid Instagram cookies!")
                     cookie_is_valid = True
                 else:
-                    self.progress.emit(f"   ⚠️ Cookie validation failed:")
+                    self.progress.emit(f"   âš ï¸ Cookie validation failed:")
                     for error in validation['errors'][:1]:  # Show first error only
-                        self.progress.emit(f"      • {error}")
+                        self.progress.emit(f"      â€¢ {error}")
 
                     if validation['is_expired']:
-                        self.progress.emit(f"   💡 Cookies expired - trying next...")
+                        self.progress.emit(f"   ðŸ’¡ Cookies expired - trying next...")
                     elif not validation['has_sessionid']:
-                        self.progress.emit(f"   💡 No sessionid found - trying next...")
+                        self.progress.emit(f"   ðŸ’¡ No sessionid found - trying next...")
 
                     # Try next cookie if validation failed
                     continue
 
                 # Try download with validated cookie
-                self.progress.emit(f"   📥 Attempting download...")
+                self.progress.emit(f"   ðŸ“¥ Attempting download...")
 
                 # Smart yt-dlp detection
                 ytdlp_cmd = self._get_ytdlp_command()
                 if not ytdlp_cmd:
-                    self.progress.emit(f"   ⚠️ yt-dlp not found, skipping")
+                    self.progress.emit(f"   âš ï¸ yt-dlp not found, skipping")
                     continue
 
                 # Get UA and proxy
@@ -1222,52 +1133,52 @@ class VideoDownloaderThread(QThread):
                 # Add proxy
                 if current_proxy:
                     cmd.extend(['--proxy', current_proxy])
-                    self.progress.emit(f"   🌐 Proxy: {current_proxy.split('@')[-1][:20]}...")
+                    self.progress.emit(f"   ðŸŒ Proxy: {current_proxy.split('@')[-1][:20]}...")
 
-                self.progress.emit(f"   🎭 UA: {user_agent[:45]}...")
+                self.progress.emit(f"   ðŸŽ­ UA: {user_agent[:45]}...")
                 cmd.append(url)
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, encoding='utf-8', errors='replace')
 
                 if result.returncode == 0:
                     elapsed = (datetime.now() - start_time).total_seconds()
-                    self.progress.emit(f"   ✅ SUCCESS with {Path(current_cookie_file).name} ({elapsed:.1f}s)")
+                    self.progress.emit(f"   âœ… SUCCESS with {Path(current_cookie_file).name} ({elapsed:.1f}s)")
                     return True
                 else:
                     error_snippet = result.stderr[:100] if result.stderr else "Unknown"
-                    self.progress.emit(f"   ❌ Download failed: {error_snippet}")
+                    self.progress.emit(f"   âŒ Download failed: {error_snippet}")
 
             # If all cookie files failed, show helpful error message
             elapsed = (datetime.now() - start_time).total_seconds()
-            self.progress.emit(f"   ❌ All cookie attempts failed ({elapsed:.1f}s)")
+            self.progress.emit(f"   âŒ All cookie attempts failed ({elapsed:.1f}s)")
             self.progress.emit(f"   ")
-            self.progress.emit(f"   ╔═══════════════════════════════════════════════╗")
-            self.progress.emit(f"   ║  📸 INSTAGRAM AUTHENTICATION REQUIRED         ║")
-            self.progress.emit(f"   ╚═══════════════════════════════════════════════╝")
+            self.progress.emit(f"   â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—")
+            self.progress.emit(f"   â•‘  ðŸ“¸ INSTAGRAM AUTHENTICATION REQUIRED         â•‘")
+            self.progress.emit(f"   â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•")
             self.progress.emit(f"   ")
-            self.progress.emit(f"   🔧 QUICK FIX:")
+            self.progress.emit(f"   ðŸ”§ QUICK FIX:")
             self.progress.emit(f"   ")
-            self.progress.emit(f"   1️⃣ Same cookies work for Link Grabber & Downloader!")
-            self.progress.emit(f"      • If Link Grabber works, Downloader will too")
-            self.progress.emit(f"      • Export cookies to: cookies/instagram.txt")
+            self.progress.emit(f"   1ï¸âƒ£ Same cookies work for Link Grabber & Downloader!")
+            self.progress.emit(f"      â€¢ If Link Grabber works, Downloader will too")
+            self.progress.emit(f"      â€¢ Export cookies to: cookies/instagram.txt")
             self.progress.emit(f"   ")
-            self.progress.emit(f"   2️⃣ How to export cookies:")
+            self.progress.emit(f"   2ï¸âƒ£ How to export cookies:")
             self.progress.emit(f"      a) Install browser extension:")
             self.progress.emit(f"         'Get cookies.txt LOCALLY'")
             self.progress.emit(f"      b) Login to Instagram in browser")
-            self.progress.emit(f"      c) Click extension → Export")
+            self.progress.emit(f"      c) Click extension â†’ Export")
             self.progress.emit(f"      d) Save as: cookies/instagram.txt")
             self.progress.emit(f"   ")
-            self.progress.emit(f"   3️⃣ Make sure:")
-            self.progress.emit(f"      • You're logged into Instagram in browser")
-            self.progress.emit(f"      • Cookies are NOT expired (< 30 days old)")
-            self.progress.emit(f"      • File contains 'sessionid' cookie")
+            self.progress.emit(f"   3ï¸âƒ£ Make sure:")
+            self.progress.emit(f"      â€¢ You're logged into Instagram in browser")
+            self.progress.emit(f"      â€¢ Cookies are NOT expired (< 30 days old)")
+            self.progress.emit(f"      â€¢ File contains 'sessionid' cookie")
             self.progress.emit(f"   ")
-            self.progress.emit(f"   💡 Checked {total_cookies} cookie file(s) - all invalid/expired")
+            self.progress.emit(f"   ðŸ’¡ Checked {total_cookies} cookie file(s) - all invalid/expired")
             self.progress.emit(f"   ")
             return False
 
         except Exception as e:
-            self.progress.emit(f"   ❌ Instagram enhanced error: {str(e)[:100]}")
+            self.progress.emit(f"   âŒ Instagram enhanced error: {str(e)[:100]}")
             return False
 
     def _method_instaloader(self, url, output_path, cookie_file=None):
@@ -1277,13 +1188,13 @@ class VideoDownloaderThread(QThread):
             try:
                 import instaloader
             except ImportError:
-                self.progress.emit("⚠️ Instaloader not installed; skipping fallback")
+                self.progress.emit("âš ï¸ Instaloader not installed; skipping fallback")
                 return False
 
-            self.progress.emit("📸 Instaloader fallback")
+            self.progress.emit("ðŸ“¸ Instaloader fallback")
             match = re.search(r"instagram\.com/(?:p|reel|tv)/([^/?#&]+)", url, re.IGNORECASE)
             if not match:
-                self.progress.emit("⚠️ Could not detect Instagram shortcode for Instaloader")
+                self.progress.emit("âš ï¸ Could not detect Instagram shortcode for Instaloader")
                 return False
 
             shortcode = match.group(1)
@@ -1313,21 +1224,21 @@ class VideoDownloaderThread(QThread):
                     if cookies_dict:
                         loader.context._session.cookies.update(cookies_dict)
                 except Exception as cookie_error:
-                    self.progress.emit(f"⚠️ Instaloader cookie load failed: {str(cookie_error)[:60]}")
+                    self.progress.emit(f"âš ï¸ Instaloader cookie load failed: {str(cookie_error)[:60]}")
 
             post = instaloader.Post.from_shortcode(loader.context, shortcode)
             target = post.owner_username or "instagram"
             loader.download_post(post, target=target)
-            self.progress.emit("✅ Instaloader SUCCESS")
+            self.progress.emit("âœ… Instaloader SUCCESS")
             return True
         except Exception as e:
-            self.progress.emit(f"⚠️ Instaloader error: {str(e)[:100]}")
+            self.progress.emit(f"âš ï¸ Instaloader error: {str(e)[:100]}")
             return False
 
     def _method_gallery_dl(self, url, output_path, cookie_file=None):
         """gallery-dl fallback for Instagram, Twitter, etc."""
         try:
-            self.progress.emit("🖼️ gallery-dl fallback")
+            self.progress.emit("ðŸ–¼ï¸ gallery-dl fallback")
             cmd = [
                 'gallery-dl',
                 '--dest', output_path,
@@ -1337,7 +1248,7 @@ class VideoDownloaderThread(QThread):
 
             if cookie_file:
                 cmd.extend(['--cookies', cookie_file])
-                self.progress.emit(f"🍪 Using cookies: {Path(cookie_file).name}")
+                self.progress.emit(f"ðŸª Using cookies: {Path(cookie_file).name}")
 
             cmd.append(url)
 
@@ -1351,27 +1262,27 @@ class VideoDownloaderThread(QThread):
             )
 
             if result.returncode == 0:
-                self.progress.emit("✅ gallery-dl SUCCESS!")
+                self.progress.emit("âœ… gallery-dl SUCCESS!")
                 return True
             else:
                 error_msg = result.stderr[:200] if result.stderr else "Unknown error"
-                self.progress.emit(f"⚠️ gallery-dl failed: {error_msg}")
+                self.progress.emit(f"âš ï¸ gallery-dl failed: {error_msg}")
                 return False
 
         except subprocess.TimeoutExpired:
-            self.progress.emit("⚠️ gallery-dl timeout")
+            self.progress.emit("âš ï¸ gallery-dl timeout")
             return False
         except FileNotFoundError:
-            self.progress.emit("⚠️ gallery-dl not installed")
+            self.progress.emit("âš ï¸ gallery-dl not installed")
             return False
         except Exception as e:
-            self.progress.emit(f"⚠️ gallery-dl error: {str(e)[:100]}")
+            self.progress.emit(f"âš ï¸ gallery-dl error: {str(e)[:100]}")
             return False
 
     def _method6_youtube_dl_fallback(self, url, output_path, cookie_file=None):
         """youtube-dl as final fallback (older but sometimes works)"""
         try:
-            self.progress.emit("🔄 youtube-dl fallback (legacy)")
+            self.progress.emit("ðŸ”„ youtube-dl fallback (legacy)")
             format_string = self.format_override or 'best'
             cmd = [
                 'youtube-dl',
@@ -1399,35 +1310,35 @@ class VideoDownloaderThread(QThread):
             )
 
             if result.returncode == 0:
-                self.progress.emit("✅ youtube-dl SUCCESS!")
+                self.progress.emit("âœ… youtube-dl SUCCESS!")
                 return True
             else:
-                self.progress.emit("⚠️ youtube-dl failed")
+                self.progress.emit("âš ï¸ youtube-dl failed")
                 return False
 
         except subprocess.TimeoutExpired:
-            self.progress.emit("⚠️ youtube-dl timeout")
+            self.progress.emit("âš ï¸ youtube-dl timeout")
             return False
         except FileNotFoundError:
-            self.progress.emit("⚠️ youtube-dl not installed")
+            self.progress.emit("âš ï¸ youtube-dl not installed")
             return False
         except Exception as e:
-            self.progress.emit(f"⚠️ youtube-dl error: {str(e)[:100]}")
+            self.progress.emit(f"âš ï¸ youtube-dl error: {str(e)[:100]}")
             return False
 
     def _method4_alternative_formats(self, url, output_path, cookie_file=None):
         try:
-            self.progress.emit("🔄 Method 4: Alternative formats")
+            self.progress.emit("ðŸ”„ Method 4: Alternative formats")
 
             # Get UA and proxy once for this method
             user_agent = _get_random_user_agent()
             current_proxy = self._get_current_proxy()
 
             if current_proxy:
-                self.progress.emit(f"   🌐 Proxy: {current_proxy.split('@')[-1][:20]}...")
+                self.progress.emit(f"   ðŸŒ Proxy: {current_proxy.split('@')[-1][:20]}...")
             else:
-                self.progress.emit(f"   ⚠️ No proxy (IP blocks possible)")
-            self.progress.emit(f"   🎭 UA: {user_agent[:45]}...")
+                self.progress.emit(f"   âš ï¸ No proxy (IP blocks possible)")
+            self.progress.emit(f"   ðŸŽ­ UA: {user_agent[:45]}...")
 
             format_options = [
                 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
@@ -1455,24 +1366,24 @@ class VideoDownloaderThread(QThread):
                     self._apply_ffmpeg_ydl_opts(ydl_opts)
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                         ydl.download([url])
-                    self.progress.emit(f"✅ Method 4 SUCCESS (format: {fmt})")
+                    self.progress.emit(f"âœ… Method 4 SUCCESS (format: {fmt})")
                     return True
                 except Exception:
                     continue
-            self.progress.emit("⚠️ Method 4 failed")
+            self.progress.emit("âš ï¸ Method 4 failed")
             return False
         except Exception as e:
-            self.progress.emit(f"⚠️ Method 4 error: {str(e)[:100]}")
+            self.progress.emit(f"âš ï¸ Method 4 error: {str(e)[:100]}")
             return False
 
     def _method5_force_ipv4(self, url, output_path, cookie_file=None):
         try:
-            self.progress.emit("🔄 Method 5: Force IPv4 fallback")
+            self.progress.emit("ðŸ”„ Method 5: Force IPv4 fallback")
 
             # Smart yt-dlp detection
             ytdlp_cmd = self._get_ytdlp_command()
             if not ytdlp_cmd:
-                self.progress.emit(f"   ⚠️ yt-dlp not found, skipping")
+                self.progress.emit(f"   âš ï¸ yt-dlp not found, skipping")
                 return False
 
             # Get UA and proxy
@@ -1497,15 +1408,15 @@ class VideoDownloaderThread(QThread):
             # Add proxy
             if current_proxy:
                 cmd.extend(['--proxy', current_proxy])
-                self.progress.emit(f"   🌐 Proxy: {current_proxy.split('@')[-1][:20]}...")
+                self.progress.emit(f"   ðŸŒ Proxy: {current_proxy.split('@')[-1][:20]}...")
             else:
-                self.progress.emit(f"   ⚠️ No proxy (IP blocks possible)")
+                self.progress.emit(f"   âš ï¸ No proxy (IP blocks possible)")
 
             if cookie_file:
                 cmd.extend(['--cookies', cookie_file])
-                self.progress.emit(f"   🍪 Cookies: {Path(cookie_file).name}")
+                self.progress.emit(f"   ðŸª Cookies: {Path(cookie_file).name}")
 
-            self.progress.emit(f"   🎭 UA: {user_agent[:45]}...")
+            self.progress.emit(f"   ðŸŽ­ UA: {user_agent[:45]}...")
             cmd.append(url)
             result = subprocess.run(
                 cmd,
@@ -1516,16 +1427,16 @@ class VideoDownloaderThread(QThread):
                 errors='replace'
             )
             if result.returncode == 0:
-                self.progress.emit("✅ Method 5 SUCCESS!")
+                self.progress.emit("âœ… Method 5 SUCCESS!")
                 return True
             error_msg = result.stderr[:200] if result.stderr else "Unknown error"
-            self.progress.emit(f"⚠️ Method 5 failed: {error_msg}")
+            self.progress.emit(f"âš ï¸ Method 5 failed: {error_msg}")
             return False
         except subprocess.TimeoutExpired:
-            self.progress.emit("⚠️ Method 5 timeout")
+            self.progress.emit("âš ï¸ Method 5 timeout")
             return False
         except Exception as e:
-            self.progress.emit(f"⚠️ Method 5 error: {str(e)[:100]}")
+            self.progress.emit(f"âš ï¸ Method 5 error: {str(e)[:100]}")
             return False
 
     def _progress_hook(self, d):
@@ -1554,7 +1465,7 @@ class VideoDownloaderThread(QThread):
     def run(self):
         try:
             if not self.urls:
-                self.finished.emit(False, "❌ No URLs provided")
+                self.finished.emit(False, "âŒ No URLs provided")
                 return
             total = len(self.urls)
             ytdlp_cmd = self._get_ytdlp_command()
@@ -1573,36 +1484,36 @@ class VideoDownloaderThread(QThread):
                 self.progress.emit("WARNING: ffmpeg missing; using single-file format (lower quality).")
 
             # Show mode clearly
-            mode_name = "🔹 BULK MODE" if self.is_bulk_mode else "🔸 SINGLE MODE"
+            mode_name = "ðŸ”¹ BULK MODE" if self.is_bulk_mode else "ðŸ”¸ SINGLE MODE"
             self.progress.emit("="*60)
-            self.progress.emit(f"🚀 SMART DOWNLOADER STARTING - {mode_name}")
-            self.progress.emit(f"📊 Total links: {total}")
+            self.progress.emit(f"ðŸš€ SMART DOWNLOADER STARTING - {mode_name}")
+            self.progress.emit(f"ðŸ“Š Total links: {total}")
 
             if self.is_bulk_mode:
-                self.progress.emit(f"📂 Creators: {len(self.bulk_creators)}")
-                self.progress.emit("✅ History tracking: ON")
-                self.progress.emit("✅ Auto URL cleanup: ON")
-                self.progress.emit(f"📝 Track file: {self.downloaded_links_file.name}")
+                self.progress.emit(f"ðŸ“‚ Creators: {len(self.bulk_creators)}")
+                self.progress.emit("âœ… History tracking: ON")
+                self.progress.emit("âœ… Auto URL cleanup: ON")
+                self.progress.emit(f"ðŸ“ Track file: {self.downloaded_links_file.name}")
             else:
-                self.progress.emit("📁 Save: Desktop/Toseeq Downloads")
-                self.progress.emit("⚡ Simple mode: No tracking, no extra files")
-                self.progress.emit("🚫 File creation: DISABLED")
+                self.progress.emit("ðŸ“ Save: Desktop/Toseeq Downloads")
+                self.progress.emit("âš¡ Simple mode: No tracking, no extra files")
+                self.progress.emit("ðŸš« File creation: DISABLED")
                 # Clean up any leftover tracking files from old runs
                 self._cleanup_tracking_files(self.save_path)
 
             # Show proxy status
             if self.proxies:
-                self.progress.emit(f"🌐 Proxies loaded: {len(self.proxies)}")
+                self.progress.emit(f"ðŸŒ Proxies loaded: {len(self.proxies)}")
                 for idx, proxy in enumerate(self.proxies, 1):
                     proxy_display = proxy.split('@')[-1][:25] if '@' in proxy else proxy[:25]
                     self.progress.emit(f"   Proxy {idx}: {proxy_display}...")
             else:
-                self.progress.emit("⚠️ WARNING: No proxies configured - IP blocks possible!")
-                self.progress.emit("   💡 Add proxies in Link Grabber for better success rate")
+                self.progress.emit("âš ï¸ WARNING: No proxies configured - IP blocks possible!")
+                self.progress.emit("   ðŸ’¡ Add proxies in Link Grabber for better success rate")
 
             self.progress.emit("="*60)
             if self.force_all_methods:
-                self.progress.emit("🛡️ Multi-strategy fallback enabled")
+                self.progress.emit("ðŸ›¡ï¸ Multi-strategy fallback enabled")
             # Map URLs to their source folder by looking up all *.txt in save_path (recursive)
             url_folder_map = {}
             for root, dirs, files in os.walk(self.save_path):
@@ -1633,10 +1544,10 @@ class VideoDownloaderThread(QThread):
                 # Skip logic handled by history.json in bulk mode
                 processed += 1
                 if self._is_already_downloaded(url):
-                    self.progress.emit(f"⏭️ [{processed}/{total}] Already downloaded, skipping...")
+                    self.progress.emit(f"â­ï¸ [{processed}/{total}] Already downloaded, skipping...")
                     self.skipped_count += 1
                     continue
-                self.progress.emit(f"\n📥 [{processed}/{total}] {url[:80]}...")
+                self.progress.emit(f"\nðŸ“¥ [{processed}/{total}] {url[:80]}...")
                 cookie_file = self.get_cookie_file(url, folder)
                 # Platform-wise methods with enhanced fallbacks
                 platform = _detect_platform(url)
@@ -1695,77 +1606,77 @@ class VideoDownloaderThread(QThread):
                         else:
                             # Method returned False (failed) - continue to next method
                             if attempted_methods < len(methods):
-                                self.progress.emit(f"   🔄 Method failed, trying next method...")
+                                self.progress.emit(f"   ðŸ”„ Method failed, trying next method...")
                     except Exception as e:
-                        self.progress.emit(f"   ⚠️ Method exception: {str(e)[:100]}")
+                        self.progress.emit(f"   âš ï¸ Method exception: {str(e)[:100]}")
                         if attempted_methods < len(methods):
-                            self.progress.emit(f"   🔄 Continuing with next method...")
+                            self.progress.emit(f"   ðŸ”„ Continuing with next method...")
                 if success:
                     self.success_count += 1
-                    self.progress.emit(f"✅ [{processed}/{total}] Downloaded!")
+                    self.progress.emit(f"âœ… [{processed}/{total}] Downloaded!")
                     self._mark_as_downloaded(url)
                     self._remove_from_source_txt(url, folder)
                     # Timestamp tracking handled by history.json
                     self.video_complete.emit(url)
                 else:
-                    self.progress.emit(f"❌ [{processed}/{total}] ALL METHODS FAILED")
+                    self.progress.emit(f"âŒ [{processed}/{total}] ALL METHODS FAILED")
                     # Track failed URL with reason
                     reason = "All download methods failed"
                     self.failed_urls.append((url, reason))
                 pct = int((processed / total) * 100)
                 self.progress_percent.emit(pct)
             self.progress.emit("\n" + "="*60)
-            self.progress.emit("📊 FINAL REPORT:")
-            self.progress.emit(f"✅ Successfully downloaded: {self.success_count}/{total}")
-            self.progress.emit(f"⏭️ Skipped (already done): {self.skipped_count}")
+            self.progress.emit("ðŸ“Š FINAL REPORT:")
+            self.progress.emit(f"âœ… Successfully downloaded: {self.success_count}/{total}")
+            self.progress.emit(f"â­ï¸ Skipped (already done): {self.skipped_count}")
             failed_count = total - self.success_count - self.skipped_count
-            self.progress.emit(f"❌ Failed: {failed_count}")
+            self.progress.emit(f"âŒ Failed: {failed_count}")
 
             # Calculate success rate
             if total > 0:
                 success_rate = (self.success_count / total * 100)
-                self.progress.emit(f"📈 Success Rate: {success_rate:.1f}%")
+                self.progress.emit(f"ðŸ“ˆ Success Rate: {success_rate:.1f}%")
 
                 # Success rate assessment
                 if success_rate >= 95:
-                    self.progress.emit("🎉 EXCELLENT! Almost all videos downloaded!")
+                    self.progress.emit("ðŸŽ‰ EXCELLENT! Almost all videos downloaded!")
                 elif success_rate >= 80:
-                    self.progress.emit("👍 GOOD! Most videos downloaded successfully")
+                    self.progress.emit("ðŸ‘ GOOD! Most videos downloaded successfully")
                 elif success_rate >= 50:
-                    self.progress.emit("⚠️ NEEDS IMPROVEMENT - Check failed downloads below")
+                    self.progress.emit("âš ï¸ NEEDS IMPROVEMENT - Check failed downloads below")
                 else:
-                    self.progress.emit("❌ CRITICAL - Many downloads failed")
+                    self.progress.emit("âŒ CRITICAL - Many downloads failed")
 
             # Enhanced Failed URLs Report
             if self.failed_urls:
-                self.progress.emit("\n" + "━"*60)
-                self.progress.emit(f"❌ FAILED DOWNLOADS - Detailed Report ({len(self.failed_urls)} videos):")
-                self.progress.emit("━"*60)
+                self.progress.emit("\n" + "â”"*60)
+                self.progress.emit(f"âŒ FAILED DOWNLOADS - Detailed Report ({len(self.failed_urls)} videos):")
+                self.progress.emit("â”"*60)
 
                 for idx, (failed_url, reason) in enumerate(self.failed_urls[:10], 1):  # Show first 10
                     self.progress.emit(f"\n{idx}. {failed_url[:65]}...")
-                    self.progress.emit(f"   💔 Reason: {reason}")
+                    self.progress.emit(f"   ðŸ’” Reason: {reason}")
 
                     # Suggest solutions based on common issues
                     if 'cookie' in reason.lower():
-                        self.progress.emit(f"   💡 Solution: Update cookies file")
+                        self.progress.emit(f"   ðŸ’¡ Solution: Update cookies file")
                     elif 'private' in reason.lower():
-                        self.progress.emit(f"   💡 Solution: Check if video is private/deleted")
+                        self.progress.emit(f"   ðŸ’¡ Solution: Check if video is private/deleted")
                     elif 'proxy' in reason.lower() or 'ip block' in reason.lower():
-                        self.progress.emit(f"   💡 Solution: Add/change proxy in Link Grabber")
+                        self.progress.emit(f"   ðŸ’¡ Solution: Add/change proxy in Link Grabber")
                     else:
-                        self.progress.emit(f"   💡 Solution: Try different quality or enable VPN")
+                        self.progress.emit(f"   ðŸ’¡ Solution: Try different quality or enable VPN")
 
                 if len(self.failed_urls) > 10:
                     self.progress.emit(f"\n... and {len(self.failed_urls) - 10} more failed downloads")
 
-                self.progress.emit("\n" + "━"*60)
+                self.progress.emit("\n" + "â”"*60)
 
             self.progress.emit("="*60)
 
             # Update history.json for bulk mode
             if self.history_manager and self.bulk_creators:
-                self.progress.emit("\n📝 Updating download history...")
+                self.progress.emit("\nðŸ“ Updating download history...")
                 try:
                     # Track downloads per creator
                     creator_stats = {}  # {creator: {'success': 0, 'failed': 0}}
@@ -1802,7 +1713,7 @@ class VideoDownloaderThread(QThread):
                             failed_count=stats['failed'],
                             status=status
                         )
-                        self.progress.emit(f"  ✓ {creator}: {stats['success']} downloaded, {stats['failed']} failed")
+                        self.progress.emit(f"  âœ“ {creator}: {stats['success']} downloaded, {stats['failed']} failed")
 
                         # Remove successfully downloaded URLs from links file
                         if stats['success'] > 0:
@@ -1835,26 +1746,29 @@ class VideoDownloaderThread(QThread):
                                     with open(links_file, 'w', encoding='utf-8') as f:
                                         f.writelines(new_lines)
 
-                                    self.progress.emit(f"  🗑️ Updated {Path(links_file).name}")
+                                    self.progress.emit(f"  ðŸ—‘ï¸ Updated {Path(links_file).name}")
                                 except Exception as e:
-                                    self.progress.emit(f"  ⚠️ Failed to update {Path(links_file).name}: {str(e)[:50]}")
+                                    self.progress.emit(f"  âš ï¸ Failed to update {Path(links_file).name}: {str(e)[:50]}")
 
-                    self.progress.emit("✅ History updated!")
+                    self.progress.emit("âœ… History updated!")
                 except Exception as e:
-                    self.progress.emit(f"⚠️ History update failed: {str(e)[:100]}")
+                    self.progress.emit(f"âš ï¸ History update failed: {str(e)[:100]}")
 
             if self.cancelled:
-                self.finished.emit(False, f"⚠️ Cancelled - {self.success_count} downloaded")
+                self.finished.emit(False, f"âš ï¸ Cancelled - {self.success_count} downloaded")
             elif self.success_count + self.skipped_count == total:
-                self.finished.emit(True, f"✅ ALL DONE! {self.success_count} new, {self.skipped_count} skipped")
+                self.finished.emit(True, f"âœ… ALL DONE! {self.success_count} new, {self.skipped_count} skipped")
             elif self.success_count > 0:
-                self.finished.emit(True, f"⚠️ Partial: {self.success_count} downloaded, {self.skipped_count} skipped")
+                self.finished.emit(True, f"âš ï¸ Partial: {self.success_count} downloaded, {self.skipped_count} skipped")
             else:
-                self.finished.emit(False, f"❌ Failed - 0 downloaded")
+                self.finished.emit(False, f"âŒ Failed - 0 downloaded")
         except Exception as e:
-            self.progress.emit(f"❌ CRITICAL ERROR: {str(e)[:200]}")
-            self.finished.emit(False, f"❌ Error: {str(e)[:100]}")
+            self.progress.emit(f"âŒ CRITICAL ERROR: {str(e)[:200]}")
+            self.finished.emit(False, f"âŒ Error: {str(e)[:100]}")
 
     def cancel(self):
         self.cancelled = True
-        self.progress.emit("⚠️ Cancellation requested...")
+        self.progress.emit("âš ï¸ Cancellation requested...")
+
+
+

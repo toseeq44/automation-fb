@@ -1,4 +1,4 @@
-"""
+﻿"""
 modules/link_grabber/gui.py
 GUI for the link grabber using PyQt5.
 - User-friendly interface with simplified layout and larger fonts.
@@ -17,6 +17,7 @@ from pathlib import Path
 import pyperclip
 import shutil
 from datetime import datetime
+from modules.shared.auth_network_hub import AuthNetworkHub
 from .core import (
     LinkGrabberThread,
     BulkLinkGrabberThread,
@@ -29,6 +30,19 @@ from .core import (
 from .cookie_validator import EnhancedCookieValidator, validate_cookie_file
 
 class LinkGrabberPage(QWidget):
+    @staticmethod
+    def _repair_log_text(msg: str) -> str:
+        """Best-effort fix for mojibake text from legacy log strings."""
+        text = str(msg or "")
+        try:
+            if "ðŸ" in text or "â" in text:
+                repaired = text.encode("latin1", errors="ignore").decode("utf-8", errors="ignore")
+                if repaired:
+                    text = repaired
+        except Exception:
+            pass
+        return text.replace("\ufeff", "").strip("\r")
+
     def __init__(self, go_back_callback=None, shared_links=None, download_callback=None):
         super().__init__()
         self.thread = None
@@ -37,15 +51,14 @@ class LinkGrabberPage(QWidget):
         self.links = shared_links if shared_links is not None else []  # Use shared links
         self.creator = "unknown"
         self.creator_results = {}
+        self.auth_hub = AuthNetworkHub()
 
         # Root cookies folder - use persistent path (works in dev and EXE mode)
-        from modules.config.paths import get_cookies_dir
-        self.cookies_dir = get_cookies_dir()
+        self.cookies_dir = self.auth_hub.cookies_dir
 
         # Proxy settings file
-        self.config_dir = Path(__file__).parent.parent.parent / "config"
-        self.config_dir.mkdir(parents=True, exist_ok=True)
-        self.proxy_config_file = self.config_dir / "proxy_settings.json"
+        self.config_dir = self.auth_hub.config_dir
+        self.proxy_config_file = self.auth_hub.proxy_config_file
 
         # Store validated proxies
         self.validated_proxies = []
@@ -77,7 +90,7 @@ class LinkGrabberPage(QWidget):
             }
         """)
 
-        self.title = QLabel("🔗 Fast Link Grabber")
+        self.title = QLabel("Fast Link Grabber")
         self.title.setStyleSheet("""
             font-size: 24px;
             font-weight: bold;
@@ -105,7 +118,7 @@ class LinkGrabberPage(QWidget):
         layout.addWidget(self.url_input)
 
         # ===== COOKIE SECTION =====
-        cookie_group = QGroupBox("🍪 Cookies (Optional - For Private Content)")
+        cookie_group = QGroupBox("Cookies (Optional - For Private Content)")
         cookie_group.setCheckable(True)
         cookie_group.setChecked(True)  # EXPANDED BY DEFAULT so user can see it!
         cookie_group.setStyleSheet("""
@@ -166,9 +179,9 @@ class LinkGrabberPage(QWidget):
 
         # Cookie buttons
         cookie_btn_row = QHBoxLayout()
-        self.upload_cookie_btn = QPushButton("📤 Upload Cookie File")
-        self.save_cookie_btn = QPushButton("💾 Save")
-        self.clear_cookie_btn = QPushButton("🧹 Clear")
+        self.upload_cookie_btn = QPushButton("Upload Cookie File")
+        self.save_cookie_btn = QPushButton("Save")
+        self.clear_cookie_btn = QPushButton("Clear")
 
         for btn in [self.upload_cookie_btn, self.save_cookie_btn, self.clear_cookie_btn]:
             btn.setStyleSheet("""
@@ -190,7 +203,7 @@ class LinkGrabberPage(QWidget):
         cookie_layout.addLayout(cookie_btn_row)
 
         # Cookie status
-        self.cookie_status = QLabel("💡 No cookies loaded - Using browser cookies or public access")
+        self.cookie_status = QLabel("No cookies loaded - Using browser cookies or public access")
         self.cookie_status.setStyleSheet("color: #888; font-size: 11px;")
         cookie_layout.addWidget(self.cookie_status)
 
@@ -210,7 +223,7 @@ class LinkGrabberPage(QWidget):
         self.clear_cookie_btn.setEnabled(True)
 
         # ===== PROXY SECTION (2026 Upgrade) =====
-        proxy_group = QGroupBox("🌐 Proxy Settings (Optional - Max 2 Proxies)")
+        proxy_group = QGroupBox("Proxy Settings (Optional - Max 2 Proxies)")
         proxy_group.setCheckable(True)
         proxy_group.setChecked(False)  # Collapsed by default
         proxy_group.setStyleSheet("""
@@ -247,7 +260,7 @@ class LinkGrabberPage(QWidget):
             }
             QLineEdit:focus { border: 2px solid #1ABC9C; }
         """)
-        self.validate_proxy1_btn = QPushButton("✓ Validate")
+        self.validate_proxy1_btn = QPushButton("Validate")
         self.validate_proxy1_btn.setStyleSheet("""
             QPushButton {
                 background-color: #1ABC9C;
@@ -259,7 +272,7 @@ class LinkGrabberPage(QWidget):
             }
             QPushButton:hover { background-color: #16A085; }
         """)
-        self.proxy1_status = QLabel("⚪ Not validated")
+        self.proxy1_status = QLabel("Not validated")
         self.proxy1_status.setStyleSheet("color: #888; font-size: 11px;")
 
         proxy1_row.addWidget(proxy1_label)
@@ -285,7 +298,7 @@ class LinkGrabberPage(QWidget):
             }
             QLineEdit:focus { border: 2px solid #1ABC9C; }
         """)
-        self.validate_proxy2_btn = QPushButton("✓ Validate")
+        self.validate_proxy2_btn = QPushButton("Validate")
         self.validate_proxy2_btn.setStyleSheet("""
             QPushButton {
                 background-color: #1ABC9C;
@@ -297,7 +310,7 @@ class LinkGrabberPage(QWidget):
             }
             QPushButton:hover { background-color: #16A085; }
         """)
-        self.proxy2_status = QLabel("⚪ Not validated")
+        self.proxy2_status = QLabel("Not validated")
         self.proxy2_status.setStyleSheet("color: #888; font-size: 11px;")
 
         proxy2_row.addWidget(proxy2_label)
@@ -307,7 +320,7 @@ class LinkGrabberPage(QWidget):
         proxy_layout.addLayout(proxy2_row)
 
         # Proxy info/tip
-        proxy_tip = QLabel("💡 Proxies help bypass IP blocks and rate limits. Leave empty to use direct connection.")
+        proxy_tip = QLabel("Proxies help bypass IP blocks and rate limits. Leave empty to use direct connection.")
         proxy_tip.setStyleSheet("color: #888; font-size: 11px; font-style: italic;")
         proxy_layout.addWidget(proxy_tip)
 
@@ -371,13 +384,13 @@ class LinkGrabberPage(QWidget):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(10)
 
-        self.start_btn = QPushButton("🎯 Start")
-        self.cancel_btn = QPushButton("❌ Cancel")
-        self.save_btn = QPushButton("💾 Save")
-        self.copy_btn = QPushButton("📋 Copy All")
-        self.clear_btn = QPushButton("🧹 Clear")
-        self.download_btn = QPushButton("⬇ Download Links")  # New button to switch to downloader
-        self.help_btn = QPushButton("❓ Help")  # New help button
+        self.start_btn = QPushButton("Start")
+        self.cancel_btn = QPushButton("Cancel")
+        self.save_btn = QPushButton("Save")
+        self.copy_btn = QPushButton("Copy All")
+        self.clear_btn = QPushButton("Clear")
+        self.download_btn = QPushButton("Download Links")  # New button to switch to downloader
+        self.help_btn = QPushButton("Help")  # New help button
 
         button_style = """
             QPushButton {
@@ -460,14 +473,14 @@ class LinkGrabberPage(QWidget):
 
         # ===== LOGS SECTION WITH TOGGLE =====
         logs_header_row = QHBoxLayout()
-        logs_header_label = QLabel("📋 Activity Logs")
+        logs_header_label = QLabel("Activity Logs")
         logs_header_label.setStyleSheet("""
             font-size: 16px;
             font-weight: bold;
             color: #1ABC9C;
         """)
 
-        maximize_btn = QPushButton("🔍 Maximize Output")
+        maximize_btn = QPushButton("Maximize Output")
         maximize_btn.setStyleSheet("""
             QPushButton {
                 background-color: #3498DB;
@@ -534,42 +547,39 @@ class LinkGrabberPage(QWidget):
 
         if self.download_callback:
             self.download_callback()
-            self.log_area.append(f"🚀 Sent {len(cleaned)} link(s) to Video Downloader (Single Mode).")
+            self.log_area.append(f" Sent {len(cleaned)} link(s) to Video Downloader (Single Mode).")
         else:
             QMessageBox.information(
                 self,
                 "Links Ready",
                 f"Prepared {len(cleaned)} link(s). Switch to the Video Downloader module to continue."
             )
-            self.log_area.append("ℹ️ Links ready for downloader - open the Video Downloader module to continue.")
+            self.log_area.append(" Links ready for downloader - open the Video Downloader module to continue.")
 
     def load_proxy_settings(self):
         """Load saved proxy settings from config file"""
         try:
-            if self.proxy_config_file.exists():
-                import json
-                with open(self.proxy_config_file, 'r') as f:
-                    settings = json.load(f)
+            settings = self.auth_hub.load_proxy_settings()
 
-                # Load proxies into input fields
-                proxy1 = settings.get('proxy1', '')
-                proxy2 = settings.get('proxy2', '')
+            # Load proxies into input fields
+            proxy1 = settings.get('proxy1', '')
+            proxy2 = settings.get('proxy2', '')
 
-                if proxy1:
-                    self.proxy1_input.setText(proxy1)
-                    # Mark as previously validated (will re-validate on use)
-                    self.proxy1_status.setText("💾 Saved")
-                    self.proxy1_status.setStyleSheet("color: #FFA500; font-size: 11px;")
-                    self.validated_proxies.append(proxy1)
+            if proxy1:
+                self.proxy1_input.setText(proxy1)
+                # Mark as previously validated (will re-validate on use)
+                self.proxy1_status.setText("Saved")
+                self.proxy1_status.setStyleSheet("color: #FFA500; font-size: 11px;")
+                self.validated_proxies.append(proxy1)
 
-                if proxy2:
-                    self.proxy2_input.setText(proxy2)
-                    self.proxy2_status.setText("💾 Saved")
-                    self.proxy2_status.setStyleSheet("color: #FFA500; font-size: 11px;")
-                    self.validated_proxies.append(proxy2)
+            if proxy2:
+                self.proxy2_input.setText(proxy2)
+                self.proxy2_status.setText("Saved")
+                self.proxy2_status.setStyleSheet("color: #FFA500; font-size: 11px;")
+                self.validated_proxies.append(proxy2)
 
-                if proxy1 or proxy2:
-                    self.log_area.append(f"📥 Loaded {len([p for p in [proxy1, proxy2] if p])} saved proxy(ies)")
+            if proxy1 or proxy2:
+                self.log_area.append(f" Loaded {len([p for p in [proxy1, proxy2] if p])} saved proxy(ies)")
 
         except Exception as e:
             # Silently fail if can't load (first time use)
@@ -578,25 +588,17 @@ class LinkGrabberPage(QWidget):
     def save_proxy_settings(self):
         """Save current proxies to config file"""
         try:
-            import json
-
             # Get current proxies from input fields
             proxy1 = self.proxy1_input.text().strip()
             proxy2 = self.proxy2_input.text().strip()
 
-            settings = {
-                'proxy1': proxy1,
-                'proxy2': proxy2,
-                'last_updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            }
-
-            with open(self.proxy_config_file, 'w') as f:
-                json.dump(settings, f, indent=2)
-
-            self.log_area.append("💾 Proxy settings saved")
+            if self.auth_hub.save_proxy_settings(proxy1, proxy2):
+                self.log_area.append(" Proxy settings saved")
+            else:
+                self.log_area.append(" Failed to save proxy settings")
 
         except Exception as e:
-            self.log_area.append(f"⚠️ Failed to save proxy settings: {str(e)[:50]}")
+            self.log_area.append(f" Failed to save proxy settings: {str(e)[:50]}")
 
     def show_maximized_output(self):
         """Show activity logs in maximized window with copy and close buttons"""
@@ -605,7 +607,7 @@ class LinkGrabberPage(QWidget):
 
         # Create maximized dialog
         dialog = QDialog(self)
-        dialog.setWindowTitle("📋 Link Grabber Activity Logs - Full Output")
+        dialog.setWindowTitle(" Link Grabber Activity Logs - Full Output")
         dialog.setWindowFlags(Qt.Window | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint)
 
         # Set dialog size to 90% of screen
@@ -630,7 +632,7 @@ class LinkGrabberPage(QWidget):
         layout.setSpacing(10)
 
         # Title
-        title = QLabel("📋 Link Grabber Activity Logs")
+        title = QLabel("Link Grabber Activity Logs")
         title.setStyleSheet("font-size: 18px; font-weight: bold; color: #1ABC9C; margin-bottom: 10px;")
         layout.addWidget(title)
 
@@ -656,7 +658,7 @@ class LinkGrabberPage(QWidget):
         button_layout.addStretch()
 
         # Copy All button
-        copy_btn = QPushButton("📋 Copy All")
+        copy_btn = QPushButton("Copy All")
         copy_btn.setStyleSheet("""
             QPushButton {
                 background-color: #3498DB;
@@ -674,7 +676,7 @@ class LinkGrabberPage(QWidget):
         button_layout.addWidget(copy_btn)
 
         # Close button
-        close_btn = QPushButton("✖️ Close")
+        close_btn = QPushButton("Close")
         close_btn.setStyleSheet("""
             QPushButton {
                 background-color: #E74C3C;
@@ -709,23 +711,23 @@ class LinkGrabberPage(QWidget):
             status_label = self.proxy2_status
 
         if not proxy:
-            status_label.setText("⚪ Not validated")
+            status_label.setText("Not validated")
             status_label.setStyleSheet("color: #888; font-size: 11px;")
             return
 
         # Show validating message
-        status_label.setText("🔄 Validating...")
+        status_label.setText("Validating...")
         status_label.setStyleSheet("color: #FFA500; font-size: 11px;")
-        self.log_area.append(f"🔄 Validating Proxy {proxy_num}: {proxy}")
+        self.log_area.append(f" Validating Proxy {proxy_num}: {proxy}")
 
         # Validate proxy
         result = _validate_proxy(proxy, timeout=10)
 
         if result['working']:
             # Proxy is working
-            status_label.setText(f"✅ Working ({result['response_time']}s)")
+            status_label.setText(f" Working ({result['response_time']}s)")
             status_label.setStyleSheet("color: #1ABC9C; font-size: 11px;")
-            self.log_area.append(f"✅ Proxy {proxy_num} validated: {result['ip']} ({result['response_time']}s)")
+            self.log_area.append(f" Proxy {proxy_num} validated: {result['ip']} ({result['response_time']}s)")
 
             # Add to validated list
             if proxy not in self.validated_proxies:
@@ -740,12 +742,12 @@ class LinkGrabberPage(QWidget):
 
             # Truncate error for status label (max 30 chars)
             short_error = error_msg[:30] + "..." if len(error_msg) > 30 else error_msg
-            status_label.setText(f"❌ {short_error}")
+            status_label.setText(f" {short_error}")
             status_label.setStyleSheet("color: #E74C3C; font-size: 10px;")
             status_label.setToolTip(error_msg)  # Full error in tooltip
 
             # Show full error in log
-            self.log_area.append(f"❌ Proxy {proxy_num} validation failed")
+            self.log_area.append(f" Proxy {proxy_num} validation failed")
             self.log_area.append(f"   Error: {error_msg}")
 
             # Remove from validated list if exists
@@ -795,20 +797,23 @@ class LinkGrabberPage(QWidget):
             proxies.append(proxy2)
 
         if proxies:
-            self.log_area.append(f"🌐 Using {len(proxies)} validated proxy(ies)")
+            self.log_area.append(f" Using {len(proxies)} validated proxy(ies)")
 
         options = {
             "max_videos": max_videos,
             "cookie_browser": browser,  # None for file, "chrome"/"firefox"/"edge" for browser
             "proxies": proxies,  # List of validated proxies
-            "use_enhancements": True  # Enable enhanced extraction methods
+            "use_enhancements": True,  # Enable enhanced extraction methods
+            "use_instaloader": False,  # Avoid long 429 waits by default
+            "interactive_login_fallback": True,
+            "manual_login_wait_seconds": 120,
         }
         if len(urls) == 1:
             self.thread = LinkGrabberThread(urls[0], options)
             try:
                 self.creator = _extract_creator_from_url(urls[0], _detect_platform_key(urls[0]))
             except Exception as e:
-                self.log_area.append(f"⚠️ Failed to extract creator: {str(e)[:100]}")
+                self.log_area.append(f" Failed to extract creator: {str(e)[:100]}")
                 self.creator = "unknown"
         else:
             self.thread = BulkLinkGrabberThread(urls, options)
@@ -820,12 +825,12 @@ class LinkGrabberPage(QWidget):
         self.thread.finished.connect(self.on_finished)
         self.thread.start()
 
-        self.log_area.append("🚀 Started grabbing links...")
+        self.log_area.append(" Started grabbing links...")
 
     def cancel_grab(self):
         if self.thread and self.thread.isRunning():
             self.thread.cancel()
-            self.log_area.append("⚠️ Cancelling process...")
+            self.log_area.append(" Cancelling process...")
             self.thread = None
         self.start_btn.setEnabled(True)
         self.creator_results = {}
@@ -855,10 +860,10 @@ class LinkGrabberPage(QWidget):
                 QMessageBox.warning(self, "Error", "No links to save.")
                 return
 
-            self.log_area.append(f"✅ Saved {total_links} links across {len(saved_details)} creator folder(s).")
+            self.log_area.append(f" Saved {total_links} links across {len(saved_details)} creator folder(s).")
 
             summary_lines = [
-                f"• @{_safe_filename(name)} → {count} links\n  {path}"
+                f" @{_safe_filename(name)}  {count} links\n  {path}"
                 for name, path, count in saved_details
             ]
             QMessageBox.information(
@@ -867,7 +872,7 @@ class LinkGrabberPage(QWidget):
                 f"Saved {total_links} links across {len(saved_details)} creator(s).\n\n" + "\n".join(summary_lines)
             )
         except Exception as e:
-            self.log_area.append(f"❌ Failed to save files: {str(e)[:100]}")
+            self.log_area.append(f" Failed to save files: {str(e)[:100]}")
             QMessageBox.warning(self, "Error", f"Failed to save files: {str(e)[:100]}")
 
     def clear_interface(self):
@@ -888,47 +893,47 @@ class LinkGrabberPage(QWidget):
     def show_help(self):
         """Show comprehensive help dialog"""
         help_text = """
-╔══════════════════════════════════════════════════════════════════════╗
-║           📖 Link Grabber - User Guide & Troubleshooting             ║
-╚══════════════════════════════════════════════════════════════════════╝
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  🌐 PROXY SETUP GUIDE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            Link Grabber - User Guide & Troubleshooting             
+
+
+
+   PROXY SETUP GUIDE
+
 
 The app supports ALL proxy formats automatically:
 
-1️⃣ No Authentication:
+1 No Authentication:
    209.101.203.79:59100
 
-2️⃣ Standard Format (user:pass@ip:port):
+2 Standard Format (user:pass@ip:port):
    username:password@209.101.203.79:59100
 
-3️⃣ Provider Format (ip:port:user:pass):
+3 Provider Format (ip:port:user:pass):
    209.101.203.79:59100:username:password
 
-✨ All formats are automatically detected and converted!
+ All formats are automatically detected and converted!
 
 HOW TO USE:
-• Enter proxy in ANY format above
-• Click "✓ Validate" to test connection
-• Green ✅ = Working, Red ❌ = Failed
-• Only validated proxies are used during extraction
+ Enter proxy in ANY format above
+ Click " Validate" to test connection
+ Green  = Working, Red  = Failed
+ Only validated proxies are used during extraction
 
 WHY USE PROXIES:
-• Bypass IP blocks and rate limits
-• Access geo-restricted content
-• Prevent detection during bulk operations
-• Max 2 proxies supported
+ Bypass IP blocks and rate limits
+ Access geo-restricted content
+ Prevent detection during bulk operations
+ Max 2 proxies supported
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  🔧 yt-dlp INSTALLATION (Optional - App Has Built-in)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+   yt-dlp INSTALLATION (Optional - App Has Built-in)
+
 
 The app includes yt-dlp, but you can install your own for updates:
 
 DETECTION PRIORITY:
-1. Bundled yt-dlp.exe (in app) - Most reliable ✓
+1. Bundled yt-dlp.exe (in app) - Most reliable 
 2. System yt-dlp (in PATH) - If you installed
 3. Custom locations (C:\\yt-dlp, AppData, etc.)
 
@@ -938,17 +943,17 @@ RECOMMENDED INSTALL (for updates):
 3. Restart app
 
 VERIFICATION:
-• Open Command Prompt
-• Run: yt-dlp --version
-• Should show version number
+ Open Command Prompt
+ Run: yt-dlp --version
+ Should show version number
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  🍪 COOKIE TROUBLESHOOTING
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+   COOKIE TROUBLESHOOTING
+
 
 If link grabbing fails:
 
-✅ SOLUTIONS:
+ SOLUTIONS:
 1. Update cookies (they expire!)
 2. Use "Use Browser (Chrome)" option
 3. Try different proxy
@@ -956,23 +961,23 @@ If link grabbing fails:
 5. Verify you're logged into the platform
 
 COOKIE FORMATS:
-• Netscape format (recommended)
-• Export using "Get cookies.txt" Chrome extension
-• Place in cookies/ folder or use Browser mode
+ Netscape format (recommended)
+ Export using "Get cookies.txt" Chrome extension
+ Place in cookies/ folder or use Browser mode
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  🎯 BEST PRACTICES
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-• Always validate proxies before use
-• Update cookies regularly (weekly)
-• Use "Fetch All Videos" for complete extraction
-• For private accounts, ensure cookies are fresh
-• Check logs for detailed error messages
+   BEST PRACTICES
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ❓ COMMON ERRORS & FIXES
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ Always validate proxies before use
+ Update cookies regularly (weekly)
+ Use "Fetch All Videos" for complete extraction
+ For private accounts, ensure cookies are fresh
+ Check logs for detailed error messages
+
+
+   COMMON ERRORS & FIXES
+
 
 ERROR: "Proxy connection failed"
 FIX: Check proxy format, verify credentials, try HTTP instead of HTTPS
@@ -986,14 +991,14 @@ FIX: Proxy too slow, try different proxy or increase timeout
 ERROR: "Authentication failed"
 FIX: Check proxy username/password, verify format
 
-╔══════════════════════════════════════════════════════════════════════╗
-║  Need more help? Check the logs for detailed error messages!         ║
-╚══════════════════════════════════════════════════════════════════════╝
+
+  Need more help? Check the logs for detailed error messages!         
+
         """
 
         # Create scrollable message box
         msg = QMessageBox(self)
-        msg.setWindowTitle("📖 Link Grabber Help & Guide")
+        msg.setWindowTitle(" Link Grabber Help & Guide")
         msg.setText("Comprehensive Guide for Link Grabber")
         msg.setDetailedText(help_text)
         msg.setIcon(QMessageBox.Information)
@@ -1028,7 +1033,7 @@ FIX: Check proxy username/password, verify format
         msg.exec_()
 
     def on_progress_log(self, msg):
-        self.log_area.append(msg)
+        self.log_area.append(self._repair_log_text(msg))
         self.log_area.ensureCursorVisible()
 
     def on_progress_percent(self, val):
@@ -1085,14 +1090,14 @@ FIX: Check proxy username/password, verify format
         selected = [item.text() for item in self.link_list.selectedItems()]
         if selected:
             pyperclip.copy('\n'.join(selected))
-            self.log_area.append(f"✅ Copied {len(selected)} selected links to clipboard!")
+            self.log_area.append(f" Copied {len(selected)} selected links to clipboard!")
             self.download_btn.setEnabled(True)
 
     def copy_all_links(self):
         if self.links:
             urls = [link['url'] for link in self.links]
             pyperclip.copy('\n'.join(urls))
-            self.log_area.append(f"✅ Copied {len(urls)} links to clipboard!")
+            self.log_area.append(f" Copied {len(urls)} links to clipboard!")
             self.download_btn.setEnabled(True)
 
     def _collect_all_links(self):
@@ -1150,7 +1155,7 @@ FIX: Check proxy username/password, verify format
             self.upload_cookie_btn.setEnabled(True)
             self.save_cookie_btn.setEnabled(True)
             self.clear_cookie_btn.setEnabled(True)
-            self.cookie_status.setText("💡 Upload your Chrome cookie file (Netscape format)")
+            self.cookie_status.setText("Upload your Chrome cookie file (Netscape format)")
         else:
             # Browser mode - disable file upload controls
             self.cookie_text.setEnabled(False)
@@ -1158,7 +1163,7 @@ FIX: Check proxy username/password, verify format
             self.save_cookie_btn.setEnabled(False)
             self.clear_cookie_btn.setEnabled(False)
             browser = source.split("(")[1].split(")")[0]  # Extract browser name
-            self.cookie_status.setText(f"✅ Will use cookies directly from {browser} browser")
+            self.cookie_status.setText(f" Will use cookies directly from {browser} browser")
             self.cookie_status.setStyleSheet("color: #1ABC9C; font-size: 11px;")
 
     def upload_cookie_file(self):
@@ -1171,7 +1176,7 @@ FIX: Check proxy username/password, verify format
                 with open(file_path, 'r', encoding='utf-8') as f:
                     cookies = f.read()
                 self.cookie_text.setPlainText(cookies)
-                self.log_area.append(f"✅ Cookie file loaded: {Path(file_path).name}")
+                self.log_area.append(f" Cookie file loaded: {Path(file_path).name}")
                 self.detect_cookie_platforms(cookies)
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Failed to load cookie file: {str(e)}")
@@ -1192,10 +1197,10 @@ FIX: Check proxy username/password, verify format
             platforms.append("Twitter")
 
         if platforms:
-            self.cookie_status.setText(f"✅ Detected: {', '.join(platforms)}")
+            self.cookie_status.setText(f" Detected: {', '.join(platforms)}")
             self.cookie_status.setStyleSheet("color: #1ABC9C; font-size: 11px;")
         else:
-            self.cookie_status.setText("⚠️ No known platforms detected")
+            self.cookie_status.setText("No known platforms detected")
             self.cookie_status.setStyleSheet("color: #E74C3C; font-size: 11px;")
 
     def save_cookies(self):
@@ -1206,7 +1211,7 @@ FIX: Check proxy username/password, verify format
             return
 
         # === STEP 1: Comprehensive Validation ===
-        self.log_area.append("🔍 Validating cookies...")
+        self.log_area.append(" Validating cookies...")
         validator = EnhancedCookieValidator()
         validation_result = validator.validate(cookies)
 
@@ -1214,11 +1219,11 @@ FIX: Check proxy username/password, verify format
         if not validation_result.is_valid:
             # Validation FAILED - show detailed error
             error_details = validation_result.get_summary()
-            self.log_area.append(f"❌ Cookie validation failed!\n{error_details}")
+            self.log_area.append(f" Cookie validation failed!\n{error_details}")
 
             # Show error dialog with detailed message
             QMessageBox.critical(
-                self, "❌ Cookie Validation Failed",
+                self, " Cookie Validation Failed",
                 f"{error_details}\n"
                 f"Please fix the errors and try again.\n\n"
                 f"TIP: Use 'Get cookies.txt' Chrome extension to export cookies in correct format."
@@ -1227,24 +1232,24 @@ FIX: Check proxy username/password, verify format
 
         # Validation SUCCESSFUL - but check for warnings
         if validation_result.warnings:
-            warning_msg = "⚠️ Cookies are valid but have some warnings:\n\n"
+            warning_msg = " Cookies are valid but have some warnings:\n\n"
             for i, warning in enumerate(validation_result.warnings, 1):
                 warning_msg += f"{i}. {warning}\n"
-            warning_msg += "\n✅ Do you want to save anyway?"
+            warning_msg += "\n Do you want to save anyway?"
 
             reply = QMessageBox.question(
-                self, "⚠️ Validation Warnings",
+                self, " Validation Warnings",
                 warning_msg,
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.Yes
             )
 
             if reply == QMessageBox.No:
-                self.log_area.append("❌ Cookie save cancelled by user")
+                self.log_area.append(" Cookie save cancelled by user")
                 return
 
         # Log validation success
-        self.log_area.append(f"✅ Validation passed: {validation_result.cookie_count} cookies, "
+        self.log_area.append(f" Validation passed: {validation_result.cookie_count} cookies, "
                            f"{len(validation_result.platforms_detected)} platforms")
 
         # === STEP 2: Backup Existing Cookies ===
@@ -1259,7 +1264,7 @@ FIX: Check proxy username/password, verify format
 
                 shutil.copy2(cookie_file, backup_file)
                 backup_created = True
-                self.log_area.append(f"💾 Backup created: {backup_file.name}")
+                self.log_area.append(f" Backup created: {backup_file.name}")
 
                 # Keep only last 5 backups to save space
                 self._cleanup_old_backups()
@@ -1267,7 +1272,7 @@ FIX: Check proxy username/password, verify format
             except Exception as e:
                 # Backup failed - ask user if they want to continue
                 reply = QMessageBox.warning(
-                    self, "⚠️ Backup Failed",
+                    self, " Backup Failed",
                     f"Failed to create backup: {str(e)}\n\n"
                     f"Do you want to save anyway (existing cookies will be overwritten)?",
                     QMessageBox.Yes | QMessageBox.No,
@@ -1275,7 +1280,7 @@ FIX: Check proxy username/password, verify format
                 )
 
                 if reply == QMessageBox.No:
-                    self.log_area.append("❌ Save cancelled - backup failed")
+                    self.log_area.append(" Save cancelled - backup failed")
                     return
 
         # === STEP 3: Save New Cookies ===
@@ -1283,28 +1288,42 @@ FIX: Check proxy username/password, verify format
             with open(cookie_file, 'w', encoding='utf-8') as f:
                 f.write(cookies)
 
-            self.log_area.append(f"✅ Cookies saved to: cookies/chrome_cookies.txt")
+            self.log_area.append(f" Cookies saved to: cookies/chrome_cookies.txt")
+            try:
+                self.auth_hub.write_auth_state(
+                    {
+                        "cookies": {
+                            "master_file": str(cookie_file),
+                            "cookie_count": int(getattr(validation_result, "cookie_count", 0) or 0),
+                            "platforms": sorted(
+                                list(getattr(validation_result, "platforms_detected", []) or [])
+                            ),
+                        }
+                    }
+                )
+            except Exception:
+                pass
 
             # Update UI status
             self.detect_cookie_platforms(cookies)
 
             # === STEP 4: Show Detailed Success Message ===
             success_msg = validation_result.get_summary()
-            success_msg += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            success_msg += f"📁 Saved to: cookies/chrome_cookies.txt\n"
+            success_msg += "\n\n"
+            success_msg += f" Saved to: cookies/chrome_cookies.txt\n"
 
             if backup_created:
-                success_msg += f"💾 Previous cookies backed up\n"
+                success_msg += f" Previous cookies backed up\n"
 
-            success_msg += f"\n✅ These cookies will be used automatically for ALL link extraction operations."
+            success_msg += f"\n These cookies will be used automatically for ALL link extraction operations."
 
-            QMessageBox.information(self, "✅ Cookies Saved Successfully", success_msg)
+            QMessageBox.information(self, " Cookies Saved Successfully", success_msg)
 
         except Exception as e:
             # Save failed
-            self.log_area.append(f"❌ Failed to save cookies: {str(e)}")
+            self.log_area.append(f" Failed to save cookies: {str(e)}")
             QMessageBox.critical(
-                self, "❌ Save Failed",
+                self, " Save Failed",
                 f"Failed to save cookies:\n{str(e)}\n\n"
                 f"Check file permissions and try again."
             )
@@ -1321,11 +1340,11 @@ FIX: Check proxy username/password, verify format
             # Remove old backups (keep only 5 most recent)
             for old_backup in backup_files[5:]:
                 old_backup.unlink()
-                self.log_area.append(f"🗑️ Removed old backup: {old_backup.name}")
+                self.log_area.append(f" Removed old backup: {old_backup.name}")
 
         except Exception as e:
             # Cleanup failure is not critical, just log it
-            self.log_area.append(f"⚠️ Backup cleanup warning: {str(e)}")
+            self.log_area.append(f" Backup cleanup warning: {str(e)}")
 
     def validate_cookies(self, cookies):
         """Validate Netscape cookie format"""
@@ -1339,6 +1358,8 @@ FIX: Check proxy username/password, verify format
     def clear_cookies(self):
         """Clear cookie text area"""
         self.cookie_text.clear()
-        self.cookie_status.setText("💡 No cookies loaded - Using browser cookies or public access")
+        self.cookie_status.setText("No cookies loaded - Using browser cookies or public access")
         self.cookie_status.setStyleSheet("color: #888; font-size: 11px;")
-        self.log_area.append("🧹 Cookie text area cleared")
+        self.log_area.append(" Cookie text area cleared")
+
+

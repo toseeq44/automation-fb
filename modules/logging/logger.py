@@ -1,4 +1,4 @@
-"""
+﻿"""
 Logging System for OneSoul
 Provides comprehensive logging for debugging and monitoring
 """
@@ -28,6 +28,7 @@ class ContentFlowLogger:
 
         self.logger = logging.getLogger(name)
         self.logger.setLevel(logging.DEBUG)
+        self.logger.propagate = False  # Avoid duplicate console output via root logger
 
         # Prevent duplicate handlers
         if self.logger.handlers:
@@ -225,3 +226,5 @@ if __name__ == '__main__':
 
     print(f"\nLog files location: {logger.log_dir}")
     print("Check log files for detailed output")
+
+

@@ -23,7 +23,7 @@ import json
 import logging
 import random
 from datetime import datetime
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 # Import intelligence system
 try:
@@ -70,8 +70,35 @@ def _extract_creator_from_url(url: str, platform_key: str) -> str:
             if match:
                 return match.group(1)
 
-        elif platform_key in ['twitter', 'facebook']:
-            match = re.search(r'(?:twitter|x|facebook)\.com/([^/?#]+)', url_lower)
+        elif platform_key == 'facebook':
+            parsed = urlparse(url)
+            parts = [p for p in (parsed.path or '').split('/') if p]
+            lower_parts = [p.lower() for p in parts]
+
+            if lower_parts and lower_parts[0] == 'profile.php':
+                fb_id = parse_qs(parsed.query or '').get('id', [''])[0].strip()
+                if fb_id:
+                    return f"fb_{fb_id}"
+                return 'facebook_profile'
+
+            if lower_parts and lower_parts[0] == 'people':
+                if len(parts) >= 2 and parts[1]:
+                    return parts[1]
+                if len(parts) >= 3 and parts[2]:
+                    return f"fb_{parts[2]}"
+                return 'facebook_profile'
+
+            reserved = {
+                'reel', 'reels', 'videos', 'watch', 'story', 'stories', 'posts',
+                'about', 'photos', 'photo', 'live', 'profile.php', 'people', 'pg',
+                'groups', 'share', 'marketplace',
+            }
+            for part in parts:
+                if part.lower() not in reserved:
+                    return part
+
+        elif platform_key == 'twitter':
+            match = re.search(r'(?:twitter|x)\.com/([^/?#]+)', url_lower)
             if match:
                 return match.group(1)
 
@@ -99,6 +126,142 @@ def _detect_platform_key(url: str) -> str:
     except Exception:
         pass
     return 'unknown'
+
+
+def _normalize_source_url(url: str, platform_key: str) -> str:
+    """Normalize profile URLs so extractors receive supported canonical targets."""
+    raw = (url or "").strip()
+    if not raw.startswith(("http://", "https://")):
+        return raw
+
+    try:
+        parsed = urlparse(raw)
+        parts = [p for p in (parsed.path or "").split("/") if p]
+        lower_parts = [p.lower() for p in parts]
+
+        if platform_key == "facebook":
+            # Keep profile.php?id=... as-is
+            if lower_parts and lower_parts[0] == "profile.php":
+                return raw.rstrip("/")
+            # people/<name>/<id> -> canonical profile by name
+            if lower_parts and lower_parts[0] == "people":
+                if len(parts) >= 2 and parts[1]:
+                    return f"https://www.facebook.com/{parts[1]}"
+            reserved = {
+                "reel", "reels", "videos", "watch", "story", "stories", "posts",
+                "about", "photos", "photo", "live", "people", "profile.php", "pg",
+                "groups", "share", "marketplace",
+            }
+            if parts:
+                first = parts[0]
+                if first.lower() not in reserved:
+                    return f"https://www.facebook.com/{first}"
+            return "https://www.facebook.com/"
+
+        if platform_key == "instagram":
+            reserved = {"reel", "reels", "p", "tv", "stories", "explore"}
+            if parts:
+                first = parts[0]
+                if first.lower() not in reserved:
+                    return f"https://www.instagram.com/{first}"
+            return "https://www.instagram.com/"
+
+        if platform_key == "tiktok":
+            for p in parts:
+                if p.startswith("@") and len(p) > 1:
+                    return f"https://www.tiktok.com/{p}"
+            return raw.rstrip("/")
+
+        if platform_key == "youtube":
+            if parts and parts[0].startswith("@"):
+                return f"https://www.youtube.com/{parts[0]}"
+            if len(parts) >= 2 and parts[0].lower() in {"channel", "c", "user"}:
+                return f"https://www.youtube.com/{parts[0]}/{parts[1]}"
+            return raw.rstrip("/")
+    except Exception:
+        return raw.rstrip("/")
+
+    return raw.rstrip("/")
+
+
+def _facebook_reels_url(url: str) -> str:
+    """Return a Facebook reels-tab URL when source is a profile-like URL."""
+    raw = (url or "").strip()
+    if not raw:
+        return raw
+    try:
+        parsed = urlparse(raw)
+        host = (parsed.netloc or "").lower()
+        if "facebook.com" not in host and "fb.com" not in host:
+            return raw
+
+        parts = [p for p in (parsed.path or "").split("/") if p]
+        lower_parts = [p.lower() for p in parts]
+        q = parse_qs(parsed.query or "")
+
+        if lower_parts and lower_parts[0] == "profile.php":
+            if q.get("sk", [""])[0] == "reels_tab":
+                return raw
+            connector = "&" if ("?" in raw) else "?"
+            return f"{raw}{connector}sk=reels_tab"
+
+        if any(p in {"reel", "reels", "videos", "watch"} for p in lower_parts):
+            return raw
+
+        if parts:
+            return f"https://www.facebook.com/{parts[0]}/reels"
+    except Exception:
+        return raw
+    return raw
+
+
+def _get_running_browser_names() -> typing.Set[str]:
+    """Best-effort detection of currently running desktop browsers on Windows."""
+    names: typing.Set[str] = set()
+    try:
+        result = subprocess.run(
+            ["tasklist"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            encoding="utf-8",
+            errors="replace",
+        )
+        out = (result.stdout or "").lower()
+        if "chrome.exe" in out:
+            names.add("chrome")
+        if "msedge.exe" in out:
+            names.add("edge")
+        if "brave.exe" in out:
+            names.add("brave")
+        if "firefox.exe" in out:
+            names.add("firefox")
+    except Exception:
+        pass
+    return names
+
+
+def _iter_browser_profile_roots() -> typing.List[typing.Tuple[str, Path]]:
+    local_appdata = os.environ.get("LOCALAPPDATA", "")
+    candidates = [
+        ("chrome", Path(local_appdata) / "Google" / "Chrome" / "User Data"),
+        ("edge", Path(local_appdata) / "Microsoft" / "Edge" / "User Data"),
+        ("brave", Path(local_appdata) / "BraveSoftware" / "Brave-Browser" / "User Data"),
+    ]
+    return [(name, root) for name, root in candidates if root.exists()]
+
+def _mask_proxy(proxy: str) -> str:
+    """Hide credentials in logs while keeping host:port visible."""
+    p = (proxy or "").strip()
+    if not p:
+        return ""
+    try:
+        if "@" in p:
+            p = p.split("@", 1)[1]
+        p = p.replace("http://", "").replace("https://", "").replace("socks5://", "").replace("socks4://", "")
+        return p
+    except Exception:
+        return proxy
 
 
 def _validate_cookie_file(cookie_file: str, max_age_days: int = 14) -> dict:
@@ -141,12 +304,12 @@ def _validate_cookie_file(cookie_file: str, max_age_days: int = 14) -> dict:
 
         # Check 1: File exists and has content
         if not cookie_path.exists():
-            result['warnings'].append(f"❌ Cookie file not found: {cookie_file}")
+            result['warnings'].append(f"âŒ Cookie file not found: {cookie_file}")
             return result
 
         file_size = cookie_path.stat().st_size
         if file_size < 10:
-            result['warnings'].append(f"⚠️ Cookie file too small ({file_size} bytes)")
+            result['warnings'].append(f"âš ï¸ Cookie file too small ({file_size} bytes)")
             return result
 
         # Check 2: File freshness (modification time)
@@ -157,9 +320,9 @@ def _validate_cookie_file(cookie_file: str, max_age_days: int = 14) -> dict:
         if file_age.days > max_age_days:
             result['fresh'] = False
             result['warnings'].append(
-                f"⚠️ Cookie file is {file_age.days} days old (older than {max_age_days} days)"
+                f"âš ï¸ Cookie file is {file_age.days} days old (older than {max_age_days} days)"
             )
-            result['warnings'].append(f"   💡 Consider refreshing cookies for better success rate")
+            result['warnings'].append(f"   ðŸ’¡ Consider refreshing cookies for better success rate")
 
         # Check 3: Valid Netscape format and cookie expiration
         current_timestamp = int(time.time())
@@ -171,7 +334,7 @@ def _validate_cookie_file(cookie_file: str, max_age_days: int = 14) -> dict:
         result['total_cookies'] = len(cookie_lines)
 
         if result['total_cookies'] == 0:
-            result['warnings'].append(f"⚠️ No cookies found in file (only comments/blank lines)")
+            result['warnings'].append(f"âš ï¸ No cookies found in file (only comments/blank lines)")
             return result
 
         # Check cookie expiration dates
@@ -192,19 +355,19 @@ def _validate_cookie_file(cookie_file: str, max_age_days: int = 14) -> dict:
             expiry_pct = (expired_count / result['total_cookies']) * 100
             if expiry_pct > 50:
                 result['warnings'].append(
-                    f"⚠️ {expired_count}/{result['total_cookies']} cookies expired ({expiry_pct:.0f}%)"
+                    f"âš ï¸ {expired_count}/{result['total_cookies']} cookies expired ({expiry_pct:.0f}%)"
                 )
-                result['warnings'].append(f"   💡 Cookie refresh recommended")
+                result['warnings'].append(f"   ðŸ’¡ Cookie refresh recommended")
 
         # All checks passed
         result['valid'] = True
 
         # Add success message if fresh and minimal warnings
         if result['fresh'] and len(result['warnings']) == 0:
-            logging.debug(f"✓ Cookie validation passed: {result['total_cookies']} cookies, {result['age_days']} days old")
+            logging.debug(f"âœ“ Cookie validation passed: {result['total_cookies']} cookies, {result['age_days']} days old")
 
     except Exception as e:
-        result['warnings'].append(f"❌ Cookie validation error: {str(e)[:100]}")
+        result['warnings'].append(f"âŒ Cookie validation error: {str(e)[:100]}")
 
     return result
 
@@ -244,6 +407,17 @@ def _get_platform_domain(platform_key: str) -> str:
     return domain_map.get(platform_key, '')
 
 
+def _platform_domain_tokens(platform_key: str) -> typing.List[str]:
+    mapping = {
+        'youtube': ['youtube.com', 'google.com', 'youtu.be'],
+        'instagram': ['instagram.com'],
+        'tiktok': ['tiktok.com'],
+        'facebook': ['facebook.com', 'fb.com', 'messenger.com'],
+        'twitter': ['twitter.com', 'x.com'],
+    }
+    return mapping.get(platform_key, [])
+
+
 def _extract_browser_cookies(platform_key: str, preferred_browser: str = None) -> typing.Optional[str]:
     """Extract cookies from browser (fallback)"""
     try:
@@ -252,23 +426,38 @@ def _extract_browser_cookies(platform_key: str, preferred_browser: str = None) -
         return None
 
     domain = _get_platform_domain(platform_key)
+    tokens = _platform_domain_tokens(platform_key)
     browsers = [
         ('chrome', getattr(bc3, 'chrome', None)),
         ('edge', getattr(bc3, 'edge', None)),
         ('firefox', getattr(bc3, 'firefox', None))
     ]
 
+    fallback_browsers = list(browsers)
     if preferred_browser:
         preferred_browser = preferred_browser.lower()
-        browsers = [b for b in browsers if b[0] == preferred_browser]
+        browsers = [b for b in browsers if b[0] == preferred_browser] or list(browsers)
 
     for browser_name, browser_func in browsers:
         if not browser_func:
             continue
         try:
+            # Try strict domain extraction first.
             cookie_jar = browser_func(domain_name=domain) if domain else browser_func()
+            if not cookie_jar or len(cookie_jar) == 0:
+                # Fallback: fetch all cookies and filter by platform domains.
+                cookie_jar = browser_func()
 
             if cookie_jar and len(cookie_jar) > 0:
+                filtered = []
+                for cookie in cookie_jar:
+                    c_domain = (getattr(cookie, 'domain', '') or '').lower()
+                    if not tokens or any(token in c_domain for token in tokens):
+                        filtered.append(cookie)
+
+                if not filtered:
+                    continue
+
                 temp_file = tempfile.NamedTemporaryFile(
                     mode='w',
                     suffix='.txt',
@@ -279,16 +468,16 @@ def _extract_browser_cookies(platform_key: str, preferred_browser: str = None) -
                 temp_file.write("# Netscape HTTP Cookie File\n")
                 temp_file.write(f"# Extracted from {browser_name}\n\n")
 
-                for cookie in cookie_jar:
-                    domain = getattr(cookie, 'domain', '')
-                    flag = 'TRUE' if domain.startswith('.') else 'FALSE'
+                for cookie in filtered:
+                    cookie_domain = getattr(cookie, 'domain', '')
+                    flag = 'TRUE' if cookie_domain.startswith('.') else 'FALSE'
                     path = getattr(cookie, 'path', '/')
                     secure = 'TRUE' if getattr(cookie, 'secure', False) else 'FALSE'
                     expires = str(int(getattr(cookie, 'expires', 0))) if getattr(cookie, 'expires', 0) else '0'
                     name = getattr(cookie, 'name', '')
                     value = getattr(cookie, 'value', '')
 
-                    temp_file.write(f"{domain}\t{flag}\t{path}\t{secure}\t{expires}\t{name}\t{value}\n")
+                    temp_file.write(f"{cookie_domain}\t{flag}\t{path}\t{secure}\t{expires}\t{name}\t{value}\n")
 
                 temp_file.close()
                 return temp_file.name
@@ -296,7 +485,83 @@ def _extract_browser_cookies(platform_key: str, preferred_browser: str = None) -
         except Exception:
             continue
 
+    # Preferred browser may fail due profile locking/decryption; auto-try all browsers.
+    if preferred_browser:
+        for browser_name, browser_func in fallback_browsers:
+            if not browser_func or browser_name == preferred_browser:
+                continue
+            try:
+                cookie_jar = browser_func()
+                if not cookie_jar or len(cookie_jar) == 0:
+                    continue
+
+                filtered = []
+                for cookie in cookie_jar:
+                    c_domain = (getattr(cookie, 'domain', '') or '').lower()
+                    if not tokens or any(token in c_domain for token in tokens):
+                        filtered.append(cookie)
+                if not filtered:
+                    continue
+
+                temp_file = tempfile.NamedTemporaryFile(
+                    mode='w',
+                    suffix='.txt',
+                    delete=False,
+                    encoding='utf-8'
+                )
+                temp_file.write("# Netscape HTTP Cookie File\n")
+                temp_file.write(f"# Extracted from {browser_name}\n\n")
+                for cookie in filtered:
+                    cookie_domain = getattr(cookie, 'domain', '')
+                    flag = 'TRUE' if cookie_domain.startswith('.') else 'FALSE'
+                    path = getattr(cookie, 'path', '/')
+                    secure = 'TRUE' if getattr(cookie, 'secure', False) else 'FALSE'
+                    expires = str(int(getattr(cookie, 'expires', 0))) if getattr(cookie, 'expires', 0) else '0'
+                    name = getattr(cookie, 'name', '')
+                    value = getattr(cookie, 'value', '')
+                    temp_file.write(f"{cookie_domain}\t{flag}\t{path}\t{secure}\t{expires}\t{name}\t{value}\n")
+                temp_file.close()
+                return temp_file.name
+            except Exception:
+                continue
+
     return None
+
+
+def _extract_browser_cookies_db_copy(
+    platform_key: str,
+    preferred_browser: str = None,
+    cookies_dir: Path = None,
+) -> typing.Optional[str]:
+    """
+    Workflow 1: Extract cookies by copying the locked Chrome/Edge SQLite DB.
+
+    Called when browser_cookie3 fails due to DB lock (browser is open).
+    Uses AES-256-GCM + DPAPI decryption via modules/shared/browser_extractor.py.
+    Optionally saves to cookies_dir/chrome_cookies.txt for future use.
+    """
+    try:
+        from modules.shared.browser_extractor import extract_cookies_db_copy
+        from modules.config.paths import get_cookies_dir as _get_cookies_dir
+
+        save_path = None
+        if cookies_dir:
+            save_path = Path(cookies_dir) / "chrome_cookies.txt"
+        else:
+            try:
+                save_path = _get_cookies_dir() / "chrome_cookies.txt"
+            except Exception:
+                pass
+
+        result = extract_cookies_db_copy(
+            platform_key=platform_key,
+            preferred_browser=preferred_browser,
+            save_to=save_path,
+        )
+        return result
+    except Exception as exc:
+        logging.debug(f"_extract_browser_cookies_db_copy failed: {exc}")
+        return None
 
 
 def _load_cookies_from_file(cookie_file: str, platform_key: str) -> typing.List[dict]:
@@ -713,11 +978,11 @@ def _parse_proxy_format(proxy: str) -> str:
     ENHANCED: Parse and convert proxy format to standard format with URL encoding
 
     Supports ALL 5 formats:
-    1. ip:port                                    → http://ip:port
-    2. user:pass@ip:port                          → http://user:pass@ip:port
-    3. ip:port:user:pass (provider format)        → http://user:pass@ip:port
-    4. socks5://user:pass@ip:port                 → socks5://user:pass@ip:port
-    5. With URL encoding for special chars        → http://user:P%40ss@ip:port
+    1. ip:port                                    â†’ http://ip:port
+    2. user:pass@ip:port                          â†’ http://user:pass@ip:port
+    3. ip:port:user:pass (provider format)        â†’ http://user:pass@ip:port
+    4. socks5://user:pass@ip:port                 â†’ socks5://user:pass@ip:port
+    5. With URL encoding for special chars        â†’ http://user:P%40ss@ip:port
 
     Special features:
     - Automatically detects and preserves SOCKS5 protocol
@@ -791,11 +1056,11 @@ def _parse_proxy_format(proxy: str) -> str:
 
         else:
             # Unknown format, try as-is
-            logging.warning(f"⚠️ Unknown proxy format (parts={len(parts)}): {proxy[:30]}..., using as-is")
+            logging.warning(f"âš ï¸ Unknown proxy format (parts={len(parts)}): {proxy[:30]}..., using as-is")
             return f"http://{proxy}"
 
     except Exception as e:
-        logging.error(f"❌ Failed to parse proxy format: {e}")
+        logging.error(f"âŒ Failed to parse proxy format: {e}")
         return f"http://{proxy}"
 
 
@@ -840,7 +1105,7 @@ def _validate_proxy(proxy: str, timeout: int = 10) -> dict:
 
         # Parse proxy format (handles all 3 formats)
         proxy_url = _parse_proxy_format(proxy)
-        logging.debug(f"Parsed proxy: {proxy} → {proxy_url}")
+        logging.debug(f"Parsed proxy: {proxy} â†’ {proxy_url}")
 
         proxies = {
             'http': proxy_url,
@@ -961,7 +1226,7 @@ def _apply_rate_limit(platform_key: str, custom_delay: float = None):
         # Add random jitter (human-like behavior)
         delay = random.uniform(min_delay, max_delay)
 
-        logging.debug(f"⏱️ Rate limit: waiting {delay:.2f}s for {platform_key}")
+        logging.debug(f"â±ï¸ Rate limit: waiting {delay:.2f}s for {platform_key}")
         time.sleep(delay)
 
     except Exception as e:
@@ -973,82 +1238,36 @@ def _apply_rate_limit(platform_key: str, custom_delay: float = None):
 
 def _get_ytdlp_binary_path() -> str:
     """
-    Multi-location yt-dlp detection with fallback chain
-
-    Priority Order:
-    1. Bundled yt-dlp.exe (in EXE) - Most reliable for distribution
-    2. System yt-dlp (in PATH) - If user has installed/updated
-    3. User's custom locations - Common installation directories
+    Resolve yt-dlp with centralized path strategy.
 
     Returns:
-        Path to yt-dlp binary or command
+        Path to yt-dlp binary or system command.
     """
-    import sys
-
     try:
-        # PRIORITY 1: Bundled yt-dlp.exe (in EXE distribution) - MOST RELIABLE
-        if getattr(sys, 'frozen', False):
-            # Running as bundled EXE
-            base_path = sys._MEIPASS
-            ytdlp_path = os.path.join(base_path, 'bin', 'yt-dlp.exe')
+        from modules.config.paths import find_ytdlp_executable
 
-            if os.path.exists(ytdlp_path):
-                logging.info(f"✓ Using bundled yt-dlp: {ytdlp_path}")
-                return ytdlp_path
+        cmd = find_ytdlp_executable()
+        if not cmd:
+            logging.warning("âš  yt-dlp not found in bundled/system/C-drive paths")
+            return 'yt-dlp'
 
-        # PRIORITY 2: System yt-dlp (in PATH) - USER MANAGED/UPDATED
         try:
             result = subprocess.run(
-                ['yt-dlp', '--version'],
+                [cmd, '--version'],
                 capture_output=True,
                 timeout=5,
                 text=True,
-                errors='ignore'
+                errors='replace'
             )
             if result.returncode == 0:
-                version = result.stdout.strip()
-                logging.info(f"✓ Using system yt-dlp (v{version})")
-                return 'yt-dlp'
-        except (subprocess.SubprocessError, FileNotFoundError, subprocess.TimeoutExpired):
-            pass
+                version = (result.stdout or '').strip()
+                logging.info(f"âœ“ Using yt-dlp: {cmd} (v{version})")
+                return cmd
+            logging.warning(f"âš  yt-dlp found but not runnable: {cmd}")
+        except Exception as run_err:
+            logging.warning(f"âš  yt-dlp check failed for {cmd}: {run_err}")
 
-        # PRIORITY 3: User's custom locations (common installation directories)
-        user_locations = [
-            r"C:\yt-dlp\yt-dlp.exe",  # Recommended location
-            r"C:\Users\Fast Computers\automation\bin\yt-dlp.exe",  # User's automation folder
-            os.path.join(os.getcwd(), 'bin', 'yt-dlp.exe'),  # Current working directory bin folder
-            os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Programs', 'yt-dlp', 'yt-dlp.exe'),
-            os.path.join(os.environ.get('APPDATA', ''), 'yt-dlp', 'yt-dlp.exe'),
-            os.path.join(Path.home(), 'yt-dlp', 'yt-dlp.exe'),
-            os.path.join(Path.home(), 'yt-dlp.exe'),
-            r"C:\Program Files\yt-dlp\yt-dlp.exe",
-        ]
-
-        for location in user_locations:
-            try:
-                expanded = os.path.expandvars(location)
-                if os.path.exists(expanded):
-                    # Get version of this yt-dlp
-                    try:
-                        ver_result = subprocess.run(
-                            [expanded, '--version'],
-                            capture_output=True,
-                            timeout=5,
-                            text=True,
-                            errors='ignore'
-                        )
-                        version = ver_result.stdout.strip() if ver_result.returncode == 0 else "unknown"
-                        logging.info(f"✓ Using user's yt-dlp: {expanded} (v{version})")
-                    except:
-                        logging.info(f"✓ Using user's yt-dlp: {expanded}")
-                    return expanded
-            except:
-                continue
-
-        # Ultimate fallback - try system command anyway
-        logging.warning("⚠ No yt-dlp found in known locations, trying system command")
         return 'yt-dlp'
-
     except Exception as e:
         logging.error(f"Error detecting yt-dlp: {e}")
         return 'yt-dlp'
@@ -1076,7 +1295,13 @@ def _execute_ytdlp_dual(url: str, options: dict, proxy: str = None, user_agent: 
         options['user_agent'] = user_agent
 
     # ===== APPROACH 1: Python API (Faster, Better Error Handling) =====
+    # Compatibility guard: cookies-from-browser option shape differs across yt-dlp builds.
+    # Prefer binary path when browser-cookie mode is requested.
+    skip_python_api = bool(options.get('cookiesfrombrowser'))
     try:
+        if skip_python_api:
+            raise RuntimeError("skip_python_api_for_browser_cookies")
+
         import yt_dlp
 
         logging.debug("Trying yt-dlp Python API...")
@@ -1103,15 +1328,18 @@ def _execute_ytdlp_dual(url: str, options: dict, proxy: str = None, user_agent: 
                     })
 
                 if entries:
-                    logging.debug(f"✓ Python API success: {len(entries)} links")
+                    logging.debug(f"âœ“ Python API success: {len(entries)} links")
                     return entries
 
     except Exception as e:
-        logging.warning(f"❌ yt-dlp Python API failed:")
-        logging.warning(f"   URL: {url}")
-        logging.warning(f"   Error: {str(e)[:300]}")
-        logging.warning(f"   Proxy: {options.get('proxy', 'None')}")
-        logging.warning(f"   User-Agent: {options.get('user_agent', 'Default')[:50]}")
+        if str(e) == "skip_python_api_for_browser_cookies":
+            logging.debug("Skipping yt-dlp Python API because browser-cookie mode is enabled")
+        else:
+            logging.warning(f"âŒ yt-dlp Python API failed:")
+            logging.warning(f"   URL: {url}")
+            logging.warning(f"   Error: {str(e)[:300]}")
+            logging.warning(f"   Proxy: {options.get('proxy', 'None')}")
+            logging.warning(f"   User-Agent: {options.get('user_agent', 'Default')[:50]}")
 
     # ===== APPROACH 2: Binary Subprocess (Fallback) =====
     try:
@@ -1170,11 +1398,11 @@ def _execute_ytdlp_dual(url: str, options: dict, proxy: str = None, user_agent: 
                     continue
 
             if entries:
-                logging.debug(f"✓ Binary success: {len(entries)} links")
+                logging.debug(f"âœ“ Binary success: {len(entries)} links")
                 return entries
             else:
                 # No entries found - log detailed error info
-                logging.warning(f"❌ yt-dlp binary returned 0 results:")
+                logging.warning(f"âŒ yt-dlp binary returned 0 results:")
                 logging.warning(f"   Command: {' '.join(cmd)}")
                 logging.warning(f"   Exit code: {result.returncode}")
                 if result.stdout:
@@ -1183,7 +1411,7 @@ def _execute_ytdlp_dual(url: str, options: dict, proxy: str = None, user_agent: 
                     logging.warning(f"   Stderr: {result.stderr[:500]}")
 
     except Exception as e:
-        logging.warning(f"❌ yt-dlp binary exception:")
+        logging.warning(f"âŒ yt-dlp binary exception:")
         logging.warning(f"   URL: {url}")
         logging.warning(f"   Error: {str(e)[:300]}")
 
@@ -1267,13 +1495,13 @@ def _method_ytdlp_enhanced(
             return entries
         else:
             # No results from dual approach
-            logging.warning(f"❌ Method 0 (Enhanced) returned 0 results:")
+            logging.warning(f"âŒ Method 0 (Enhanced) returned 0 results:")
             logging.warning(f"   URL: {url}")
             logging.warning(f"   Both Python API and binary fallback failed")
             return []
 
     except Exception as e:
-        logging.warning(f"❌ Method 0 (Enhanced) exception:")
+        logging.warning(f"âŒ Method 0 (Enhanced) exception:")
         logging.warning(f"   URL: {url}")
         logging.warning(f"   Error: {str(e)[:300]}")
 
@@ -1283,7 +1511,7 @@ def _method_ytdlp_enhanced(
 def _method_ytdlp_dump_json(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, cookie_browser: str = None, proxy: str = None, user_agent: str = None) -> typing.List[dict]:
     """METHOD 1: yt-dlp --dump-json (WITH DATES) - PRIMARY METHOD + Proxy + Chrome Headers"""
     try:
-        cmd = ['yt-dlp', '--dump-json', '--flat-playlist', '--ignore-errors', '--no-warnings']
+        cmd = [_get_ytdlp_binary_path(), '--dump-json', '--flat-playlist', '--ignore-errors', '--no-warnings']
 
         # ENHANCED: Add realistic Chrome 120 headers to avoid detection
         cmd.extend(_get_chrome120_headers())
@@ -1350,7 +1578,7 @@ def _method_ytdlp_dump_json(url: str, platform_key: str, cookie_file: str = None
             return entries
         else:
             # No results - log detailed error info
-            logging.warning(f"❌ Method 1 (--dump-json) returned 0 results:")
+            logging.warning(f"âŒ Method 1 (--dump-json) returned 0 results:")
             logging.warning(f"   Command: {' '.join(cmd)}")
             logging.warning(f"   Exit code: {result.returncode}")
             if result.stdout:
@@ -1359,7 +1587,7 @@ def _method_ytdlp_dump_json(url: str, platform_key: str, cookie_file: str = None
                 logging.warning(f"   Stderr: {result.stderr[:500]}")
 
     except Exception as e:
-        logging.warning(f"❌ Method 1 (--dump-json) exception:")
+        logging.warning(f"âŒ Method 1 (--dump-json) exception:")
         logging.warning(f"   URL: {url}")
         logging.warning(f"   Error: {str(e)[:300]}")
 
@@ -1370,7 +1598,7 @@ def _method_ytdlp_get_url(url: str, platform_key: str, cookie_file: str = None, 
     """METHOD 2: yt-dlp --get-url (FAST, NO DATES) - SIMPLIFIED + Proxy + Chrome Headers"""
     try:
         # SIMPLE COMMAND like the working batch script: yt-dlp URL --flat-playlist --get-url
-        cmd = ['yt-dlp', '--flat-playlist', '--get-url', '--ignore-errors']
+        cmd = [_get_ytdlp_binary_path(), '--flat-playlist', '--get-url', '--ignore-errors']
 
         # ENHANCED: Add realistic Chrome 120 headers to avoid detection
         cmd.extend(_get_chrome120_headers())
@@ -1428,7 +1656,7 @@ def _method_ytdlp_get_url(url: str, platform_key: str, cookie_file: str = None, 
                 logging.info(f"Found {len(urls)} URLs before filtering")
                 return [{'url': u, 'title': '', 'date': '00000000'} for u in urls]
             else:
-                logging.warning(f"❌ Method 2 (--get-url) returned 0 results:")
+                logging.warning(f"âŒ Method 2 (--get-url) returned 0 results:")
                 logging.warning(f"   Command: {' '.join(cmd)}")
                 logging.warning(f"   Exit code: {result.returncode}")
                 logging.warning(f"   Raw output: {result.stdout[:500]}")
@@ -1436,14 +1664,14 @@ def _method_ytdlp_get_url(url: str, platform_key: str, cookie_file: str = None, 
                     logging.warning(f"   Stderr: {result.stderr[:500]}")
         else:
             # result.stdout is empty
-            logging.warning(f"❌ Method 2 (--get-url) returned empty output:")
+            logging.warning(f"âŒ Method 2 (--get-url) returned empty output:")
             logging.warning(f"   Command: {' '.join(cmd)}")
             logging.warning(f"   Exit code: {result.returncode}")
             if result.stderr:
                 logging.warning(f"   Stderr: {result.stderr[:500]}")
 
     except Exception as e:
-        logging.warning(f"❌ Method 2 (--get-url) exception:")
+        logging.warning(f"âŒ Method 2 (--get-url) exception:")
         logging.warning(f"   URL: {url}")
         logging.warning(f"   Error: {str(e)[:300]}")
 
@@ -1453,7 +1681,7 @@ def _method_ytdlp_get_url(url: str, platform_key: str, cookie_file: str = None, 
 def _method_ytdlp_with_retry(url: str, platform_key: str, cookie_file: str = None, max_videos: int = 0, cookie_browser: str = None, proxy: str = None) -> typing.List[dict]:
     """METHOD 3: yt-dlp with retries (PERSISTENT) + Proxy + Chrome Headers"""
     try:
-        cmd = ['yt-dlp', '--dump-json', '--flat-playlist', '--ignore-errors',
+        cmd = [_get_ytdlp_binary_path(), '--dump-json', '--flat-playlist', '--ignore-errors',
                '--retries', '10', '--fragment-retries', '10', '--extractor-retries', '5',
                '--socket-timeout', '30']
 
@@ -1514,7 +1742,7 @@ def _method_ytdlp_with_retry(url: str, platform_key: str, cookie_file: str = Non
                 return entries
             else:
                 # No results - log detailed error info
-                logging.warning(f"❌ Method 3 (with retry) returned 0 results:")
+                logging.warning(f"âŒ Method 3 (with retry) returned 0 results:")
                 logging.warning(f"   Command: {' '.join(cmd)}")
                 logging.warning(f"   Exit code: {result.returncode}")
                 if result.stdout:
@@ -1523,14 +1751,14 @@ def _method_ytdlp_with_retry(url: str, platform_key: str, cookie_file: str = Non
                     logging.warning(f"   Stderr: {result.stderr[:500]}")
         else:
             # result.stdout is empty
-            logging.warning(f"❌ Method 3 (with retry) returned empty output:")
+            logging.warning(f"âŒ Method 3 (with retry) returned empty output:")
             logging.warning(f"   Command: {' '.join(cmd)}")
             logging.warning(f"   Exit code: {result.returncode}")
             if result.stderr:
                 logging.warning(f"   Stderr: {result.stderr[:500]}")
 
     except Exception as e:
-        logging.warning(f"❌ Method 3 (with retry) exception:")
+        logging.warning(f"âŒ Method 3 (with retry) exception:")
         logging.warning(f"   URL: {url}")
         logging.warning(f"   Error: {str(e)[:300]}")
 
@@ -1547,7 +1775,7 @@ def _method_ytdlp_user_agent(url: str, platform_key: str, cookie_file: str = Non
 
     for ua in user_agents:
         try:
-            cmd = ['yt-dlp', '--dump-json', '--flat-playlist', '--ignore-errors',
+            cmd = [_get_ytdlp_binary_path(), '--dump-json', '--flat-playlist', '--ignore-errors',
                    '--user-agent', ua]
 
             # ENHANCED: Add realistic Chrome 120 headers to avoid detection
@@ -1619,7 +1847,7 @@ def _method_ytdlp_user_agent(url: str, platform_key: str, cookie_file: str = Non
             continue
 
     # All user agents failed
-    logging.warning(f"❌ Method 4 (user agent rotation) failed:")
+    logging.warning(f"âŒ Method 4 (user agent rotation) failed:")
     logging.warning(f"   Tried {len(user_agents)} different user agents")
     logging.warning(f"   URL: {url}")
     return []
@@ -1804,7 +2032,7 @@ def _method_instaloader(url: str, platform_key: str, cookie_file: str = None, ma
             logging.info(f"Loaded {cookies_loaded} cookies for Instagram")
 
         profile = instaloader.Profile.from_username(loader.context, username)
-        logging.info(f"📊 Instagram profile: @{username} ({profile.mediacount} posts)")
+        logging.info(f"ðŸ“Š Instagram profile: @{username} ({profile.mediacount} posts)")
 
         entries = []
         seen_shortcodes = set()
@@ -1859,13 +2087,13 @@ def _method_instaloader(url: str, platform_key: str, cookie_file: str = None, ma
 
         # Sort by date (newest first)
         entries.sort(key=lambda x: x.get('date', '00000000'), reverse=True)
-        logging.info(f"✅ Successfully extracted {len(entries)} Instagram posts")
+        logging.info(f"âœ… Successfully extracted {len(entries)} Instagram posts")
         return entries
 
     except ImportError:
-        logging.error("❌ Instaloader not installed. Install: pip install instaloader")
+        logging.error("âŒ Instaloader not installed. Install: pip install instaloader")
     except Exception as e:
-        logging.error(f"❌ Method 5 (instaloader) failed: {e}")
+        logging.error(f"âŒ Method 5 (instaloader) failed: {e}")
         import traceback
         logging.debug(traceback.format_exc())
 
@@ -1942,14 +2170,14 @@ def _method_playwright(url: str, platform_key: str, cookie_file: str = None, pro
     Uses real Chromium browser to bypass advanced bot detection.
     Includes stealth mode, proxy support, and human-like behavior.
     """
-    if platform_key not in ['tiktok', 'instagram', 'youtube']:
+    if platform_key not in ['tiktok', 'instagram', 'youtube', 'facebook']:
         return []
 
     try:
         from playwright.sync_api import sync_playwright
         import random
 
-        logging.debug(f"🎭 Starting Playwright method for {platform_key}")
+        logging.debug(f"ðŸŽ­ Starting Playwright method for {platform_key}")
 
         with sync_playwright() as p:
             # ENHANCED: Launch options with stealth
@@ -1968,7 +2196,7 @@ def _method_playwright(url: str, platform_key: str, cookie_file: str = None, pro
             # Check multiple possible locations (Windows: .exe, Linux/Mac: no extension)
             base_path = Path(__file__).parent.parent.parent / 'bin'
             chromium_paths = [
-                base_path / 'chromium' / 'chromium.exe',  # Windows (in chromium folder) ✅ Your setup
+                base_path / 'chromium' / 'chromium.exe',  # Windows (in chromium folder) âœ… Your setup
                 base_path / 'chromium.exe',                # Windows (direct)
                 base_path / 'chromium' / 'chrome.exe',     # Windows (alternative name)
                 base_path / 'chromium',                    # Linux/Mac (no extension)
@@ -1978,14 +2206,14 @@ def _method_playwright(url: str, platform_key: str, cookie_file: str = None, pro
             for path in chromium_paths:
                 if path.exists() and path.is_file():
                     chromium_path = path
-                    logging.debug(f"✓ Found bundled Chromium: {chromium_path}")
+                    logging.debug(f"âœ“ Found bundled Chromium: {chromium_path}")
                     break
 
             if chromium_path:
                 launch_options['executable_path'] = str(chromium_path)
-                logging.debug(f"✅ Using bundled Chromium from bin/ folder")
+                logging.debug(f"âœ… Using bundled Chromium from bin/ folder")
             else:
-                logging.debug(f"⚠️ Bundled Chromium not found, using system Chromium (auto-download)")
+                logging.debug(f"âš ï¸ Bundled Chromium not found, using system Chromium (auto-download)")
 
             # ENHANCED: Add proxy if available
             if proxy:
@@ -1996,10 +2224,10 @@ def _method_playwright(url: str, platform_key: str, cookie_file: str = None, pro
                         # Format: http://user:pass@ip:port
                         proxy_parts = parsed_proxy.split('@')
                         proxy_server = f"http://{proxy_parts[1]}"
-                        logging.debug(f"🌐 Playwright using proxy: {proxy_parts[1][:25]}...")
+                        logging.debug(f"ðŸŒ Playwright using proxy: {proxy_parts[1][:25]}...")
                     else:
                         proxy_server = parsed_proxy
-                        logging.debug(f"🌐 Playwright using proxy: {proxy_server[:25]}...")
+                        logging.debug(f"ðŸŒ Playwright using proxy: {proxy_server[:25]}...")
 
                     launch_options['proxy'] = {'server': proxy_server}
 
@@ -2073,7 +2301,7 @@ def _method_playwright(url: str, platform_key: str, cookie_file: str = None, pro
                 if playwright_cookies:
                     try:
                         context.add_cookies(playwright_cookies)
-                        logging.debug(f"✓ Loaded {len(playwright_cookies)} cookies")
+                        logging.debug(f"âœ“ Loaded {len(playwright_cookies)} cookies")
                     except Exception as e:
                         logging.debug(f"Cookie loading failed: {e}")
 
@@ -2083,7 +2311,8 @@ def _method_playwright(url: str, platform_key: str, cookie_file: str = None, pro
             base_url_map = {
                 'tiktok': 'https://www.tiktok.com/',
                 'instagram': 'https://www.instagram.com/',
-                'youtube': 'https://www.youtube.com/'
+                'youtube': 'https://www.youtube.com/',
+                'facebook': 'https://www.facebook.com/',
             }
             seed_url = base_url_map.get(platform_key, url)
 
@@ -2214,20 +2443,71 @@ def _method_playwright(url: str, platform_key: str, cookie_file: str = None, pro
                             title = link.get_attribute('title') or link.get_attribute('aria-label') or 'YouTube Video'
                             entries.append({'url': full_url, 'title': title[:100], 'date': '00000000'})
 
+            elif platform_key == 'facebook':
+                # Navigate to reels page for better video discovery
+                reels_url = _facebook_reels_url(url)
+                if reels_url != url:
+                    try:
+                        page.goto(reels_url, timeout=30000, wait_until='domcontentloaded')
+                        time.sleep(random.uniform(2.0, 4.0))
+                    except Exception:
+                        pass
+
+                previous_count = 0
+                no_change_count = 0
+                scroll_count = 0
+                max_scrolls = 40 if max_videos == 0 else min(40, max_videos // 5 + 5)
+
+                fb_links = []
+                while no_change_count < 3 and scroll_count < max_scrolls:
+                    fb_links = page.query_selector_all(
+                        'a[href*="/reel/"], a[href*="/videos/"], a[href*="/watch/"], a[href*="/share/v/"]'
+                    )
+                    current_count = len(fb_links)
+
+                    if current_count == previous_count:
+                        no_change_count += 1
+                    else:
+                        no_change_count = 0
+
+                    # Human-like scrolling
+                    scroll_distance = random.randint(700, 1100)
+                    page.evaluate(f"window.scrollBy(0, {scroll_distance})")
+                    pause = random.uniform(1.5, 3.5)
+                    time.sleep(pause)
+
+                    previous_count = current_count
+                    scroll_count += 1
+
+                    if max_videos > 0 and current_count >= max_videos:
+                        break
+
+                for link in fb_links:
+                    if max_videos > 0 and len(entries) >= max_videos:
+                        break
+                    href = link.get_attribute('href')
+                    if not href:
+                        continue
+                    lower_href = href.lower()
+                    if '/reel/' not in lower_href and '/videos/' not in lower_href and '/watch/' not in lower_href and '/share/v/' not in lower_href:
+                        continue
+                    full_url = href if href.startswith('http') else f"https://www.facebook.com{href}"
+                    entries.append({'url': full_url, 'title': 'Facebook Video', 'date': '00000000'})
+
             context.close()
             browser.close()
 
             if entries:
-                logging.debug(f"✓ Playwright extracted {len(entries)} links")
+                logging.debug(f"âœ“ Playwright extracted {len(entries)} links")
             else:
-                logging.debug(f"⚠️ Playwright found 0 links")
+                logging.debug(f"âš ï¸ Playwright found 0 links")
 
             return entries
 
     except ImportError:
-        logging.debug("❌ Playwright not installed (pip install playwright)")
+        logging.debug("âŒ Playwright not installed (pip install playwright)")
     except Exception as e:
-        logging.debug(f"❌ Method 7 (playwright) failed: {str(e)[:100]}")
+        logging.debug(f"âŒ Method 7 (playwright) failed: {str(e)[:100]}")
 
     return []
 
@@ -2281,7 +2561,7 @@ def _method_selenium(
             proxy_url = _parse_proxy_format(proxy)  # FIXED: Properly parse ip:port:user:pass format
             options.add_argument(f'--proxy-server={proxy_url}')
             if progress_callback:
-                progress_callback(f"🌐 Selenium: Using proxy {proxy_url.split('@')[-1][:30]}...")
+                progress_callback(f"ðŸŒ Selenium: Using proxy {proxy_url.split('@')[-1][:30]}...")
             logging.info(f"Selenium: Proxy configured: {proxy_url.split('@')[-1][:30]}")
 
         driver = webdriver.Chrome(options=options)
@@ -2299,10 +2579,20 @@ def _method_selenium(
         # Load cookies if available (critical for TikTok private/region locked pages)
         cookies_loaded = False
         cookies = _load_cookies_from_file(cookie_file, platform_key) if cookie_file else []
+        if not cookies:
+            # Try live browser extraction as fallback for explicit browser mode failures.
+            tmp_cookie_file = _extract_browser_cookies(platform_key)
+            if tmp_cookie_file:
+                cookies = _load_cookies_from_file(tmp_cookie_file, platform_key)
+                try:
+                    os.unlink(tmp_cookie_file)
+                except Exception:
+                    pass
         base_url_map = {
             'tiktok': 'https://www.tiktok.com/',
             'instagram': 'https://www.instagram.com/',
-            'youtube': 'https://www.youtube.com/'
+            'youtube': 'https://www.youtube.com/',
+            'facebook': 'https://www.facebook.com/',
         }
         seed_url = base_url_map.get(platform_key, url)
 
@@ -2325,15 +2615,17 @@ def _method_selenium(
                 except Exception:
                     continue
 
+        target_url = _facebook_reels_url(url) if platform_key == 'facebook' else url
+
         # Navigate to target URL
         if cookies_loaded:
             if progress_callback:
-                progress_callback(f"🍪 Selenium: Cookies injected, loading target page...")
-            driver.get(url)
+                progress_callback(f"ðŸª Selenium: Cookies injected, loading target page...")
+            driver.get(target_url)
         else:
             if progress_callback:
-                progress_callback(f"🌐 Selenium: Loading page (no cookies)...")
-            driver.get(url)
+                progress_callback(f"ðŸŒ Selenium: Loading page (no cookies)...")
+            driver.get(target_url)
 
         # Wait for page to load
         time.sleep(5)
@@ -2344,7 +2636,8 @@ def _method_selenium(
         selector_map = {
             'tiktok': 'a[href*="/video/"]',
             'instagram': 'a[href*="/p/"], a[href*="/reel/"], a[href*="/tv/"]',
-            'youtube': 'a[href*="/watch?v="], a[href*="/shorts/"]'  # FIXED: Added Shorts support
+            'youtube': 'a[href*="/watch?v="], a[href*="/shorts/"]',  # FIXED: Added Shorts support
+            'facebook': 'a[href*="/reel/"], a[href*="/videos/"], a[href*="/watch/"], a[href*="/share/v/"], a[href*="reels/"]',
         }
         selector = selector_map.get(platform_key, 'a')
 
@@ -2423,6 +2716,10 @@ def _method_selenium(
                     if '/p/' not in href and '/reel/' not in href and '/tv/' not in href:
                         continue
                     href = _normalize_instagram_href(href)
+                if platform_key == 'facebook':
+                    lower_href = href.lower()
+                    if '/reel/' not in lower_href and '/videos/' not in lower_href and '/watch/' not in lower_href and '/share/v/' not in lower_href:
+                        continue
                 seen_urls.add(href)
                 if target_count and len(seen_urls) >= target_count:
                     break
@@ -2475,7 +2772,7 @@ def _method_selenium(
             scroll_attempts += 1
 
         if progress_callback:
-            progress_callback(f"✅ Selenium: Extraction complete - {len(seen_urls)} links found")
+            progress_callback(f"âœ… Selenium: Extraction complete - {len(seen_urls)} links found")
 
         entries = []
         limit = max_videos or len(seen_urls)
@@ -2486,18 +2783,18 @@ def _method_selenium(
         return entries
 
     except ImportError:
-        logging.warning("❌ Selenium not installed (pip install selenium)")
+        logging.warning("âŒ Selenium not installed (pip install selenium)")
         if progress_callback:
-            progress_callback("❌ Selenium not available - install with: pip install selenium")
+            progress_callback("âŒ Selenium not available - install with: pip install selenium")
     except Exception as e:
-        logging.warning(f"❌ Selenium method failed:")
+        logging.warning(f"âŒ Selenium method failed:")
         logging.warning(f"   URL: {url}")
         logging.warning(f"   Error: {str(e)[:300]}")
         logging.warning(f"   Platform: {platform_key}")
         if proxy:
             logging.warning(f"   Proxy: {proxy.split('@')[-1][:30]}")
         if progress_callback:
-            progress_callback(f"❌ Selenium error: {str(e)[:100]}")
+            progress_callback(f"âŒ Selenium error: {str(e)[:100]}")
     finally:
         if driver:
             try:
@@ -2506,6 +2803,363 @@ def _method_selenium(
                 pass
 
     return []
+
+
+def _extract_links_from_selenium_driver(
+    driver,
+    platform_key: str,
+    max_videos: int = 0,
+    expected_count: int = 0,
+    progress_callback=None,
+) -> typing.List[dict]:
+    """Shared extractor for selenium drivers (headless/non-headless)."""
+    selector_map = {
+        'tiktok': 'a[href*="/video/"]',
+        'instagram': 'a[href*="/p/"], a[href*="/reel/"], a[href*="/tv/"]',
+        'youtube': 'a[href*="/watch?v="], a[href*="/shorts/"]',
+        'facebook': 'a[href*="/reel/"], a[href*="/videos/"], a[href*="/watch/"], a[href*="/share/v/"], a[href*="reels/"]',
+    }
+    selector = selector_map.get(platform_key, 'a')
+
+    target_count = max_videos if max_videos > 0 else (expected_count or 0)
+    seen_urls: typing.Set[str] = set()
+    scroll_attempts = 0
+    stagnant_rounds = 0
+    stagnant_limit = 3
+    max_scrolls = 20
+
+    if platform_key == 'instagram':
+        stagnant_limit = 5
+        if target_count:
+            max_scrolls = min(200, max(40, target_count // 8 + 6))
+        else:
+            max_scrolls = 60
+    elif platform_key == 'tiktok':
+        max_scrolls = 40 if max_videos == 0 else min(60, max_videos // 5 + 5)
+    elif platform_key == 'youtube':
+        max_scrolls = 30 if max_videos == 0 else min(50, max_videos // 10 + 5)
+    elif platform_key == 'facebook':
+        max_scrolls = 40 if max_videos == 0 else min(70, max_videos // 5 + 6)
+
+    try:
+        last_height = driver.execute_script("return document.body.scrollHeight")
+    except Exception:
+        last_height = None
+
+    if progress_callback:
+        progress_callback("Selenium: Scrolling and extracting links...")
+
+    while scroll_attempts < max_scrolls and stagnant_rounds < stagnant_limit:
+        try:
+            links = driver.find_elements("css selector", selector)
+        except Exception:
+            links = []
+
+        before_count = len(seen_urls)
+
+        for link in links:
+            href = link.get_attribute('href')
+            if not href:
+                continue
+            lower_href = href.lower()
+            if platform_key == 'tiktok' and '/video/' not in lower_href:
+                continue
+            if platform_key == 'instagram':
+                if '/p/' not in lower_href and '/reel/' not in lower_href and '/tv/' not in lower_href:
+                    continue
+            if platform_key == 'facebook':
+                if '/reel/' not in lower_href and '/videos/' not in lower_href and '/watch/' not in lower_href and '/share/v/' not in lower_href:
+                    continue
+            seen_urls.add(href)
+            if target_count and len(seen_urls) >= target_count:
+                break
+
+        if target_count and len(seen_urls) >= target_count:
+            if progress_callback:
+                progress_callback(f"Selenium: Reached limit of {target_count} items")
+            break
+
+        new_links_found = len(seen_urls) - before_count
+        try:
+            current_height = driver.execute_script("return document.body.scrollHeight")
+        except Exception:
+            current_height = last_height
+
+        height_changed = (
+            current_height is not None
+            and last_height is not None
+            and current_height > last_height
+        )
+
+        if new_links_found == 0 and not height_changed:
+            stagnant_rounds += 1
+            if progress_callback and stagnant_rounds == 1:
+                progress_callback(f"Selenium: No new links, continuing... ({len(seen_urls)} total)")
+        else:
+            stagnant_rounds = 0
+            if progress_callback and scroll_attempts % 5 == 0:
+                progress_callback(f"Selenium: Found {len(seen_urls)} links so far...")
+
+        last_height = current_height
+
+        if platform_key in {'instagram', 'facebook'}:
+            scroll_amount = random.randint(800, 1400)
+            delay = random.uniform(2.0, 3.5)
+        else:
+            scroll_amount = random.randint(1200, 1800)
+            delay = random.uniform(1.5, 2.5)
+
+        try:
+            driver.execute_script(f"window.scrollBy(0, {scroll_amount});")
+        except Exception:
+            pass
+        time.sleep(delay)
+        scroll_attempts += 1
+
+    entries: typing.List[dict] = []
+    for href in sorted(seen_urls):
+        entries.append({
+            'url': href,
+            'title': f'{platform_key.title()} Video',
+            'date': '00000000',
+        })
+    return entries
+
+
+def _save_driver_cookies_to_file(driver, cookies_dir: Path, platform_key: str) -> typing.Optional[str]:
+    """Persist selenium session cookies to Netscape file for reuse by yt-dlp methods."""
+    try:
+        tokens = _platform_domain_tokens(platform_key)
+        cookies = driver.get_cookies() or []
+        filtered = []
+        for c in cookies:
+            domain = (c.get('domain') or '').lower()
+            if not tokens or any(token in domain for token in tokens):
+                filtered.append(c)
+        if not filtered:
+            return None
+
+        cookies_dir.mkdir(parents=True, exist_ok=True)
+        out = cookies_dir / "chrome_cookies.txt"
+        with open(out, 'w', encoding='utf-8') as f:
+            f.write("# Netscape HTTP Cookie File\n")
+            f.write("# Saved from interactive browser session\n\n")
+            for c in filtered:
+                domain = c.get('domain', '')
+                flag = 'TRUE' if str(domain).startswith('.') else 'FALSE'
+                path = c.get('path', '/') or '/'
+                secure = 'TRUE' if c.get('secure', False) else 'FALSE'
+                expires = str(int(c.get('expiry', 0) or 0))
+                name = c.get('name', '')
+                value = c.get('value', '')
+                f.write(f"{domain}\t{flag}\t{path}\t{secure}\t{expires}\t{name}\t{value}\n")
+        return str(out)
+    except Exception:
+        return None
+
+
+def _method_existing_browser_session(
+    url: str,
+    platform_key: str,
+    cookies_dir: Path,
+    max_videos: int = 0,
+    progress_callback=None,
+) -> typing.List[dict]:
+    """
+    Try to reuse an already logged-in local Chrome profile before manual login fallback.
+    """
+    if platform_key not in {'instagram', 'facebook'}:
+        return []
+
+    try:
+        from selenium import webdriver
+        from selenium.webdriver.chrome.options import Options
+    except Exception:
+        return []
+
+    browser_roots = _iter_browser_profile_roots()
+    if not browser_roots:
+        return []
+
+    running = _get_running_browser_names()
+    if running:
+        # Prefer currently running browsers first as user requested.
+        browser_roots.sort(key=lambda item: 0 if item[0] in running else 1)
+
+    seed_url_map = {
+        'instagram': 'https://www.instagram.com/',
+        'facebook': 'https://www.facebook.com/',
+    }
+    seed_url = seed_url_map.get(platform_key, url)
+    target_url = _facebook_reels_url(url) if platform_key == 'facebook' else url
+
+    for browser_name, root in browser_roots:
+        preferred = ["Default"] + sorted([
+            p.name for p in root.iterdir()
+            if p.is_dir() and p.name.startswith("Profile ")
+        ])[:6]
+        profile_candidates = [p for p in preferred if (root / p).exists()]
+
+        for profile_name in profile_candidates:
+            driver = None
+            try:
+                if progress_callback:
+                    progress_callback(f"Checking existing {browser_name.title()} session ({profile_name})...")
+
+                options = Options()
+                options.add_argument('--start-maximized')
+                options.add_argument('--disable-blink-features=AutomationControlled')
+                options.add_experimental_option("excludeSwitches", ["enable-automation"])
+                options.add_experimental_option('useAutomationExtension', False)
+                options.add_argument(f'--user-agent={_get_random_user_agent()}')
+                options.add_argument(f'--user-data-dir={root}')
+                options.add_argument(f'--profile-directory={profile_name}')
+
+                driver = webdriver.Chrome(options=options)
+                driver.set_page_load_timeout(45)
+
+                driver.get(seed_url)
+                time.sleep(2.5)
+                driver.get(target_url)
+                time.sleep(4)
+
+                entries = _extract_links_from_selenium_driver(
+                    driver,
+                    platform_key=platform_key,
+                    max_videos=max_videos,
+                    expected_count=0,
+                    progress_callback=progress_callback,
+                )
+                if entries:
+                    saved_cookie = _save_driver_cookies_to_file(driver, cookies_dir, platform_key)
+                    if saved_cookie and progress_callback:
+                        progress_callback(f"Existing session cookies saved to {Path(saved_cookie).name}")
+                    if progress_callback:
+                        progress_callback(
+                            f"Existing browser session success ({browser_name}:{profile_name}): {len(entries)} links"
+                        )
+                    return entries
+            except Exception as e:
+                msg = str(e).lower()
+                if progress_callback:
+                    if "user data directory is already in use" in msg:
+                        progress_callback(f"{browser_name}:{profile_name} is locked; trying next profile...")
+                    else:
+                        progress_callback(f"{browser_name}:{profile_name} session check failed; trying next profile...")
+            finally:
+                try:
+                    if driver:
+                        driver.quit()
+                except Exception:
+                    pass
+
+    return []
+
+
+def _method_interactive_browser_session(
+    url: str,
+    platform_key: str,
+    cookies_dir: Path,
+    max_videos: int = 0,
+    proxy: str = None,
+    progress_callback=None,
+    wait_seconds: int = 90,
+) -> typing.List[dict]:
+    """
+    Final fallback:
+    Opens visible browser, asks user to login manually, then extracts links from live session.
+    """
+    driver = None
+    try:
+        from selenium import webdriver
+        from selenium.webdriver.chrome.options import Options
+
+        options = Options()
+        # Visible browser so user can login.
+        options.add_argument('--start-maximized')
+        options.add_argument('--disable-blink-features=AutomationControlled')
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option('useAutomationExtension', False)
+        options.add_argument(f'--user-agent={_get_random_user_agent()}')
+
+        if proxy:
+            proxy_url = _parse_proxy_format(proxy)
+            options.add_argument(f'--proxy-server={proxy_url}')
+            if progress_callback:
+                progress_callback(f"Interactive browser: using proxy {_mask_proxy(proxy_url)}")
+
+        driver = webdriver.Chrome(options=options)
+        driver.set_page_load_timeout(45)
+
+        seed_url_map = {
+            'instagram': 'https://www.instagram.com/',
+            'facebook': 'https://www.facebook.com/',
+            'youtube': 'https://www.youtube.com/',
+            'tiktok': 'https://www.tiktok.com/',
+        }
+        seed_url = seed_url_map.get(platform_key, url)
+        target_url = _facebook_reels_url(url) if platform_key == 'facebook' else url
+        driver.get(seed_url)
+
+        if progress_callback:
+            progress_callback("=" * 40)
+            progress_callback("Manual login required:")
+            progress_callback(f"1) Login in opened browser window ({platform_key.title()})")
+            progress_callback(f"2) Keep window open; waiting up to {wait_seconds} seconds")
+            progress_callback("3) After login completes, extraction continues automatically")
+            progress_callback("=" * 40)
+
+        for sec in range(wait_seconds):
+            time.sleep(1)
+            if platform_key == 'facebook':
+                try:
+                    current = (driver.current_url or "").lower()
+                    has_session = any(c.get('name') == 'c_user' for c in (driver.get_cookies() or []))
+                    if has_session and 'login' not in current:
+                        if progress_callback:
+                            progress_callback("Facebook login detected. Continuing extraction now...")
+                        break
+                except Exception:
+                    pass
+            elif platform_key == 'instagram':
+                try:
+                    current = (driver.current_url or "").lower()
+                    has_session = any(c.get('name') == 'sessionid' for c in (driver.get_cookies() or []))
+                    if has_session and 'accounts/login' not in current:
+                        if progress_callback:
+                            progress_callback("Instagram login detected. Continuing extraction now...")
+                        break
+                except Exception:
+                    pass
+            if progress_callback and sec in {15, 30, 45, 60, 75}:
+                progress_callback(f"Waiting for manual login... {wait_seconds - sec}s left")
+
+        driver.get(target_url)
+        time.sleep(4)
+
+        entries = _extract_links_from_selenium_driver(
+            driver,
+            platform_key=platform_key,
+            max_videos=max_videos,
+            expected_count=0,
+            progress_callback=progress_callback,
+        )
+
+        saved_cookie = _save_driver_cookies_to_file(driver, cookies_dir, platform_key)
+        if saved_cookie and progress_callback:
+            progress_callback(f"Session cookies saved to {Path(saved_cookie).name}")
+
+        return entries
+    except Exception as e:
+        if progress_callback:
+            progress_callback(f"Interactive browser fallback failed: {str(e)[:120]}")
+        return []
+    finally:
+        try:
+            if driver:
+                driver.quit()
+        except Exception:
+            pass
 
 
 # ============ OLD WORKING METHODS (From ffbdcc8 - Proven to Work!) ============
@@ -2518,9 +3172,9 @@ def _method_old_batch_file(url: str, platform_key: str, cookie_file: str = None,
     Simple yt-dlp --flat-playlist --get-url
     """
     try:
-        logging.info("🕰️ Trying OLD Method 9: Original Batch File Approach")
+        logging.info("ðŸ•°ï¸ Trying OLD Method 9: Original Batch File Approach")
 
-        cmd = ['yt-dlp', '--flat-playlist', '--get-url', '--ignore-errors', '--no-warnings']
+        cmd = [_get_ytdlp_binary_path(), '--flat-playlist', '--get-url', '--ignore-errors', '--no-warnings']
 
         if cookie_file:
             cmd.extend(['--cookies', cookie_file])
@@ -2541,7 +3195,7 @@ def _method_old_batch_file(url: str, platform_key: str, cookie_file: str = None,
         cmd.append(url)
 
         # DEBUG: Log the actual command being run
-        logging.info(f"🔧 OLD Method 9 command: {' '.join(cmd[:8])}... (full command logged)")
+        logging.info(f"ðŸ”§ OLD Method 9 command: {' '.join(cmd[:8])}... (full command logged)")
         logging.debug(f"   Full command: {' '.join(cmd)}")
 
         result = subprocess.run(
@@ -2564,24 +3218,24 @@ def _method_old_batch_file(url: str, platform_key: str, cookie_file: str = None,
             ]
 
             if urls:
-                logging.info(f"✅ OLD Method 9 SUCCESS: {len(urls)} links")
+                logging.info(f"âœ… OLD Method 9 SUCCESS: {len(urls)} links")
                 return [{'url': u, 'title': '', 'date': '00000000'} for u in urls]
             else:
                 # Stdout exists but no URLs found
-                logging.warning(f"⚠️ OLD Method 9: Stdout exists but no URLs found")
+                logging.warning(f"âš ï¸ OLD Method 9: Stdout exists but no URLs found")
                 logging.warning(f"   Stdout preview: {result.stdout[:300]}")
         else:
             # No stdout at all
-            logging.warning(f"⚠️ OLD Method 9: No stdout output")
+            logging.warning(f"âš ï¸ OLD Method 9: No stdout output")
 
         # CRITICAL: Log stderr to see the REAL error
         if result.stderr:
-            logging.warning(f"❌ OLD Method 9 STDERR: {result.stderr[:500]}")
+            logging.warning(f"âŒ OLD Method 9 STDERR: {result.stderr[:500]}")
 
-        logging.info(f"⚠️ OLD Method 9 failed - see stderr above for details")
+        logging.info(f"âš ï¸ OLD Method 9 failed - see stderr above for details")
 
     except Exception as e:
-        logging.warning(f"❌ OLD Method 9 EXCEPTION: {str(e)[:200]}")
+        logging.warning(f"âŒ OLD Method 9 EXCEPTION: {str(e)[:200]}")
 
     return []
 
@@ -2593,9 +3247,9 @@ def _method_old_dump_json(url: str, platform_key: str, cookie_file: str = None, 
     Simple yt-dlp --dump-json without complex features
     """
     try:
-        logging.info("🕰️ Trying OLD Method 10: Original Dump JSON")
+        logging.info("ðŸ•°ï¸ Trying OLD Method 10: Original Dump JSON")
 
-        cmd = ['yt-dlp', '--dump-json', '--flat-playlist', '--ignore-errors', '--no-warnings']
+        cmd = [_get_ytdlp_binary_path(), '--dump-json', '--flat-playlist', '--ignore-errors', '--no-warnings']
 
         if cookie_file:
             cmd.extend(['--cookies', cookie_file])
@@ -2619,7 +3273,7 @@ def _method_old_dump_json(url: str, platform_key: str, cookie_file: str = None, 
         cmd.append(url)
 
         # DEBUG: Log the actual command being run
-        logging.info(f"🔧 OLD Method 10 command: {' '.join(cmd[:8])}... (full command logged)")
+        logging.info(f"ðŸ”§ OLD Method 10 command: {' '.join(cmd[:8])}... (full command logged)")
         logging.debug(f"   Full command: {' '.join(cmd)}")
 
         result = subprocess.run(
@@ -2652,24 +3306,24 @@ def _method_old_dump_json(url: str, platform_key: str, cookie_file: str = None, 
                     continue
 
             if entries:
-                logging.info(f"✅ OLD Method 10 SUCCESS: {len(entries)} links")
+                logging.info(f"âœ… OLD Method 10 SUCCESS: {len(entries)} links")
                 return entries
             else:
                 # Stdout exists but no valid JSON entries
-                logging.warning(f"⚠️ OLD Method 10: Stdout exists but no valid JSON entries")
+                logging.warning(f"âš ï¸ OLD Method 10: Stdout exists but no valid JSON entries")
                 logging.warning(f"   Stdout preview: {result.stdout[:300]}")
         else:
             # No stdout at all
-            logging.warning(f"⚠️ OLD Method 10: No stdout output")
+            logging.warning(f"âš ï¸ OLD Method 10: No stdout output")
 
         # CRITICAL: Log stderr to see the REAL error
         if result.stderr:
-            logging.warning(f"❌ OLD Method 10 STDERR: {result.stderr[:500]}")
+            logging.warning(f"âŒ OLD Method 10 STDERR: {result.stderr[:500]}")
 
-        logging.info("⚠️ OLD Method 10 failed - see stderr above for details")
+        logging.info("âš ï¸ OLD Method 10 failed - see stderr above for details")
 
     except Exception as e:
-        logging.warning(f"❌ OLD Method 10 EXCEPTION: {str(e)[:200]}")
+        logging.warning(f"âŒ OLD Method 10 EXCEPTION: {str(e)[:200]}")
 
     return []
 
@@ -2684,7 +3338,7 @@ def _method_old_instaloader(url: str, platform_key: str, cookie_file: str = None
         return []
 
     try:
-        logging.info("🕰️ Trying OLD Method 11: Original Instaloader")
+        logging.info("ðŸ•°ï¸ Trying OLD Method 11: Original Instaloader")
 
         import instaloader
 
@@ -2737,16 +3391,16 @@ def _method_old_instaloader(url: str, platform_key: str, cookie_file: str = None
             logging.warning(f"OLD Method 11 interrupted: {str(e)[:200]}")
 
         if entries:
-            logging.info(f"✅ OLD Method 11 SUCCESS: {len(entries)} links")
+            logging.info(f"âœ… OLD Method 11 SUCCESS: {len(entries)} links")
             return entries
         else:
-            logging.warning("⚠️ OLD Method 11: No posts found from profile")
+            logging.warning("âš ï¸ OLD Method 11: No posts found from profile")
 
     except ImportError:
-        logging.warning("❌ OLD Method 11 unavailable: instaloader not installed")
+        logging.warning("âŒ OLD Method 11 unavailable: instaloader not installed")
     except Exception as e:
         # Log full exception details for debugging
-        logging.warning(f"❌ OLD Method 11 EXCEPTION: {type(e).__name__}: {str(e)[:300]}")
+        logging.warning(f"âŒ OLD Method 11 EXCEPTION: {type(e).__name__}: {str(e)[:300]}")
         import traceback
         logging.debug(f"   Full traceback: {traceback.format_exc()[:500]}")
 
@@ -2771,7 +3425,12 @@ def extract_links_intelligent(
         options = options or {}
         max_videos = int(options.get('max_videos', 0) or 0)
         force_all_methods = bool(options.get('force_all_methods', False))
+        use_instaloader = bool(options.get('use_instaloader', False))
+        interactive_login_fallback = bool(options.get('interactive_login_fallback', True))
+        manual_login_wait_seconds = int(options.get('manual_login_wait_seconds', 90) or 90)
         cookie_browser = options.get('cookie_browser')  # "chrome", "firefox", "edge", or None
+        explicit_browser_mode = bool(cookie_browser)
+        url = _normalize_source_url(url, platform_key)
         creator = _extract_creator_from_url(url, platform_key)
 
         # Get learning system
@@ -2781,18 +3440,39 @@ def extract_links_intelligent(
         cookie_file = None
         temp_cookie_files: typing.List[str] = []
 
+        browser_cookie_extract_failed = False
         if cookie_browser:
             if progress_callback:
-                progress_callback(f"🍪 Using {cookie_browser.title()} browser cookies directly")
+                progress_callback(f"Cookie source: Browser ({cookie_browser.title()})")
             extracted = _extract_browser_cookies(platform_key, cookie_browser)
             if extracted:
                 temp_cookie_files.append(extracted)
                 cookie_file = extracted
+            else:
+                browser_cookie_extract_failed = True
+                if progress_callback:
+                    progress_callback("Browser cookie extraction failed (browser DB lock or access denied).")
+                    progress_callback("Trying Chrome DB copy method (Workflow 1)...")
+                # Try Workflow 1: copy locked Chrome/Edge DB to temp and decrypt
+                extracted = _extract_browser_cookies_db_copy(platform_key, preferred_browser=cookie_browser, cookies_dir=cookies_dir)
+                if extracted:
+                    temp_cookie_files.append(extracted)
+                    cookie_file = extracted
+                    if progress_callback:
+                        progress_callback("Cookie source: Chrome DB copy (bypassed lock)")
+                else:
+                    if progress_callback:
+                        progress_callback("DB copy failed. Switching to saved cookie file fallback.")
+                # Reset so file fallback below is always attempted
+                explicit_browser_mode = False
+                cookie_browser = None
 
-        if not cookie_file:
+        if not cookie_file and not explicit_browser_mode:
             cookie_file = _find_cookie_file(cookies_dir, platform_key)
+            if cookie_file and progress_callback:
+                progress_callback(f"Cookie source: Saved file ({Path(cookie_file).name})")
 
-        if not cookie_file:
+        if not cookie_file and not explicit_browser_mode:
             extracted = _extract_browser_cookies(platform_key)
             if extracted:
                 temp_cookie_files.append(extracted)
@@ -2800,7 +3480,7 @@ def extract_links_intelligent(
 
         if cookie_file and progress_callback:
             cookie_name = Path(cookie_file).name
-            progress_callback(f"🍪 Using cookies: {cookie_name}")
+            progress_callback(f"Cookies file: {cookie_name}")
 
             # ENHANCED: Validate cookie freshness and quality
             validation = _validate_cookie_file(cookie_file, max_age_days=14)
@@ -2809,7 +3489,7 @@ def extract_links_intelligent(
                     progress_callback(f"   {warning}")
             else:
                 # Show cookie stats if valid and fresh
-                progress_callback(f"   ✓ {validation['total_cookies']} cookies, {validation['age_days']} days old")
+                progress_callback(f"   OK: {validation['total_cookies']} cookies, {validation['age_days']} days old")
 
         # If we've materialized a cookie file, stop passing cookie_browser to yt-dlp.
         # yt-dlp's --cookies-from-browser mode ignores manual files and was causing 0 results
@@ -2822,7 +3502,12 @@ def extract_links_intelligent(
 
         # Extract proxy settings from options (support for 1-2 proxies)
         proxy_list = options.get('proxies', []) or []
-        active_proxy = proxy_list[0] if proxy_list else None  # Use first proxy if available
+        parsed_proxies: typing.List[str] = []
+        for p in proxy_list:
+            parsed = _parse_proxy_format(p)
+            if parsed:
+                parsed_proxies.append(parsed)
+        active_proxy = parsed_proxies[0] if parsed_proxies else None  # Use first proxy if available
         use_enhancements = options.get('use_enhancements', True)  # Enable enhancements by default
         from .config import get_exhaustive_mode
         exhaustive_mode = force_all_methods or get_exhaustive_mode()
@@ -2841,10 +3526,10 @@ def extract_links_intelligent(
                 # No tab specified - try /videos first (most common)
                 url = f"{url.rstrip('/')}/videos"
                 if progress_callback:
-                    progress_callback(f"📝 YouTube URL normalized:")
+                    progress_callback(f"ðŸ“ YouTube URL normalized:")
                     progress_callback(f"   From: {original_url}")
                     progress_callback(f"   To: {url}")
-                    progress_callback(f"   💡 Tip: Use /@username/videos or /@username/shorts for direct access")
+                    progress_callback(f"   ðŸ’¡ Tip: Use /@username/videos or /@username/shorts for direct access")
 
         # Check yt-dlp version and log it
         ytdlp_version = "Unknown"
@@ -2874,29 +3559,65 @@ def extract_links_intelligent(
 
         # Show configuration summary
         if progress_callback:
-            progress_callback(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-            progress_callback(f"📊 Extraction Configuration:")
-            progress_callback(f"   • Creator: @{creator}")
-            progress_callback(f"   • Platform: {platform_key.title()}")
-            progress_callback(f"   • yt-dlp: v{ytdlp_version} ({ytdlp_location})")
+            progress_callback("-" * 32)
+            progress_callback("Extraction Configuration:")
+            progress_callback(f"   Creator: @{creator}")
+            progress_callback(f"   Platform: {platform_key.title()}")
+            progress_callback(f"   yt-dlp: v{ytdlp_version} ({ytdlp_location})")
             if active_proxy:
-                progress_callback(f"   • Proxy: {active_proxy} ✓")
+                progress_callback(f"   Proxy: {_mask_proxy(active_proxy)}")
             if cookie_file:
-                progress_callback(f"   • Cookies: Loaded ✓")
+                progress_callback("   Cookies: File loaded")
+            elif explicit_browser_mode:
+                if browser_cookie_extract_failed:
+                    progress_callback("   Cookies: Browser mode requested (direct extraction unavailable)")
+                else:
+                    progress_callback(f"   Cookies: Browser mode ({cookie_browser})")
             if max_videos > 0:
-                progress_callback(f"   • Limit: {max_videos} videos")
+                progress_callback(f"   Limit: {max_videos} videos")
             else:
-                progress_callback(f"   • Limit: All videos (unlimited)")
+                progress_callback("   Limit: All videos (unlimited)")
             if expected_count:
                 progress_callback(f"   Expected posts: {expected_count}")
             if use_enhancements:
-                progress_callback(f"   • Enhancements: Enabled (Dual yt-dlp + UA Rotation)")
-            progress_callback(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                progress_callback("   Enhancements: Enabled (Dual yt-dlp + UA Rotation)")
+            progress_callback("-" * 32)
+
+        # Requested browser-mode flow:
+        # 1) Try existing logged-in local browser session first (no manual prompt)
+        # 2) If not found, continue normal methods
+        # 3) Ask manual login only at final fallback
+        if (
+            not entries
+            and platform_key in {'instagram', 'facebook'}
+            and explicit_browser_mode
+            and browser_cookie_extract_failed
+        ):
+            if progress_callback:
+                progress_callback("Trying existing logged-in browser sessions before standard methods...")
+            pre_entries = _method_existing_browser_session(
+                url=url,
+                platform_key=platform_key,
+                cookies_dir=cookies_dir,
+                max_videos=max_videos,
+                progress_callback=progress_callback,
+            ) or []
+            for entry in pre_entries:
+                if max_videos > 0 and len(entries) >= max_videos:
+                    break
+                url_value = entry.get('url')
+                if not url_value:
+                    continue
+                normalized = _normalize_url(url_value)
+                if normalized in seen_normalized:
+                    continue
+                seen_normalized.add(normalized)
+                entries.append(entry)
 
         # Define all available methods (pass cookie_browser to yt-dlp methods)
         # PRIORITY ORDER: OLD PROVEN METHODS FIRST, then advanced fallback methods
         # ============================================================================
-        # 🕰️ OLD WORKING METHODS (From ffbdcc8 - PROVEN to work 100%!)
+        # ðŸ•°ï¸ OLD WORKING METHODS (From ffbdcc8 - PROVEN to work 100%!)
         # These run FIRST because they worked perfectly in the beginning
         # ============================================================================
         all_methods = [
@@ -2911,7 +3632,7 @@ def extract_links_intelligent(
 
             ("OLD Method 11: Original Instaloader (PROVEN 100%)",
              lambda: _method_old_instaloader(url, platform_key, cookie_file, max_videos, active_proxy),
-             platform_key == 'instagram'),  # Instagram only
+             platform_key == 'instagram' and use_instaloader),  # Opt-in only (avoids 429 sleeps)
 
             # ========== PRIORITY 4-12: ADVANCED METHODS (Fallback) ==========
             ("Method 0: Enhanced yt-dlp (Dual API + Proxy + UA Rotation)",
@@ -2944,11 +3665,11 @@ def extract_links_intelligent(
 
             ("Method 5: Instaloader",
              lambda: _method_instaloader(url, platform_key, cookie_file, max_videos, active_proxy),
-             platform_key == 'instagram'),
+             platform_key == 'instagram' and use_instaloader),
 
             ("Method 7: Playwright (ENHANCED: Stealth + Proxy + Human Behavior)",
              lambda: _method_playwright(url, platform_key, cookie_file, active_proxy, max_videos),
-             platform_key in ['tiktok', 'instagram', 'youtube']),
+             platform_key in ['tiktok', 'instagram', 'youtube', 'facebook']),
 
             ("Method 8: Selenium Headless (ENHANCED: Proxy + Cookies + Stealth)",
              lambda: _method_selenium(url, platform_key, max_videos, cookie_file, active_proxy, progress_callback, expected_count),
@@ -2964,8 +3685,8 @@ def extract_links_intelligent(
             best_method_name = learning_system.get_best_method(creator, platform_key)
 
             if best_method_name and progress_callback:
-                progress_callback(f"🧠 Learning cache found for @{creator}")
-                progress_callback(f"🎯 Best method: {best_method_name}")
+                progress_callback(f"ðŸ§  Learning cache found for @{creator}")
+                progress_callback(f"ðŸŽ¯ Best method: {best_method_name}")
 
         # Reorder methods to try best one first
         if best_method_name:
@@ -2982,15 +3703,64 @@ def extract_links_intelligent(
             if best_method_func:
                 available_methods = [best_method_func] + reordered
 
+        # Browser-first ordering for IG/FB improves success when API methods are rate-limited.
+        if platform_key in {'instagram', 'facebook'}:
+            priority_names = [
+                "Method 8: Selenium Headless (ENHANCED: Proxy + Cookies + Stealth)",
+                "Method 7: Playwright (ENHANCED: Stealth + Proxy + Human Behavior)",
+                "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)",
+                "Method 1: yt-dlp --dump-json (with dates)",
+                "Method 3: yt-dlp with retries",
+                "Method 4: yt-dlp with user agent",
+            ]
+            priority_map = {name: idx for idx, name in enumerate(priority_names)}
+            available_methods = sorted(
+                available_methods,
+                key=lambda item: priority_map.get(item[0], 999),
+            )
+
+        # Facebook profile URLs are often blocked/unsupported via plain yt-dlp listing.
+        # Prefer browser extraction stack directly for these URL shapes.
+        fb_profile_shape = False
+        if platform_key == 'facebook':
+            u_lower = (url or '').lower()
+            try:
+                parsed_fb = urlparse(url or '')
+                fb_parts = [p.lower() for p in (parsed_fb.path or '').split('/') if p]
+            except Exception:
+                fb_parts = []
+
+            is_direct_video_url = any(
+                k in u_lower for k in ('/reel/', '/reels/', '/videos/', '/watch/', '/share/v/')
+            )
+            fb_profile_shape = (
+                ('profile.php' in u_lower or '/people/' in u_lower) or
+                (fb_parts and not is_direct_video_url)
+            )
+        if fb_profile_shape:
+            if progress_callback:
+                progress_callback("Facebook profile URL detected; prioritizing browser extraction methods.")
+            browser_method_names = {
+                "Method 8: Selenium Headless (ENHANCED: Proxy + Cookies + Stealth)",
+                "Method 7: Playwright (ENHANCED: Stealth + Proxy + Human Behavior)",
+            }
+            filtered = [(name, func) for name, func in available_methods if name in browser_method_names]
+            if filtered:
+                available_methods = filtered
+
         # Try methods
         successful_method = None
+        if entries:
+            successful_method = "Existing Browser Session"
+            if not exhaustive_mode:
+                available_methods = []
 
         for method_name, method_func in available_methods:
             if max_videos > 0 and len(entries) >= max_videos:
                 break
 
             if progress_callback:
-                progress_callback(f"🔄 Trying: {method_name}")
+                progress_callback(f"ðŸ”„ Trying: {method_name}")
 
             start_time = time.time()
             method_entries = []
@@ -3001,7 +3771,7 @@ def extract_links_intelligent(
             except Exception as e:
                 error_msg = str(e)[:200]
                 if progress_callback:
-                    progress_callback(f"⚠️ {method_name} failed: {error_msg[:100]}")
+                    progress_callback(f"âš ï¸ {method_name} failed: {error_msg[:100]}")
 
             time_taken = time.time() - start_time
 
@@ -3039,7 +3809,7 @@ def extract_links_intelligent(
             if added > 0:
                 successful_method = method_name
                 if progress_callback:
-                    progress_callback(f"✅ {method_name} → {added} links in {time_taken:.1f}s")
+                    progress_callback(f"âœ… {method_name} â†’ {added} links in {time_taken:.1f}s")
 
                 if target_count > 0 and len(entries) >= target_count:
                     if progress_callback:
@@ -3050,11 +3820,11 @@ def extract_links_intelligent(
                     break  # Stop on first success
             else:
                 if progress_callback:
-                    progress_callback(f"⚠️ {method_name} → 0 links")
+                    progress_callback(f"âš ï¸ {method_name} â†’ 0 links")
 
                     # If this was the learned "best" method and it failed, inform user we'll try others
                     if method_name == best_method_name and best_method_name:
-                        progress_callback(f"   🔄 Best method didn't work, continuing with other methods...")
+                        progress_callback(f"   ðŸ”„ Best method didn't work, continuing with other methods...")
 
                 # ============================================================
                 # IP PROTECTION: Mandatory delay between failed method attempts
@@ -3065,8 +3835,91 @@ def extract_links_intelligent(
                 if current_index < len(available_methods) - 1:
                     delay = random.uniform(2.0, 4.0)
                     if progress_callback:
-                        progress_callback(f"⏳ IP Protection: Waiting {delay:.1f}s before next method...")
+                        progress_callback(f"â³ IP Protection: Waiting {delay:.1f}s before next method...")
                     time.sleep(delay)
+
+        # If proxy path is blocked/rate-limited, auto retry once without proxy for IG/FB.
+        if not entries and active_proxy and platform_key in {'instagram', 'facebook'}:
+            if progress_callback:
+                progress_callback("Retrying without proxy (proxy may be blocked/rate-limited)...")
+
+            no_proxy_methods = [
+                ("Method 8: Selenium Headless (ENHANCED: Proxy + Cookies + Stealth)",
+                 lambda: _method_selenium(url, platform_key, max_videos, cookie_file, None, progress_callback, expected_count)),
+                ("Method 7: Playwright (ENHANCED: Stealth + Proxy + Human Behavior)",
+                 lambda: _method_playwright(url, platform_key, cookie_file, None, max_videos)),
+                ("Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)",
+                 lambda: _method_ytdlp_get_url(url, platform_key, cookie_file, max_videos, cookie_browser, None)),
+                ("Method 1: yt-dlp --dump-json (with dates)",
+                 lambda: _method_ytdlp_dump_json(url, platform_key, cookie_file, max_videos, cookie_browser, None)),
+                ("Method 3: yt-dlp with retries",
+                 lambda: _method_ytdlp_with_retry(url, platform_key, cookie_file, max_videos, cookie_browser, None)),
+                ("Method 4: yt-dlp with user agent",
+                 lambda: _method_ytdlp_user_agent(url, platform_key, cookie_file, max_videos, cookie_browser, None)),
+            ]
+
+            for method_name, method_func in no_proxy_methods:
+                if max_videos > 0 and len(entries) >= max_videos:
+                    break
+                if progress_callback:
+                    progress_callback(f"Trying (no-proxy): {method_name}")
+
+                try:
+                    method_entries = method_func() or []
+                except Exception:
+                    method_entries = []
+
+                added = 0
+                for entry in method_entries:
+                    if max_videos > 0 and len(entries) >= max_videos:
+                        break
+                    url_value = entry.get('url')
+                    if not url_value:
+                        continue
+                    normalized = _normalize_url(url_value)
+                    if normalized in seen_normalized:
+                        continue
+                    seen_normalized.add(normalized)
+                    entries.append(entry)
+                    added += 1
+
+                if added > 0:
+                    successful_method = f"{method_name} (no-proxy)"
+                    if progress_callback:
+                        progress_callback(f"Success (no-proxy): +{added} links")
+                    if not exhaustive_mode or fb_profile_shape:
+                        break
+
+        # Final fallback: open visible browser session and ask user to login manually.
+        if not entries and platform_key in {'instagram', 'facebook'} and interactive_login_fallback:
+            if progress_callback:
+                progress_callback("No links yet. Launching interactive browser login fallback...")
+            manual_entries = _method_interactive_browser_session(
+                url=url,
+                platform_key=platform_key,
+                cookies_dir=cookies_dir,
+                max_videos=max_videos,
+                proxy=None,  # manual fallback works best without unstable proxies
+                progress_callback=progress_callback,
+                wait_seconds=max(30, min(300, manual_login_wait_seconds)),
+            )
+            added = 0
+            for entry in manual_entries:
+                if max_videos > 0 and len(entries) >= max_videos:
+                    break
+                url_value = entry.get('url')
+                if not url_value:
+                    continue
+                normalized = _normalize_url(url_value)
+                if normalized in seen_normalized:
+                    continue
+                seen_normalized.add(normalized)
+                entries.append(entry)
+                added += 1
+            if added > 0:
+                successful_method = "Interactive Browser Session"
+                if progress_callback:
+                    progress_callback(f"Interactive browser fallback success: +{added} links")
 
         # Cleanup temp cookies
         for temp_cookie_file in temp_cookie_files:
@@ -3089,29 +3942,29 @@ def extract_links_intelligent(
                 entries = entries[:max_videos]
 
             if progress_callback:
-                progress_callback(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                progress_callback(f"✅ Extraction Complete!")
-                progress_callback(f"   • Total Links: {len(entries)}")
+                progress_callback(f"â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”")
+                progress_callback(f"âœ… Extraction Complete!")
+                progress_callback(f"   â€¢ Total Links: {len(entries)}")
                 if successful_method:
-                    progress_callback(f"   • Method Used: {successful_method}")
+                    progress_callback(f"   â€¢ Method Used: {successful_method}")
                 if active_proxy:
-                    progress_callback(f"   • Proxy Used: {active_proxy}")
-                progress_callback(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                    progress_callback(f"   â€¢ Proxy Used: {active_proxy}")
+                progress_callback(f"â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”")
         else:
             if progress_callback:
-                progress_callback(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                progress_callback(f"❌ No links found after trying all methods")
-                progress_callback(f"💡 Suggestions:")
-                progress_callback(f"   • Try updating cookies")
-                progress_callback(f"   • Use a different proxy")
-                progress_callback(f"   • Check if the account is private")
-                progress_callback(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                progress_callback(f"â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”")
+                progress_callback(f"âŒ No links found after trying all methods")
+                progress_callback(f"ðŸ’¡ Suggestions:")
+                progress_callback(f"   â€¢ Try updating cookies")
+                progress_callback(f"   â€¢ Use a different proxy")
+                progress_callback(f"   â€¢ Check if the account is private")
+                progress_callback(f"â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”")
 
         return entries, creator
 
     except Exception as e:
         if progress_callback:
-            progress_callback(f"❌ Critical error: {str(e)[:200]}")
+            progress_callback(f"âŒ Critical error: {str(e)[:200]}")
         return [], "unknown"
 
 
@@ -3140,19 +3993,19 @@ class LinkGrabberThread(QThread):
     def run(self):
         try:
             if not self.url:
-                self.finished.emit(False, "❌ No URL provided", [])
+                self.finished.emit(False, "âŒ No URL provided", [])
                 return
 
-            self.progress.emit("🔍 Detecting platform...")
+            self.progress.emit("ðŸ” Detecting platform...")
             self.progress_percent.emit(10)
 
             platform_key = _detect_platform_key(self.url)
 
             if platform_key == 'unknown':
-                self.finished.emit(False, "❌ Unsupported platform", [])
+                self.finished.emit(False, "âŒ Unsupported platform", [])
                 return
 
-            self.progress.emit(f"✅ Platform: {platform_key.upper()}")
+            self.progress.emit(f"âœ… Platform: {platform_key.upper()}")
             self.progress_percent.emit(20)
 
             # Intelligent extraction
@@ -3171,17 +4024,17 @@ class LinkGrabberThread(QThread):
 
             if not entries:
                 error_msg = (
-                    f"❌ No links found from @{creator}\n\n"
+                    f"âŒ No links found from @{creator}\n\n"
                     "Possible reasons:\n"
-                    "• Private account (add cookies via GUI)\n"
-                    "• Invalid URL\n"
-                    "• Platform blocking\n"
-                    "• No content available"
+                    "â€¢ Private account (add cookies via GUI)\n"
+                    "â€¢ Invalid URL\n"
+                    "â€¢ Platform blocking\n"
+                    "â€¢ No content available"
                 )
                 self.finished.emit(False, error_msg, [])
                 return
 
-            self.progress.emit(f"✅ Found {len(entries)} items from @{creator}")
+            self.progress.emit(f"âœ… Found {len(entries)} items from @{creator}")
             self.progress_percent.emit(60)
 
             # Process results
@@ -3200,24 +4053,24 @@ class LinkGrabberThread(QThread):
                 if date_str != 'Unknown':
                     display_text += f"  ({date_str})"
 
-                self.progress.emit(f"🔗 [{idx}/{total}] {display_text[:100]}...")
+                self.progress.emit(f"ðŸ”— [{idx}/{total}] {display_text[:100]}...")
                 self.link_found.emit(entry['url'], display_text)
 
                 pct = 60 + int((idx / total) * 35)
                 self.progress_percent.emit(min(pct, 95))
 
             if self.is_cancelled:
-                self.finished.emit(False, f"⚠️ Cancelled. Got {len(self.found_links)} links.", self.found_links)
+                self.finished.emit(False, f"âš ï¸ Cancelled. Got {len(self.found_links)} links.", self.found_links)
                 return
 
-            self.progress.emit(f"✅ Success! {len(self.found_links)} links from @{creator}")
-            self.progress.emit("💾 Use 'Save to Folder' in the GUI to export these links.")
+            self.progress.emit(f"âœ… Success! {len(self.found_links)} links from @{creator}")
+            self.progress.emit("ðŸ’¾ Use 'Save to Folder' in the GUI to export these links.")
             self.progress_percent.emit(100)
 
-            self.finished.emit(True, f"✅ {len(self.found_links)} links from @{creator}", self.found_links)
+            self.finished.emit(True, f"âœ… {len(self.found_links)} links from @{creator}", self.found_links)
 
         except Exception as e:
-            error_msg = f"❌ Unexpected error: {str(e)[:200]}"
+            error_msg = f"âŒ Unexpected error: {str(e)[:200]}"
             self.progress.emit(error_msg)
             self.finished.emit(False, error_msg, self.found_links)
 
@@ -3249,7 +4102,7 @@ class BulkLinkGrabberThread(QThread):
         try:
             total_urls = len(self.urls)
             if total_urls == 0:
-                self.finished.emit(False, "❌ No URLs provided", [])
+                self.finished.emit(False, "âŒ No URLs provided", [])
                 return
 
             # Remove duplicate URLs
@@ -3263,9 +4116,9 @@ class BulkLinkGrabberThread(QThread):
 
             duplicates_removed = len(self.urls) - len(unique_urls)
             if duplicates_removed > 0:
-                self.progress.emit(f"🧹 Removed {duplicates_removed} duplicate URLs")
+                self.progress.emit(f"ðŸ§¹ Removed {duplicates_removed} duplicate URLs")
 
-            self.progress.emit(f"🚀 Processing {len(unique_urls)} unique URLs...")
+            self.progress.emit(f"ðŸš€ Processing {len(unique_urls)} unique URLs...")
             self.progress.emit("=" * 60)
 
             self.found_links = []
@@ -3276,7 +4129,7 @@ class BulkLinkGrabberThread(QThread):
                 if self.is_cancelled:
                     break
 
-                self.progress.emit(f"\n📌 [{i}/{len(unique_urls)}] {url[:60]}...")
+                self.progress.emit(f"\nðŸ“Œ [{i}/{len(unique_urls)}] {url[:60]}...")
                 self.progress_percent.emit(int((i / len(unique_urls)) * 30))
 
                 platform_key = _detect_platform_key(url)
@@ -3316,37 +4169,37 @@ class BulkLinkGrabberThread(QThread):
 
                     self.link_found.emit(entry['url'], display_text)
 
-                self.progress.emit(f"✅ [{i}/{len(unique_urls)}] {len(entries)} links from @{creator}")
+                self.progress.emit(f"âœ… [{i}/{len(unique_urls)}] {len(entries)} links from @{creator}")
 
                 pct = 30 + int((i / len(unique_urls)) * 65)
                 self.progress_percent.emit(pct)
 
             if self.is_cancelled:
-                self.finished.emit(False, f"⚠️ Cancelled. {len(self.found_links)} total links.", self.found_links)
+                self.finished.emit(False, f"âš ï¸ Cancelled. {len(self.found_links)} total links.", self.found_links)
                 return
 
             # Final report
             self.progress.emit("\n" + "=" * 60)
-            self.progress.emit("🎉 BULK EXTRACTION COMPLETE!")
+            self.progress.emit("ðŸŽ‰ BULK EXTRACTION COMPLETE!")
             self.progress.emit("=" * 60)
-            self.progress.emit(f"📊 URLs Processed: {len(unique_urls)}")
-            self.progress.emit(f"👥 Creators Found: {len(self.creator_data)}")
-            self.progress.emit(f"🔗 Total Links: {len(self.found_links)}")
+            self.progress.emit(f"ðŸ“Š URLs Processed: {len(unique_urls)}")
+            self.progress.emit(f"ðŸ‘¥ Creators Found: {len(self.creator_data)}")
+            self.progress.emit(f"ðŸ”— Total Links: {len(self.found_links)}")
             if duplicates_removed > 0:
-                self.progress.emit(f"🧹 Duplicates Removed: {duplicates_removed}")
+                self.progress.emit(f"ðŸ§¹ Duplicates Removed: {duplicates_removed}")
 
-            self.progress.emit("\n📁 Creator Folders:")
+            self.progress.emit("\nðŸ“ Creator Folders:")
             for creator_name, data in self.creator_data.items():
-                self.progress.emit(f"  ├── @{creator_name}/ ({len(data['links'])} links)")
+                self.progress.emit(f"  â”œâ”€â”€ @{creator_name}/ ({len(data['links'])} links)")
 
-            self.progress.emit("\n💾 Use 'Save to Folder' to export all creators.")
+            self.progress.emit("\nðŸ’¾ Use 'Save to Folder' to export all creators.")
             self.progress.emit("=" * 60)
 
             self.progress_percent.emit(100)
-            self.finished.emit(True, f"✅ Bulk complete! {len(self.found_links)} links from {len(self.creator_data)} creators.", self.found_links)
+            self.finished.emit(True, f"âœ… Bulk complete! {len(self.found_links)} links from {len(self.creator_data)} creators.", self.found_links)
 
         except Exception as e:
-            error_msg = f"❌ Bulk error: {str(e)[:200]}"
+            error_msg = f"âŒ Bulk error: {str(e)[:200]}"
             self.progress.emit(error_msg)
             self.finished.emit(False, error_msg, self.found_links)
 
@@ -3384,7 +4237,7 @@ class BulkLinkGrabberThread(QThread):
             f.write("=" * 50 + "\n\n")
             
             for creator_name, data in self.creator_data.items():
-                f.write(f"🎯 {creator_name}\n")
+                f.write(f"ðŸŽ¯ {creator_name}\n")
                 f.write(f"   Platform: {data.get('platform', 'unknown')}\n")
                 f.write(f"   Links: {len(data['links'])}\n")
                 f.write(f"   Source URLs: {len(data['source_urls'])}\n")
@@ -3401,11 +4254,11 @@ class BulkLinkGrabberThread(QThread):
     def save_to_file(self):
         """Manual save trigger - creates summary"""
         if not self.creator_data:
-            self.progress.emit("❌ No links to save")
+            self.progress.emit("âŒ No links to save")
             return
 
         summary_path = self._create_summary_file()
-        self.progress.emit(f"📄 Summary created: {summary_path}")
+        self.progress.emit(f"ðŸ“„ Summary created: {summary_path}")
         
         # Emit save signal
         desktop = Path.home() / "Desktop"

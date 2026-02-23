@@ -10,18 +10,23 @@ Layout:
 """
 
 import json
+import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
+from urllib.parse import parse_qs, urlparse
 
-from PyQt5.QtCore import Qt, QFileSystemWatcher, QTimer
+from PyQt5.QtCore import Qt, QEvent, QFileSystemWatcher, QTimer
 from PyQt5.QtGui import QFont, QColor
 from PyQt5.QtWidgets import (
     QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame,
     QGraphicsDropShadowEffect, QGridLayout,
     QHBoxLayout, QHeaderView,
+    QCheckBox, QComboBox, QDoubleSpinBox,
     QLabel, QLineEdit, QMenu, QMessageBox, QPushButton,
     QScrollArea, QSizePolicy,
+    QSpinBox,
     QTableWidget, QTableWidgetItem, QTextEdit,
     QVBoxLayout, QWidget,
 )
@@ -39,8 +44,8 @@ _RED       = "#E74C3C"
 _GOLD      = "#ffd700"
 _WARN      = "#F39C12"
 _BORDER    = "rgba(0,212,255,0.2)"
-_MIN_CARD  = 390     # minimum card width for column calculation
-_MAX_COLS  = 3
+_MIN_CARD  = 260     # minimum card width for column calculation
+_MAX_COLS  = 4
 
 
 def _abtn(text: str, fg: str, bg: str, border: str = None) -> QPushButton:
@@ -118,6 +123,107 @@ def _scan_folders(root: Path) -> List[Path]:
     return results
 
 
+_RESERVED_SEGMENTS = {
+    "reel", "reels", "video", "videos", "featured", "watch", "shorts",
+    "posts", "post", "p", "tv", "stories", "story", "about", "photos",
+    "photo", "live", "clips",
+}
+
+
+def _safe_folder_name(name: str) -> str:
+    cleaned = re.sub(r'[\\/:*?"<>|]+', "_", (name or "").strip())
+    cleaned = cleaned.strip(". ").replace(" ", "_")
+    return cleaned or "creator"
+
+
+def _suggest_folder_name_from_url(url: str) -> str:
+    """Extract a stable folder name from a creator URL (platform aware)."""
+    try:
+        parsed = urlparse((url or "").strip())
+        host = (parsed.netloc or "").lower().replace("www.", "")
+        parts = [p for p in parsed.path.split("/") if p]
+        lower_parts = [p.lower() for p in parts]
+
+        def pick_non_reserved(items: List[str]) -> str:
+            for p in items:
+                if p.lower() not in _RESERVED_SEGMENTS:
+                    return p
+            return ""
+
+        # Common handle format
+        for p in parts:
+            if p.startswith("@") and len(p) > 1:
+                return _safe_folder_name(p[1:])
+
+        if "facebook.com" in host:
+            if lower_parts and lower_parts[0] == "profile.php":
+                q = parse_qs(parsed.query or "")
+                profile_id = (q.get("id") or [""])[0].strip()
+                if profile_id:
+                    return _safe_folder_name(f"fb_{profile_id}")
+            if parts:
+                return _safe_folder_name(pick_non_reserved(parts) or parts[0])
+
+        if "youtube.com" in host or "youtu.be" in host:
+            if len(parts) >= 2 and lower_parts[0] in {"channel", "c", "user"}:
+                return _safe_folder_name(parts[1])
+            if parts:
+                return _safe_folder_name(pick_non_reserved(parts) or parts[-1])
+
+        if "instagram.com" in host and parts:
+            name = pick_non_reserved(parts)
+            if name:
+                return _safe_folder_name(name.lstrip("@"))
+
+        if "tiktok.com" in host and parts:
+            for p in parts:
+                if p.startswith("@") and len(p) > 1:
+                    return _safe_folder_name(p[1:])
+            return _safe_folder_name(pick_non_reserved(parts) or parts[0])
+
+        # Generic fallback
+        if parts:
+            return _safe_folder_name(pick_non_reserved(parts) or parts[-1])
+    except Exception:
+        pass
+    return "creator"
+
+
+def _canonical_creator_key(url: str) -> str:
+    """Canonical key used to identify same creator across custom folder names."""
+    normalized = CreatorConfig._normalize_profile_url(url) or (url or "").strip()
+    try:
+        parsed = urlparse(normalized)
+        host = (parsed.netloc or "").lower().replace("www.", "")
+        path = "/".join([p for p in parsed.path.split("/") if p]).lower()
+        query = parse_qs(parsed.query or "")
+
+        if "profile.php" in path:
+            pid = (query.get("id") or [""])[0].strip()
+            if pid:
+                return f"{host}/profile.php?id={pid.lower()}"
+        return f"{host}/{path}".rstrip("/")
+    except Exception:
+        return normalized.lower().rstrip("/")
+
+
+def _existing_creator_folder_map(root: Path) -> Dict[str, Path]:
+    """Map canonical creator key -> existing folder path from creator_config.json files."""
+    mapping: Dict[str, Path] = {}
+    if not root.exists():
+        return mapping
+    for cfg_file in root.rglob("creator_config.json"):
+        try:
+            with open(cfg_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            key = _canonical_creator_key(data.get("creator_url", ""))
+            if key:
+                mapping[key] = cfg_file.parent
+        except Exception:
+            continue
+    return mapping
+
+
 # ── Single Add Dialog ────────────────────────────────────────────────────────
 
 class AddCreatorDialog(QDialog):
@@ -139,12 +245,13 @@ class AddCreatorDialog(QDialog):
         QPushButton:hover { background:#1c2128; border-color:#00d4ff; }
     """
 
-    def __init__(self, root: Path, parent=None):
+    def __init__(self, root: Path, preset_names: List[str], parent=None):
         super().__init__(parent)
         self.root = root
+        self.preset_names = preset_names
         self.created_folder: Path = None
         self.setWindowTitle("Add Creator")
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(620)
         self.setStyleSheet(self._SS)
         self._build()
 
@@ -170,6 +277,44 @@ class AddCreatorDialog(QDialog):
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("Auto-filled from URL  (edit if needed)")
         form.addRow("Folder Name:", self.name_edit)
+
+        self.n_spin = QSpinBox()
+        self.n_spin.setRange(1, 500)
+        self.n_spin.setValue(5)
+        form.addRow("N Videos:", self.n_spin)
+
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems(["None", "Preset", "Split"])
+        self.mode_combo.currentIndexChanged.connect(self._on_mode_change)
+        form.addRow("Editing Mode:", self.mode_combo)
+
+        self.preset_combo = QComboBox()
+        self.preset_combo.addItems(self.preset_names or ["- no presets -"])
+        form.addRow("Preset:", self.preset_combo)
+
+        self.split_spin = QDoubleSpinBox()
+        self.split_spin.setRange(1.0, 3600.0)
+        self.split_spin.setValue(15.0)
+        self.split_spin.setSuffix(" s")
+        form.addRow("Split Duration:", self.split_spin)
+
+        self.dup_check = QCheckBox("Skip already downloaded")
+        self.dup_check.setChecked(True)
+        form.addRow("Duplication:", self.dup_check)
+
+        self.pop_check = QCheckBox("Use popular fallback")
+        self.pop_check.setChecked(True)
+        form.addRow("Popular Fallback:", self.pop_check)
+
+        self.rand_check = QCheckBox("Randomize links")
+        self.rand_check.setChecked(False)
+        form.addRow("Randomize:", self.rand_check)
+
+        self.keep_original_check = QCheckBox("Keep original video after editing")
+        self.keep_original_check.setChecked(True)
+        form.addRow("Original File:", self.keep_original_check)
+
+        self._on_mode_change()
         v.addLayout(form)
 
         note = QLabel(
@@ -195,12 +340,26 @@ class AddCreatorDialog(QDialog):
         v.addWidget(btns)
 
     def _suggest(self, url: str):
-        import re
-        for pat in [r"@([\w.]+)", r"/([^/?#]+)/?$"]:
-            m = re.search(pat, url.rstrip("/"))
-            if m:
-                self.name_edit.setText(m.group(1))
-                return
+        self.name_edit.setText(_suggest_folder_name_from_url(url))
+
+    def _on_mode_change(self):
+        idx = self.mode_combo.currentIndex()
+        self.preset_combo.setVisible(idx == 1)
+        self.split_spin.setVisible(idx == 2)
+
+    def _collect_settings(self) -> Dict[str, object]:
+        mode = ["none", "preset", "split"][self.mode_combo.currentIndex()]
+        return {
+            "n_videos": self.n_spin.value(),
+            "editing_mode": mode,
+            "preset_name": self.preset_combo.currentText(),
+            "split_duration": self.split_spin.value(),
+            "duplication_control": self.dup_check.isChecked(),
+            "popular_fallback": self.pop_check.isChecked(),
+            "prefer_popular_first": False,
+            "randomize_links": self.rand_check.isChecked(),
+            "keep_original_after_edit": self.keep_original_check.isChecked(),
+        }
 
     def _create(self):
         url  = self.url_edit.text().strip()
@@ -211,11 +370,15 @@ class AddCreatorDialog(QDialog):
         if not name:
             QMessageBox.warning(self, "Required", "Please enter a Folder Name.")
             return
-        folder = self.root / name
+        normalized_url = CreatorConfig._normalize_profile_url(url) or url
+        creator_key = _canonical_creator_key(normalized_url)
+        existing_by_key = _existing_creator_folder_map(self.root)
+        folder = existing_by_key.get(creator_key, self.root / name)
         try:
             folder.mkdir(parents=True, exist_ok=True)
             cfg = CreatorConfig(folder)
-            cfg.data["creator_url"] = url
+            cfg.data["creator_url"] = normalized_url
+            cfg.data.update(self._collect_settings())
             cfg.save()
             self.created_folder = folder
             self.accept()
@@ -236,13 +399,44 @@ class BulkAddDialog(QDialog):
             border:1px solid rgba(0,212,255,0.25);
             border-radius:4px;
         }
-        QHeaderView::section {
-            background:#0a0e1a; color:#00d4ff;
-            border:1px solid rgba(0,212,255,0.2);
-            padding:5px; font-weight:bold;
+        QTableWidget {
+            alternate-background-color: #141b28;
+            gridline-color: rgba(0, 212, 255, 0.20);
         }
-        QTableWidget::item { padding:4px; border: none; }
-        QTableWidget::item:selected { background:rgba(0,212,255,0.15); }
+        QHeaderView::section {
+            background:#0b1323; color:#00d4ff;
+            border:1px solid rgba(0,212,255,0.2);
+            padding:8px 10px; font-weight:bold;
+        }
+        QTableWidget::item { padding:8px 10px; border: none; }
+        QTableWidget::item:selected {
+            background:#0ea5e9;
+            color:#ffffff;
+        }
+        QTableWidget QLineEdit {
+            background:#0a0f18;
+            color:#ffffff;
+            border:1px solid #00d4ff;
+            border-radius:4px;
+            padding:4px 6px;
+            selection-background-color:#0ea5e9;
+            selection-color:#ffffff;
+        }
+        QSpinBox, QDoubleSpinBox, QComboBox {
+            background:#0f1726;
+            color:#ffffff;
+            border:1px solid rgba(0,212,255,0.35);
+            border-radius:4px;
+            padding:6px 8px;
+            min-height: 26px;
+        }
+        QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
+            border:1px solid #00d4ff;
+        }
+        QCheckBox {
+            color:#e8f1ff;
+            spacing:8px;
+        }
         QPushButton {
             background:#161b22; color:white;
             border:1px solid rgba(0,212,255,0.3);
@@ -251,12 +445,13 @@ class BulkAddDialog(QDialog):
         QPushButton:hover { background:#1c2128; border-color:#00d4ff; }
     """
 
-    def __init__(self, root: Path, parent=None):
+    def __init__(self, root: Path, preset_names: List[str], parent=None):
         super().__init__(parent)
         self.root = root
+        self.preset_names = preset_names
         self.created_count = 0
         self.setWindowTitle("Bulk Add Creators")
-        self.setMinimumSize(680, 540)
+        self.setMinimumSize(900, 700)
         self.setStyleSheet(self._SS)
         self._build()
 
@@ -293,21 +488,88 @@ class BulkAddDialog(QDialog):
         parse_btn.clicked.connect(self._parse)
         v.addWidget(parse_btn, alignment=Qt.AlignLeft)
 
-        preview_lbl = QLabel("Preview  (edit Folder Name if needed):")
+        preview_lbl = QLabel("Preview (you can type custom folder name per URL):")
         preview_lbl.setStyleSheet(
             "color:rgba(255,255,255,0.6); font-size:12px; font-weight:bold;"
             " background:transparent; border:none;"
         )
         v.addWidget(preview_lbl)
 
-        self.table = QTableWidget(0, 2)
-        self.table.setHorizontalHeaderLabels(["Creator URL", "Folder Name"])
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        preview_hint = QLabel(
+            "Suggested Name is read-only. Edit only Custom Name column if you want your own folder naming."
+        )
+        preview_hint.setStyleSheet(
+            "color:rgba(255,255,255,0.46); font-size:11px; background:transparent; border:none;"
+        )
+        preview_hint.setWordWrap(True)
+        v.addWidget(preview_hint)
+
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["Creator URL", "Suggested Name", "Custom Name (Optional)"])
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.Fixed)
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
+        header.setMinimumSectionSize(120)
+        self.table.setColumnWidth(1, 200)
         self.table.verticalHeader().setVisible(False)
-        self.table.setEditTriggers(QTableWidget.DoubleClicked | QTableWidget.SelectedClicked)
+        self.table.verticalHeader().setDefaultSectionSize(34)
+        self.table.setEditTriggers(
+            QTableWidget.DoubleClicked
+            | QTableWidget.SelectedClicked
+            | QTableWidget.EditKeyPressed
+            | QTableWidget.AnyKeyPressed
+        )
+        self.table.setWordWrap(False)
+        self.table.setTextElideMode(Qt.ElideMiddle)
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setAlternatingRowColors(True)
         v.addWidget(self.table, 1)
+
+        settings_label = QLabel("Default settings for all creators in this batch:")
+        settings_label.setStyleSheet(
+            "color:rgba(255,255,255,0.6); font-size:12px; font-weight:bold;"
+            " background:transparent; border:none;"
+        )
+        v.addWidget(settings_label)
+
+        self.n_spin = QSpinBox()
+        self.n_spin.setRange(1, 500)
+        self.n_spin.setValue(5)
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems(["None", "Preset", "Split"])
+        self.mode_combo.currentIndexChanged.connect(self._on_mode_change)
+        self.preset_combo = QComboBox()
+        self.preset_combo.addItems(self.preset_names or ["- no presets -"])
+        self.split_spin = QDoubleSpinBox()
+        self.split_spin.setRange(1.0, 3600.0)
+        self.split_spin.setValue(15.0)
+        self.split_spin.setSuffix(" s")
+        self.dup_check = QCheckBox("Skip already downloaded")
+        self.dup_check.setChecked(True)
+        self.pop_check = QCheckBox("Use popular fallback")
+        self.pop_check.setChecked(True)
+        self.rand_check = QCheckBox("Randomize links")
+        self.rand_check.setChecked(False)
+        self.keep_original_check = QCheckBox("Keep original video after editing")
+        self.keep_original_check.setChecked(True)
+
+        settings_form = QFormLayout()
+        settings_form.setSpacing(8)
+        settings_form.setHorizontalSpacing(20)
+        settings_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        settings_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        settings_form.addRow("N Videos:", self.n_spin)
+        settings_form.addRow("Editing Mode:", self.mode_combo)
+        settings_form.addRow("Preset:", self.preset_combo)
+        settings_form.addRow("Split Duration:", self.split_spin)
+        settings_form.addRow("Duplication:", self.dup_check)
+        settings_form.addRow("Popular Fallback:", self.pop_check)
+        settings_form.addRow("Randomize:", self.rand_check)
+        settings_form.addRow("Original File:", self.keep_original_check)
+        v.addLayout(settings_form)
+        self._on_mode_change()
 
         # Buttons
         btn_row = QHBoxLayout()
@@ -329,9 +591,17 @@ class BulkAddDialog(QDialog):
         v.addLayout(btn_row)
 
     def _parse(self):
-        import re
         text = self.url_box.toPlainText()
-        urls = [l.strip() for l in text.splitlines() if l.strip().startswith("http")]
+        raw_urls = [l.strip() for l in text.splitlines() if l.strip().startswith("http")]
+        urls = []
+        seen_keys = set()
+        for u in raw_urls:
+            key = _canonical_creator_key(u)
+            if key and key in seen_keys:
+                continue
+            if key:
+                seen_keys.add(key)
+            urls.append(u)
         self.table.setRowCount(0)
         for url in urls:
             row = self.table.rowCount()
@@ -340,33 +610,78 @@ class BulkAddDialog(QDialog):
             url_item.setFlags(url_item.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(row, 0, url_item)
 
-            # Suggest folder name
-            name = ""
-            for pat in [r"@([\w.]+)", r"/([^/?#]+)/?$"]:
-                m = re.search(pat, url.rstrip("/"))
-                if m:
-                    name = m.group(1)
-                    break
-            self.table.setItem(row, 1, QTableWidgetItem(name or "creator"))
+            suggested = _suggest_folder_name_from_url(url)
+            suggested_item = QTableWidgetItem(suggested)
+            suggested_item.setFlags(suggested_item.flags() & ~Qt.ItemIsEditable)
+            self.table.setItem(row, 1, suggested_item)
+            custom_item = QTableWidgetItem(suggested)
+            self.table.setItem(row, 2, custom_item)
+
+    def _on_mode_change(self):
+        idx = self.mode_combo.currentIndex()
+        self.preset_combo.setVisible(idx == 1)
+        self.split_spin.setVisible(idx == 2)
+
+    def _collect_settings(self) -> Dict[str, object]:
+        mode = ["none", "preset", "split"][self.mode_combo.currentIndex()]
+        return {
+            "n_videos": self.n_spin.value(),
+            "editing_mode": mode,
+            "preset_name": self.preset_combo.currentText(),
+            "split_duration": self.split_spin.value(),
+            "duplication_control": self.dup_check.isChecked(),
+            "popular_fallback": self.pop_check.isChecked(),
+            "prefer_popular_first": False,
+            "randomize_links": self.rand_check.isChecked(),
+            "keep_original_after_edit": self.keep_original_check.isChecked(),
+        }
 
     def _create_all(self):
         count = 0
+        merged_count = 0
+        existing_by_key = _existing_creator_folder_map(self.root)
+        created_by_key: Dict[str, Path] = {}
         for row in range(self.table.rowCount()):
             url  = self.table.item(row, 0).text().strip()
-            name = (self.table.item(row, 1).text() or "").strip()
+            suggested_name = (self.table.item(row, 1).text() or "").strip()
+            custom_item = self.table.item(row, 2)
+            custom_name = (custom_item.text() if custom_item else "").strip()
+            name = _safe_folder_name(custom_name or suggested_name)
             if not url or not name:
                 continue
-            folder = self.root / name
+            normalized_url = CreatorConfig._normalize_profile_url(url) or url
+            creator_key = _canonical_creator_key(normalized_url)
+
+            # Resolve folder: same creator key must map to one folder only.
+            if creator_key in created_by_key:
+                folder = created_by_key[creator_key]
+                merged_count += 1
+            elif creator_key in existing_by_key:
+                folder = existing_by_key[creator_key]
+                merged_count += 1
+                created_by_key[creator_key] = folder
+            else:
+                folder = self.root / name
+                created_by_key[creator_key] = folder
+
             try:
                 folder.mkdir(parents=True, exist_ok=True)
                 cfg = CreatorConfig(folder)
-                cfg.data["creator_url"] = url
+                cfg.data["creator_url"] = normalized_url
+                cfg.data.update(self._collect_settings())
                 cfg.save()
                 count += 1
             except Exception:
                 pass
         self.created_count = count
         if count:
+            if merged_count > 0:
+                QMessageBox.information(
+                    self,
+                    "Duplicate Creators Merged",
+                    f"{merged_count} duplicate row(s) matched an existing creator URL,\n"
+                    "so settings were updated in the same creator folder instead of creating new folders.",
+                )
             self.accept()
         else:
             QMessageBox.warning(self, "Nothing Created",
@@ -388,7 +703,7 @@ class CreatorProfilesPage(QWidget):
         self._cols        = 2
         self._col_timer   = QTimer(self)
         self._col_timer.setSingleShot(True)
-        self._col_timer.setInterval(100)
+        self._col_timer.setInterval(50)
         self._col_timer.timeout.connect(self._update_cols)
         self._daily_guard_timer = QTimer(self)
         self._daily_guard_timer.timeout.connect(self._daily_guard_cycle)
@@ -534,6 +849,7 @@ class CreatorProfilesPage(QWidget):
 
         self.cards_w = QWidget()
         self.cards_w.setStyleSheet("background:transparent;")
+        self.cards_w.setMinimumWidth(0)
         self.cards_grid = QGridLayout(self.cards_w)
         self.cards_grid.setSpacing(12)
         self.cards_grid.setContentsMargins(0, 0, 0, 0)
@@ -542,6 +858,8 @@ class CreatorProfilesPage(QWidget):
         sv.addStretch()
 
         self.scroll.setWidget(self.scroll_content)
+        # Fire column recalc whenever the scroll viewport itself resizes
+        self.scroll.viewport().installEventFilter(self)
         outer.addWidget(self.scroll, 1)
 
         # ── Empty state ───────────────────────────────────────────────────
@@ -613,10 +931,13 @@ class CreatorProfilesPage(QWidget):
 
     def _rebuild_grid(self):
         """Clear and re-populate the QGridLayout with current column count."""
-        # Remove all widgets from layout (don't delete them)
         while self.cards_grid.count():
             self.cards_grid.takeAt(0)
-        # Re-insert
+        # Reset all column stretches, then apply equal stretch for active cols
+        for c in range(_MAX_COLS):
+            self.cards_grid.setColumnStretch(c, 0)
+        for c in range(self._cols):
+            self.cards_grid.setColumnStretch(c, 1)
         for i, (fp, card) in enumerate(self.cards.items()):
             r, c = divmod(i, self._cols)
             self.cards_grid.addWidget(card, r, c)
@@ -626,7 +947,33 @@ class CreatorProfilesPage(QWidget):
         self.scroll.setVisible(not empty)
 
     def _on_remove_card(self, folder: Path):
+        folder = Path(folder)
+
+        # Safety: only allow deletion inside configured Links Grabber root.
+        try:
+            root_resolved = self.root.resolve()
+            folder_resolved = folder.resolve()
+            folder_resolved.relative_to(root_resolved)
+            can_delete = True
+        except Exception:
+            can_delete = False
+
+        if can_delete and folder.exists():
+            try:
+                shutil.rmtree(folder)
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "Delete Failed",
+                    f"Could not delete folder:\n{folder}\n\nReason: {e}",
+                )
+                return
+
         if folder in self.cards:
+            try:
+                self.watcher.removePath(str(folder))
+            except Exception:
+                pass
             card = self.cards.pop(folder)
             card.stop_worker()
             card.deleteLater()
@@ -635,13 +982,26 @@ class CreatorProfilesPage(QWidget):
 
     # ── responsive columns ────────────────────────────────────────────────
 
+    def eventFilter(self, watched, event):
+        """Catch viewport resize to immediately retrigger column recalc."""
+        if watched is self.scroll.viewport() and event.type() == QEvent.Resize:
+            self._col_timer.start()
+        return super().eventFilter(watched, event)
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._col_timer.start()
 
     def _update_cols(self):
-        vp_w = self.scroll.viewport().width() if self.scroll.isVisible() else self.width()
-        new_cols = max(1, min(_MAX_COLS, vp_w // _MIN_CARD))
+        if self.scroll.isVisible():
+            vp_w = self.scroll.viewport().width()
+        else:
+            vp_w = self.width()
+        # Subtract scroll content right margin (4px) to get true available width
+        avail = max(1, vp_w - 4)
+        new_cols = max(1, min(_MAX_COLS, avail // _MIN_CARD))
+        # Always enforce max width to prevent horizontal overflow
+        self.cards_w.setMaximumWidth(avail)
         if new_cols != self._cols:
             self._cols = new_cols
             self._rebuild_grid()
@@ -650,13 +1010,13 @@ class CreatorProfilesPage(QWidget):
 
     def _on_add_single(self):
         self.root.mkdir(parents=True, exist_ok=True)
-        dlg = AddCreatorDialog(self.root, self)
+        dlg = AddCreatorDialog(self.root, self.presets, self)
         if dlg.exec_() and dlg.created_folder:
             self._refresh_cards()
 
     def _on_add_bulk(self):
         self.root.mkdir(parents=True, exist_ok=True)
-        dlg = BulkAddDialog(self.root, self)
+        dlg = BulkAddDialog(self.root, self.presets, self)
         if dlg.exec_() and dlg.created_count:
             self._refresh_cards()
             QMessageBox.information(
@@ -766,6 +1126,7 @@ class CreatorProfilesPage(QWidget):
                 "popular_fallback":    cfg.popular_fallback,
                 "prefer_popular_first": cfg.prefer_popular_first,
                 "randomize_links":     cfg.randomize_links,
+                "keep_original_after_edit": cfg.keep_original_after_edit,
             })
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
@@ -792,7 +1153,8 @@ class CreatorProfilesPage(QWidget):
                 cfg = CreatorConfig(folder)
                 for key in ("creator_url", "n_videos", "editing_mode",
                             "preset_name", "split_duration", "duplication_control",
-                            "popular_fallback", "prefer_popular_first", "randomize_links"):
+                            "popular_fallback", "prefer_popular_first", "randomize_links",
+                            "keep_original_after_edit"):
                     if key in entry:
                         cfg.data[key] = entry[key]
                 cfg.save()

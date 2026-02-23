@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional
+from urllib.parse import parse_qs, urlparse
 
 _DEFAULTS = {
     "creator_url": "",
@@ -19,6 +20,7 @@ _DEFAULTS = {
     "popular_fallback": True,
     "prefer_popular_first": False,
     "randomize_links": False,
+    "keep_original_after_edit": True,
     "downloaded_ids": [],
     "last_activity": {
         "date": None,
@@ -26,6 +28,12 @@ _DEFAULTS = {
         "tier_used": None,
         "videos_downloaded": 0,
     },
+}
+
+_RESERVED_PROFILE_SEGMENTS = {
+    "reel", "reels", "video", "videos", "featured", "watch", "shorts",
+    "posts", "post", "p", "tv", "stories", "story", "about", "photos",
+    "photo", "live", "clips",
 }
 
 
@@ -129,7 +137,51 @@ class CreatorConfig:
             return ""
         if not url.startswith(("http://", "https://")):
             return ""
-        return url.rstrip("/")
+        try:
+            parsed = urlparse(url)
+            host = (parsed.netloc or "").lower().replace("www.", "")
+            parts = [p for p in parsed.path.split("/") if p]
+            lower_parts = [p.lower() for p in parts]
+
+            if not host:
+                return url.rstrip("/")
+
+            if "instagram.com" in host:
+                if parts:
+                    user = parts[0]
+                    if user.lower() not in _RESERVED_PROFILE_SEGMENTS:
+                        return f"https://www.instagram.com/{user}"
+                return f"https://www.instagram.com/"
+
+            if "facebook.com" in host or host == "fb.com":
+                if lower_parts and lower_parts[0] == "profile.php":
+                    q = parse_qs(parsed.query or "")
+                    pid = (q.get("id") or [""])[0].strip()
+                    if pid:
+                        return f"https://www.facebook.com/profile.php?id={pid}"
+                if parts:
+                    first = parts[0]
+                    if first.lower() not in _RESERVED_PROFILE_SEGMENTS:
+                        return f"https://www.facebook.com/{first}"
+                return "https://www.facebook.com/"
+
+            if "youtube.com" in host or "youtu.be" in host:
+                if parts:
+                    if parts[0].startswith("@"):
+                        return f"https://www.youtube.com/{parts[0]}"
+                    if len(parts) >= 2 and lower_parts[0] in {"channel", "c", "user"}:
+                        return f"https://www.youtube.com/{parts[0]}/{parts[1]}"
+                return url.rstrip("/")
+
+            if "tiktok.com" in host:
+                for p in parts:
+                    if p.startswith("@") and len(p) > 1:
+                        return f"https://www.tiktok.com/{p}"
+                return url.rstrip("/")
+
+            return url.rstrip("/")
+        except Exception:
+            return url.rstrip("/")
 
     @staticmethod
     def _extract_profile_from_video_url(url: str) -> str:
@@ -237,7 +289,7 @@ class CreatorConfig:
 
     @property
     def editing_mode(self) -> str:
-        return self.data.get("editing_mode", "none")
+        return str(self.data.get("editing_mode", "none")).strip().lower()
 
     @property
     def preset_name(self) -> str:
@@ -262,6 +314,10 @@ class CreatorConfig:
     @property
     def randomize_links(self) -> bool:
         return bool(self.data.get("randomize_links", False))
+
+    @property
+    def keep_original_after_edit(self) -> bool:
+        return bool(self.data.get("keep_original_after_edit", True))
 
     @property
     def last_activity(self) -> dict:

@@ -3,11 +3,13 @@ modules/creator_profiles/creator_card.py
 Creator card widget for Downloading+Editing page.
 """
 
+import os
+import re
 from datetime import datetime
 from pathlib import Path
 
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QFont, QPixmap
 from PyQt5.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
@@ -35,6 +37,8 @@ _RED = "#E74C3C"
 _WARN = "#F39C12"
 _BORDER = "rgba(0,212,255,0.2)"
 _BORDER_HI = "rgba(0,212,255,0.5)"
+_CARD_BORDER = "#0B4355"    # default card border — white
+_CARD_BORDER_HI = "#F1CE04"                # hover card border  — yellow/gold
 
 
 def _input_ss() -> str:
@@ -72,10 +76,54 @@ def card_btn(text: str, color: str, width: int = 0) -> QPushButton:
 def _lbl(text: str, size: int = 12, alpha: float = 0.6) -> QLabel:
     l = QLabel(text)
     l.setStyleSheet(
-        f"color:rgba(255,255,255,{alpha}); font-size:{size}px;"
-        " background:transparent; border:none;"
+        f"color:white; font-size:{size}px;"
+        " font-weight:bold; background:transparent; border:none;"
     )
     return l
+
+
+# ── Platform icon assets ──────────────────────────────────────────────────────
+_ASSET_DIR = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                 "..", "..", "gui-redesign", "assets")
+)
+
+# PNG filename per platform keyword
+_ICON_PNG = {
+    "youtube":   "youtubeicon.png",
+    "youtu.be":  "youtubeicon.png",
+    "tiktok":    "tiktokicon.png",
+    "instagram": "instagrameicon.png",
+    "facebook":  "facebookicon.png",
+    "fb.com":    "facebookicon.png",
+}
+
+# Text fallback (char, color) for platforms without PNG
+_ICON_FALLBACK = {
+    "twitter": ("⊛", "#1DA1F2"),
+    "x.com":   ("⊛", "#1DA1F2"),
+    "twitch":  ("◈", "#9146FF"),
+}
+
+
+_GENERIC_NAME_SEGMENTS = {
+    "reel", "reels", "video", "videos", "featured", "watch", "shorts",
+    "posts", "post", "p", "tv", "stories", "story", "about", "photos",
+    "photo", "live", "clips",
+}
+
+
+def _extract_creator_name(url: str) -> str:
+    """Extract short @handle or last-path-segment from a creator URL."""
+    if not url:
+        return ""
+    m = re.search(r"@([\w.]+)", url)
+    if m:
+        return f"@{m.group(1)}"
+    m = re.search(r"/([^/?#]+)/?$", url.rstrip("/"))
+    if m:
+        return m.group(1)
+    return url
 
 
 def _div() -> QFrame:
@@ -113,7 +161,7 @@ class CreatorCard(QFrame):
 
     def _style(self, hovered: bool):
         bg = _BG_HOVER if hovered else _BG_CARD
-        border = _BORDER_HI if hovered else _BORDER
+        border = _CARD_BORDER_HI if hovered else _CARD_BORDER
         self.setStyleSheet(
             f"""
             QFrame#creatorCard {{
@@ -132,43 +180,59 @@ class CreatorCard(QFrame):
 
     def _build(self):
         v = QVBoxLayout(self)
-        v.setContentsMargins(16, 13, 16, 13)
-        v.setSpacing(9)
+        v.setContentsMargins(11, 7, 11, 7)
+        v.setSpacing(6)
 
+        # ── Header: platform icon + creator name (H1 style) + status dot ──
         hrow = QHBoxLayout()
-        ico = QLabel("📁")
-        ico.setFont(QFont("Segoe UI", 13))
-        ico.setStyleSheet("background:transparent; border:none;")
-        hrow.addWidget(ico)
+        hrow.setSpacing(6)
+
+        self.platform_lbl = QLabel("◈")
+        self.platform_lbl.setFixedWidth(22)
+        self.platform_lbl.setAlignment(Qt.AlignCenter)
+        self.platform_lbl.setStyleSheet(
+            f"color:{_CYAN}; font-size:15px; font-weight:bold; background:transparent; border:none;"
+        )
+        hrow.addWidget(self.platform_lbl)
 
         self.title_lbl = QLabel("")
-        self.title_lbl.setFont(QFont("Segoe UI", 11, QFont.Bold))
-        self.title_lbl.setStyleSheet(f"color:{_CYAN}; background:transparent; border:none;")
-        self.title_lbl.setWordWrap(True)
+        _f = QFont("Segoe UI", 13)
+        _f.setWeight(80)
+        self.title_lbl.setFont(_f)
+        self.title_lbl.setStyleSheet("color:#1ABC9C; background:transparent; border:none;")
+        self.title_lbl.setWordWrap(False)
         hrow.addWidget(self.title_lbl, 1)
 
         self.dot = QLabel("●")
-        self.dot.setStyleSheet(f"color:{self._DOT['idle']}; font-size:13px; background:transparent; border:none;")
+        self.dot.setStyleSheet(
+            f"color:{self._DOT['idle']}; font-size:13px; background:transparent; border:none;"
+        )
         hrow.addWidget(self.dot)
         v.addLayout(hrow)
 
+        # ── Path + compact flags info ──
         self.path_lbl = QLabel(str(self.folder))
         self.path_lbl.setStyleSheet(
-            "color:rgba(255,255,255,0.22); font-size:10px; background:transparent; border:none;"
+            "color:white; font-size:10px; background:transparent; border:none;"
         )
         self.path_lbl.setWordWrap(True)
+        v.addSpacing(2)
         v.addWidget(self.path_lbl)
 
         self.flags_lbl = QLabel("")
         self.flags_lbl.setStyleSheet(
-            "color:rgba(255,255,255,0.52); font-size:10px; background:transparent; border:none;"
+            "color:white; font-size:10px; font-weight:bold; background:transparent; border:none;"
         )
+        v.addSpacing(2)
         v.addWidget(self.flags_lbl)
         v.addWidget(_div())
 
+        # ── Grid: Videos + Editing Mode (Flags row removed) ──
         g = QGridLayout()
-        g.setSpacing(7)
+        g.setHorizontalSpacing(8)
+        g.setVerticalSpacing(6)
         g.setColumnStretch(1, 1)
+        g.setColumnMinimumWidth(0, 120)
 
         g.addWidget(_lbl("Videos to Download:"), 0, 0)
         self.n_spin = QSpinBox()
@@ -181,10 +245,11 @@ class CreatorCard(QFrame):
         g.addWidget(_lbl("Editing Mode:"), 1, 0)
         edit_row = QHBoxLayout()
         edit_row.setSpacing(6)
+        edit_row.setContentsMargins(0, 0, 0, 0)
 
         self.mode_cb = QComboBox()
         self.mode_cb.addItems(["None", "Preset", "Split"])
-        self.mode_cb.setFixedWidth(84)
+        self.mode_cb.setFixedWidth(72)
         self.mode_cb.setStyleSheet(_input_ss())
         self.mode_cb.currentIndexChanged.connect(self._on_mode)
         edit_row.addWidget(self.mode_cb)
@@ -209,8 +274,13 @@ class CreatorCard(QFrame):
         ew.setLayout(edit_row)
         g.addWidget(ew, 1, 1)
 
+        v.addLayout(g)
+
+        # ── Toggle buttons — left-aligned, no "Flags:" label ──
         toggles = QHBoxLayout()
         toggles.setSpacing(6)
+        toggles.setContentsMargins(0, 2, 0, 0)
+
         self.dup_btn = card_btn("Skip Seen", "green")
         self.dup_btn.setCheckable(True)
         self.dup_btn.clicked.connect(self._on_toggle_changed)
@@ -227,32 +297,26 @@ class CreatorCard(QFrame):
         toggles.addWidget(self.rand_btn)
         toggles.addStretch()
 
-        tw = QWidget()
-        tw.setStyleSheet("background:transparent; border:none;")
-        tw.setLayout(toggles)
-        g.addWidget(_lbl("Flags:"), 2, 0)
-        g.addWidget(tw, 2, 1)
-
-        v.addLayout(g)
+        v.addLayout(toggles)
         v.addWidget(_div())
 
+        # ── Last Activity — single wrappable label ──
         act_hdr = QLabel("Last Activity")
         act_hdr.setStyleSheet(
-            "color:rgba(255,255,255,0.5); font-size:11px; font-weight:bold; background:transparent; border:none;"
+            "color:white; font-size:11px; font-weight:bold; background:transparent; border:none;"
         )
         v.addWidget(act_hdr)
 
-        act_row = QHBoxLayout()
-        act_row.setSpacing(14)
-        self.act_date = _lbl("Date: -", 11, 0.38)
-        self.act_result = _lbl("Result: -", 11, 0.38)
-        self.act_tier = _lbl("Tier: -", 11, 0.38)
-        for l in (self.act_date, self.act_result, self.act_tier):
-            act_row.addWidget(l)
-        act_row.addStretch()
-        v.addLayout(act_row)
+        self.act_info_lbl = QLabel("<b>Date:</b> -  |  <b>Result:</b> -  |  <b>Tier:</b> -")
+        self.act_info_lbl.setStyleSheet(
+            "color:white; font-size:11px; font-weight:bold; background:transparent; border:none;"
+        )
+        self.act_info_lbl.setTextFormat(Qt.RichText)
+        self.act_info_lbl.setWordWrap(True)
+        v.addWidget(self.act_info_lbl)
         v.addWidget(_div())
 
+        # ── Action row: Run / Edit / Remove + status ──
         ar = QHBoxLayout()
         ar.setSpacing(7)
         self.run_btn = card_btn("▶ Run", "green")
@@ -270,7 +334,7 @@ class CreatorCard(QFrame):
 
         self.status_lbl = QLabel("Waiting...")
         self.status_lbl.setStyleSheet(
-            "color:rgba(255,255,255,0.32); font-size:11px; background:transparent; border:none;"
+            "color:white; font-size:11px; background:transparent; border:none;"
         )
         self.status_lbl.setWordWrap(True)
         self.status_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -279,7 +343,46 @@ class CreatorCard(QFrame):
 
     def _refresh_header(self):
         creator_url = (self.config.creator_url or "").strip()
-        self.title_lbl.setText(creator_url if creator_url else f"{self.folder.name} (URL missing)")
+        folder_name = self.folder.name.strip()
+        if creator_url:
+            extracted = (_extract_creator_name(creator_url) or "").lstrip("@").strip().lower()
+            if not extracted or extracted in _GENERIC_NAME_SEGMENTS:
+                name = folder_name
+            else:
+                name = folder_name
+            u = creator_url.lower()
+            # Try PNG icon first
+            png_fname = next((v for k, v in _ICON_PNG.items() if k in u), None)
+            if png_fname:
+                icon_path = os.path.join(_ASSET_DIR, png_fname)
+                if os.path.exists(icon_path):
+                    pm = QPixmap(icon_path).scaled(
+                        18, 18, Qt.KeepAspectRatio, Qt.SmoothTransformation
+                    )
+                    self.platform_lbl.clear()
+                    self.platform_lbl.setPixmap(pm)
+                else:
+                    char, color = next((v for k, v in _ICON_FALLBACK.items() if k in u), ("◈", "#00d4ff"))
+                    self.platform_lbl.clear()
+                    self.platform_lbl.setText(char)
+                    self.platform_lbl.setStyleSheet(
+                        f"color:{color}; font-size:15px; font-weight:bold; background:transparent; border:none;"
+                    )
+            else:
+                char, color = next((v for k, v in _ICON_FALLBACK.items() if k in u), ("◈", "#00d4ff"))
+                self.platform_lbl.clear()
+                self.platform_lbl.setText(char)
+                self.platform_lbl.setStyleSheet(
+                    f"color:{color}; font-size:15px; font-weight:bold; background:transparent; border:none;"
+                )
+        else:
+            name = folder_name
+            self.platform_lbl.clear()
+            self.platform_lbl.setText("◈")
+            self.platform_lbl.setStyleSheet(
+                "color:rgba(255,255,255,0.4); font-size:15px; font-weight:bold; background:transparent; border:none;"
+            )
+        self.title_lbl.setText(name)
         flags = []
         flags.append(f"✂ {self.split_sp.value():.1f}s")
         flags.append(f"👤 Max: {self.n_spin.value()}")
@@ -288,20 +391,46 @@ class CreatorCard(QFrame):
             flags.append("Pop")
         if self.rand_btn.isChecked():
             flags.append("Rand")
+        flags.append("Orig:K" if self.config.keep_original_after_edit else "Orig:D")
         self.flags_lbl.setText(" | ".join(flags))
+        self.flags_lbl.setToolTip(
+            "Orig:K = Keep original after editing\n"
+            "Orig:D = Delete original after editing"
+        )
 
     def _load_values(self):
         c = self.config
         c.ensure_creator_url()
-        self.n_spin.setValue(c.n_videos)
-        self.split_sp.setValue(c.split_duration)
-        self.mode_cb.setCurrentIndex({"none": 0, "preset": 1, "split": 2}.get(c.editing_mode, 0))
-        if c.preset_name and c.preset_name in self.preset_names:
-            self.preset_cb.setCurrentText(c.preset_name)
+        mode_value = str(c.editing_mode).strip().lower()
+        mode_map = {"none": 0, "preset": 1, "split": 2, "0": 0, "1": 1, "2": 2}
+        mode_index = mode_map.get(mode_value, 0)
 
-        self.dup_btn.setChecked(c.duplication_control)
-        self.pop_btn.setChecked(c.popular_fallback)
-        self.rand_btn.setChecked(c.randomize_links)
+        # Prevent accidental autosave/overwrite while loading values into UI.
+        widgets_to_block = [
+            self.n_spin,
+            self.split_sp,
+            self.mode_cb,
+            self.preset_cb,
+            self.dup_btn,
+            self.pop_btn,
+            self.rand_btn,
+        ]
+        for w in widgets_to_block:
+            w.blockSignals(True)
+        try:
+            self.n_spin.setValue(c.n_videos)
+            self.split_sp.setValue(c.split_duration)
+            self.mode_cb.setCurrentIndex(mode_index)
+            if c.preset_name and c.preset_name in self.preset_names:
+                self.preset_cb.setCurrentText(c.preset_name)
+
+            self.dup_btn.setChecked(c.duplication_control)
+            self.pop_btn.setChecked(c.popular_fallback)
+            self.rand_btn.setChecked(c.randomize_links)
+        finally:
+            for w in widgets_to_block:
+                w.blockSignals(False)
+
         self._refresh_toggle_styles()
         self._update_edit_vis()
         self._refresh_header()
@@ -419,6 +548,7 @@ class CreatorCard(QFrame):
     def _refresh_activity(self):
         a = self.config.last_activity
         if not a or not a.get("date"):
+            self.act_info_lbl.setText("<b>Date:</b> -  |  <b>Result:</b> -  |  <b>Tier:</b> -")
             return
         try:
             dt = datetime.fromisoformat(a["date"])
@@ -427,9 +557,10 @@ class CreatorCard(QFrame):
             ds = str(a.get("date", "-"))
         res = a.get("result", "-") or "-"
         icon = {"success": "✓", "failed": "✗", "partial": "!"}.get(res, "")
-        self.act_date.setText(f"Date: {ds}")
-        self.act_result.setText(f"Result: {icon} {res.capitalize()}")
-        self.act_tier.setText(f"Tier: {a.get('tier_used') or '-'}")
+        tier = a.get("tier_used") or "-"
+        self.act_info_lbl.setText(
+            f"<b>Date:</b> {ds}  |  <b>Result:</b> {icon} {res.capitalize()}  |  <b>Tier:</b> {tier}"
+        )
 
     def _on_edit(self):
         from .edit_dialog import EditCreatorDialog
@@ -444,7 +575,8 @@ class CreatorCard(QFrame):
         r = QMessageBox.question(
             self,
             "Remove Creator",
-            f"Remove '{self.folder.name}' from list?\nFolder will not be deleted.",
+            f"Delete '{self.folder.name}' permanently?\n\n"
+            "This will remove the card and delete the creator folder from disk.",
             QMessageBox.Yes | QMessageBox.No,
         )
         if r == QMessageBox.Yes:

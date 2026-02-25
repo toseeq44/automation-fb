@@ -25,7 +25,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout, QHeaderView,
     QCheckBox, QComboBox, QDoubleSpinBox,
     QLabel, QLineEdit, QMenu, QMessageBox, QPushButton,
-    QScrollArea, QSizePolicy,
+    QScrollArea, QSizePolicy, QSlider,
     QSpinBox,
     QTableWidget, QTableWidgetItem, QTextEdit,
     QVBoxLayout, QWidget,
@@ -231,12 +231,28 @@ class AddCreatorDialog(QDialog):
     _SS = """
         QDialog  { background:#0d1117; color:white; }
         QLabel   { color:rgba(255,255,255,0.82); background:transparent; border:none; }
-        QLineEdit {
+        QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
             background:#161b22; color:white;
             border:1px solid rgba(0,212,255,0.28);
-            border-radius:4px; padding:7px;
+            border-radius:4px; padding:6px;
         }
-        QLineEdit:focus { border-color:#00d4ff; }
+        QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
+            border-color:#00d4ff;
+        }
+        QComboBox::drop-down { border:none; }
+        QComboBox QAbstractItemView {
+            background:#161b22; color:white; border:1px solid #00d4ff;
+            selection-background-color:rgba(0,212,255,0.2);
+        }
+        QCheckBox { color:#e8f1ff; spacing:8px; }
+        QSlider::groove:horizontal {
+            background:rgba(0,212,255,0.15); height:4px; border-radius:2px;
+        }
+        QSlider::handle:horizontal {
+            background:#00d4ff; width:14px; height:14px;
+            margin:-5px 0; border-radius:7px;
+        }
+        QSlider::sub-page:horizontal { background:rgba(0,212,255,0.5); border-radius:2px; }
         QPushButton {
             background:#161b22; color:white;
             border:1px solid rgba(0,212,255,0.3);
@@ -252,12 +268,33 @@ class AddCreatorDialog(QDialog):
         self.created_folder: Path = None
         self.setWindowTitle("Add Creator")
         self.setMinimumWidth(620)
+        self.resize(640, 700)
         self.setStyleSheet(self._SS)
         self._build()
 
     def _build(self):
-        v = QVBoxLayout(self)
-        v.setContentsMargins(24, 22, 24, 20)
+        # ── Outer layout: scroll + fixed buttons ──────────────────────────
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 12)
+        outer.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(scroll.NoFrame)
+        scroll.setStyleSheet(
+            "QScrollArea { background:#0d1117; border:none; }"
+            "QScrollBar:vertical { background:#0d1117; width:8px; border-radius:4px; }"
+            "QScrollBar::handle:vertical { background:rgba(0,212,255,0.3); border-radius:4px; min-height:20px; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0px; }"
+        )
+        outer.addWidget(scroll, 1)
+
+        container = QWidget()
+        container.setStyleSheet("background:#0d1117;")
+        scroll.setWidget(container)
+
+        v = QVBoxLayout(container)
+        v.setContentsMargins(24, 22, 24, 12)
         v.setSpacing(14)
 
         t = QLabel("➕  Single Creator")
@@ -317,13 +354,139 @@ class AddCreatorDialog(QDialog):
         self._on_mode_change()
         v.addLayout(form)
 
+        # ── WaterMark Section ──────────────────────────────────────────────
+        wm_div = QFrame()
+        wm_div.setFrameShape(QFrame.HLine)
+        wm_div.setStyleSheet("background:rgba(0,212,255,0.15); border:none; max-height:1px;")
+        v.addWidget(wm_div)
+
+        wm_title = QLabel("💧  WaterMark Settings")
+        wm_title.setFont(QFont("Segoe UI", 12, QFont.Bold))
+        wm_title.setStyleSheet(f"color:{_CYAN}; background:transparent; border:none;")
+        v.addWidget(wm_title)
+
+        wm_form = QFormLayout()
+        wm_form.setSpacing(9)
+        wm_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        # Global enable
+        wm_en_row = QHBoxLayout()
+        self.wm_enable_btn = QPushButton("OFF")
+        self.wm_enable_btn.setCheckable(True)
+        self.wm_enable_btn.setFixedWidth(68)
+        self.wm_enable_btn.clicked.connect(lambda: self._toggle_style(self.wm_enable_btn))
+        wm_en_row.addWidget(self.wm_enable_btn); wm_en_row.addStretch()
+        wm_en_w = QWidget(); wm_en_w.setStyleSheet("background:transparent; border:none;"); wm_en_w.setLayout(wm_en_row)
+        wm_form.addRow("WaterMark:", wm_en_w)
+
+        # Text watermark header
+        txt_hdr = QLabel("  Text Watermark")
+        txt_hdr.setStyleSheet("color:#aaa; font-size:11px; font-weight:bold; background:transparent; border:none;")
+        wm_form.addRow(txt_hdr)
+
+        txt_en_row = QHBoxLayout()
+        self.wm_txt_enable_btn = QPushButton("OFF")
+        self.wm_txt_enable_btn.setCheckable(True)
+        self.wm_txt_enable_btn.setFixedWidth(68)
+        self.wm_txt_enable_btn.clicked.connect(lambda: self._toggle_style(self.wm_txt_enable_btn))
+        txt_en_row.addWidget(self.wm_txt_enable_btn); txt_en_row.addStretch()
+        txt_en_w = QWidget(); txt_en_w.setStyleSheet("background:transparent; border:none;"); txt_en_w.setLayout(txt_en_row)
+        wm_form.addRow("  Enable Text:", txt_en_w)
+
+        self.wm_text_edit = QLineEdit()
+        self.wm_text_edit.setPlaceholderText("Leave blank to use @folderName")
+        wm_form.addRow("  Text:", self.wm_text_edit)
+
+        self.wm_txt_pos_cb = QComboBox()
+        self.wm_txt_pos_cb.addItems(["TopLeft", "TopRight", "BottomLeft", "BottomRight", "Center", "AnimateAround"])
+        self.wm_txt_pos_cb.setCurrentText("BottomRight")
+        self.wm_txt_pos_cb.setFixedWidth(150)
+        wm_form.addRow("  Position:", self.wm_txt_pos_cb)
+
+        self.wm_txt_opacity_sl = QSlider(Qt.Horizontal)
+        self.wm_txt_opacity_sl.setRange(0, 100); self.wm_txt_opacity_sl.setValue(80)
+        self.wm_txt_opacity_lbl = QLabel("80%")
+        self.wm_txt_opacity_lbl.setStyleSheet("color:white; background:transparent; border:none; min-width:32px;")
+        self.wm_txt_opacity_sl.valueChanged.connect(lambda v: self.wm_txt_opacity_lbl.setText(f"{v}%"))
+        op_row = QHBoxLayout(); op_row.addWidget(self.wm_txt_opacity_sl); op_row.addWidget(self.wm_txt_opacity_lbl)
+        op_w = QWidget(); op_w.setStyleSheet("background:transparent; border:none;"); op_w.setLayout(op_row)
+        wm_form.addRow("  Opacity:", op_w)
+
+        self.wm_txt_font_edit = QLineEdit()
+        self.wm_txt_font_edit.setPlaceholderText("Arial"); self.wm_txt_font_edit.setFixedWidth(130)
+        wm_form.addRow("  Font Family:", self.wm_txt_font_edit)
+
+        self.wm_txt_color_edit = QLineEdit()
+        self.wm_txt_color_edit.setPlaceholderText("#FFFFFF"); self.wm_txt_color_edit.setFixedWidth(90)
+        wm_form.addRow("  Font Color:", self.wm_txt_color_edit)
+
+        self.wm_txt_size_sp = QSpinBox()
+        self.wm_txt_size_sp.setRange(8, 200); self.wm_txt_size_sp.setValue(24); self.wm_txt_size_sp.setFixedWidth(75)
+        wm_form.addRow("  Font Size:", self.wm_txt_size_sp)
+
+        self.wm_txt_weight_cb = QComboBox()
+        self.wm_txt_weight_cb.addItems(["normal", "bold"]); self.wm_txt_weight_cb.setCurrentText("bold")
+        self.wm_txt_weight_cb.setFixedWidth(95)
+        wm_form.addRow("  Font Weight:", self.wm_txt_weight_cb)
+
+        self.wm_txt_style_cb = QComboBox()
+        self.wm_txt_style_cb.addItems(["normal", "italic"]); self.wm_txt_style_cb.setFixedWidth(95)
+        wm_form.addRow("  Font Style:", self.wm_txt_style_cb)
+
+        self.wm_txt_spacing_sp = QSpinBox()
+        self.wm_txt_spacing_sp.setRange(0, 50); self.wm_txt_spacing_sp.setValue(0); self.wm_txt_spacing_sp.setFixedWidth(75)
+        wm_form.addRow("  Letter Spacing:", self.wm_txt_spacing_sp)
+
+        # Logo watermark header
+        logo_hdr = QLabel("  Logo Watermark")
+        logo_hdr.setStyleSheet("color:#aaa; font-size:11px; font-weight:bold; background:transparent; border:none;")
+        wm_form.addRow(logo_hdr)
+
+        logo_en_row = QHBoxLayout()
+        self.wm_logo_enable_btn = QPushButton("OFF")
+        self.wm_logo_enable_btn.setCheckable(True)
+        self.wm_logo_enable_btn.setFixedWidth(68)
+        self.wm_logo_enable_btn.clicked.connect(lambda: self._toggle_style(self.wm_logo_enable_btn))
+        logo_en_row.addWidget(self.wm_logo_enable_btn); logo_en_row.addStretch()
+        logo_en_w = QWidget(); logo_en_w.setStyleSheet("background:transparent; border:none;"); logo_en_w.setLayout(logo_en_row)
+        wm_form.addRow("  Enable Logo:", logo_en_w)
+
+        logo_path_row = QHBoxLayout()
+        self.wm_logo_path_edit = QLineEdit()
+        self.wm_logo_path_edit.setPlaceholderText("Leave blank to auto-detect logo.* in folder")
+        logo_browse_btn = QPushButton("Browse")
+        logo_browse_btn.setFixedWidth(68)
+        logo_browse_btn.clicked.connect(self._browse_logo)
+        logo_path_row.addWidget(self.wm_logo_path_edit); logo_path_row.addWidget(logo_browse_btn)
+        logo_path_w = QWidget(); logo_path_w.setStyleSheet("background:transparent; border:none;"); logo_path_w.setLayout(logo_path_row)
+        wm_form.addRow("  Logo Path:", logo_path_w)
+
+        self.wm_logo_pos_cb = QComboBox()
+        self.wm_logo_pos_cb.addItems(["TopLeft", "TopRight", "BottomLeft", "BottomRight", "Center", "AnimateAround"])
+        self.wm_logo_pos_cb.setFixedWidth(150)
+        wm_form.addRow("  Position:", self.wm_logo_pos_cb)
+
+        self.wm_logo_opacity_sl = QSlider(Qt.Horizontal)
+        self.wm_logo_opacity_sl.setRange(0, 100); self.wm_logo_opacity_sl.setValue(80)
+        self.wm_logo_opacity_lbl = QLabel("80%")
+        self.wm_logo_opacity_lbl.setStyleSheet("color:white; background:transparent; border:none; min-width:32px;")
+        self.wm_logo_opacity_sl.valueChanged.connect(lambda v: self.wm_logo_opacity_lbl.setText(f"{v}%"))
+        lop_row = QHBoxLayout(); lop_row.addWidget(self.wm_logo_opacity_sl); lop_row.addWidget(self.wm_logo_opacity_lbl)
+        lop_w = QWidget(); lop_w.setStyleSheet("background:transparent; border:none;"); lop_w.setLayout(lop_row)
+        wm_form.addRow("  Opacity:", lop_w)
+
+        v.addLayout(wm_form)
+        v.addStretch(1)
+
+        # ── Fixed buttons outside scroll ───────────────────────────────────
         note = QLabel(
             "Folder created at:  Desktop / Links Grabber / <name>\n"
-            "Then click ✏ Edit on the card to configure settings."
+            "Then click ✏ Edit on the card to reconfigure settings."
         )
         note.setStyleSheet("color:rgba(255,255,255,0.35); font-size:11px;"
                            " background:transparent; border:none;")
-        v.addWidget(note)
+        note.setContentsMargins(24, 4, 24, 0)
+        outer.addWidget(note)
 
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btns.button(QDialogButtonBox.Ok).setText("Create")
@@ -337,7 +500,10 @@ class AddCreatorDialog(QDialog):
         )
         btns.accepted.connect(self._create)
         btns.rejected.connect(self.reject)
-        v.addWidget(btns)
+        btn_w = QWidget(); btn_w.setStyleSheet("background:#0d1117; border:none;")
+        btn_layout = QHBoxLayout(btn_w); btn_layout.setContentsMargins(24, 6, 24, 0)
+        btn_layout.addWidget(btns)
+        outer.addWidget(btn_w)
 
     def _suggest(self, url: str):
         self.name_edit.setText(_suggest_folder_name_from_url(url))
@@ -346,6 +512,28 @@ class AddCreatorDialog(QDialog):
         idx = self.mode_combo.currentIndex()
         self.preset_combo.setVisible(idx == 1)
         self.split_spin.setVisible(idx == 2)
+
+    @staticmethod
+    def _toggle_style(btn: QPushButton):
+        on = btn.isChecked()
+        btn.setText("ON" if on else "OFF")
+        btn.setStyleSheet(
+            ("QPushButton { background:#1a5c1a; color:white; font-weight:bold;"
+             " border-radius:4px; padding:4px 12px; border:none; }"
+             "QPushButton:hover { background:#236e23; }")
+            if on else
+            ("QPushButton { background:#2a2a2a; color:#777; font-weight:bold;"
+             " border-radius:4px; padding:4px 12px; border:none; }"
+             "QPushButton:hover { background:#333; }")
+        )
+
+    def _browse_logo(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Logo File", "",
+            "Image Files (*.png *.jpg *.jpeg *.webp *.bmp *.svg *.gif);;All Files (*)"
+        )
+        if path:
+            self.wm_logo_path_edit.setText(path)
 
     def _collect_settings(self) -> Dict[str, object]:
         mode = ["none", "preset", "split"][self.mode_combo.currentIndex()]
@@ -359,6 +547,25 @@ class AddCreatorDialog(QDialog):
             "prefer_popular_first": False,
             "randomize_links": self.rand_check.isChecked(),
             "keep_original_after_edit": self.keep_original_check.isChecked(),
+            "watermark_enabled": self.wm_enable_btn.isChecked(),
+            "watermark_text": {
+                "enabled":        self.wm_txt_enable_btn.isChecked(),
+                "text":           self.wm_text_edit.text().strip(),
+                "position":       self.wm_txt_pos_cb.currentText(),
+                "opacity":        self.wm_txt_opacity_sl.value(),
+                "font_family":    self.wm_txt_font_edit.text().strip() or "Arial",
+                "font_color":     self.wm_txt_color_edit.text().strip() or "#FFFFFF",
+                "font_size":      self.wm_txt_size_sp.value(),
+                "font_weight":    self.wm_txt_weight_cb.currentText(),
+                "font_style":     self.wm_txt_style_cb.currentText(),
+                "letter_spacing": self.wm_txt_spacing_sp.value(),
+            },
+            "watermark_logo": {
+                "enabled":  self.wm_logo_enable_btn.isChecked(),
+                "path":     self.wm_logo_path_edit.text().strip(),
+                "position": self.wm_logo_pos_cb.currentText(),
+                "opacity":  self.wm_logo_opacity_sl.value(),
+            },
         }
 
     def _create(self):
@@ -437,6 +644,14 @@ class BulkAddDialog(QDialog):
             color:#e8f1ff;
             spacing:8px;
         }
+        QSlider::groove:horizontal {
+            background:rgba(0,212,255,0.15); height:4px; border-radius:2px;
+        }
+        QSlider::handle:horizontal {
+            background:#00d4ff; width:14px; height:14px;
+            margin:-5px 0; border-radius:7px;
+        }
+        QSlider::sub-page:horizontal { background:rgba(0,212,255,0.5); border-radius:2px; }
         QPushButton {
             background:#161b22; color:white;
             border:1px solid rgba(0,212,255,0.3);
@@ -571,6 +786,125 @@ class BulkAddDialog(QDialog):
         v.addLayout(settings_form)
         self._on_mode_change()
 
+        # ── WaterMark Section ──────────────────────────────────────────────
+        wm_div = QFrame()
+        wm_div.setFrameShape(QFrame.HLine)
+        wm_div.setStyleSheet("background:rgba(0,212,255,0.15); border:none; max-height:1px;")
+        v.addWidget(wm_div)
+
+        wm_title = QLabel("💧  WaterMark Settings  (applied to all creators in this batch)")
+        wm_title.setStyleSheet(f"color:{_CYAN}; font-size:12px; font-weight:bold; background:transparent; border:none;")
+        v.addWidget(wm_title)
+
+        wm_form = QFormLayout()
+        wm_form.setSpacing(8)
+        wm_form.setHorizontalSpacing(20)
+        wm_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        # Global watermark enable
+        bwm_en_row = QHBoxLayout()
+        self.wm_enable_btn = QPushButton("OFF")
+        self.wm_enable_btn.setCheckable(True); self.wm_enable_btn.setFixedWidth(65)
+        self.wm_enable_btn.clicked.connect(lambda: self._toggle_style(self.wm_enable_btn))
+        bwm_en_row.addWidget(self.wm_enable_btn); bwm_en_row.addStretch()
+        bwm_en_w = QWidget(); bwm_en_w.setStyleSheet("background:transparent; border:none;"); bwm_en_w.setLayout(bwm_en_row)
+        wm_form.addRow("WaterMark:", bwm_en_w)
+
+        # Text watermark
+        txt_hdr = QLabel("  Text Watermark")
+        txt_hdr.setStyleSheet("color:#aaa; font-size:11px; font-weight:bold; background:transparent; border:none;")
+        wm_form.addRow(txt_hdr)
+
+        txt_en_row = QHBoxLayout()
+        self.wm_txt_enable_btn = QPushButton("OFF")
+        self.wm_txt_enable_btn.setCheckable(True); self.wm_txt_enable_btn.setFixedWidth(65)
+        self.wm_txt_enable_btn.clicked.connect(lambda: self._toggle_style(self.wm_txt_enable_btn))
+        txt_en_row.addWidget(self.wm_txt_enable_btn); txt_en_row.addStretch()
+        txt_en_w = QWidget(); txt_en_w.setStyleSheet("background:transparent; border:none;"); txt_en_w.setLayout(txt_en_row)
+        wm_form.addRow("  Enable Text:", txt_en_w)
+
+        self.wm_text_edit = QLineEdit()
+        self.wm_text_edit.setPlaceholderText("Leave blank to use @folderName")
+        wm_form.addRow("  Text:", self.wm_text_edit)
+
+        self.wm_txt_pos_cb = QComboBox()
+        self.wm_txt_pos_cb.addItems(["TopLeft", "TopRight", "BottomLeft", "BottomRight", "Center", "AnimateAround"])
+        self.wm_txt_pos_cb.setCurrentText("BottomRight"); self.wm_txt_pos_cb.setFixedWidth(150)
+        wm_form.addRow("  Position:", self.wm_txt_pos_cb)
+
+        self.wm_txt_opacity_sl = QSlider(Qt.Horizontal)
+        self.wm_txt_opacity_sl.setRange(0, 100); self.wm_txt_opacity_sl.setValue(80)
+        self.wm_txt_opacity_lbl = QLabel("80%")
+        self.wm_txt_opacity_lbl.setStyleSheet("color:white; background:transparent; border:none; min-width:32px;")
+        self.wm_txt_opacity_sl.valueChanged.connect(lambda v: self.wm_txt_opacity_lbl.setText(f"{v}%"))
+        op_row = QHBoxLayout(); op_row.addWidget(self.wm_txt_opacity_sl); op_row.addWidget(self.wm_txt_opacity_lbl)
+        op_w = QWidget(); op_w.setStyleSheet("background:transparent; border:none;"); op_w.setLayout(op_row)
+        wm_form.addRow("  Opacity:", op_w)
+
+        self.wm_txt_font_edit = QLineEdit()
+        self.wm_txt_font_edit.setPlaceholderText("Arial"); self.wm_txt_font_edit.setFixedWidth(130)
+        wm_form.addRow("  Font Family:", self.wm_txt_font_edit)
+
+        self.wm_txt_color_edit = QLineEdit()
+        self.wm_txt_color_edit.setPlaceholderText("#FFFFFF"); self.wm_txt_color_edit.setFixedWidth(90)
+        wm_form.addRow("  Font Color:", self.wm_txt_color_edit)
+
+        self.wm_txt_size_sp = QSpinBox()
+        self.wm_txt_size_sp.setRange(8, 200); self.wm_txt_size_sp.setValue(24); self.wm_txt_size_sp.setFixedWidth(75)
+        wm_form.addRow("  Font Size:", self.wm_txt_size_sp)
+
+        self.wm_txt_weight_cb = QComboBox()
+        self.wm_txt_weight_cb.addItems(["normal", "bold"]); self.wm_txt_weight_cb.setCurrentText("bold")
+        self.wm_txt_weight_cb.setFixedWidth(95)
+        wm_form.addRow("  Font Weight:", self.wm_txt_weight_cb)
+
+        self.wm_txt_style_cb = QComboBox()
+        self.wm_txt_style_cb.addItems(["normal", "italic"]); self.wm_txt_style_cb.setFixedWidth(95)
+        wm_form.addRow("  Font Style:", self.wm_txt_style_cb)
+
+        self.wm_txt_spacing_sp = QSpinBox()
+        self.wm_txt_spacing_sp.setRange(0, 50); self.wm_txt_spacing_sp.setValue(0); self.wm_txt_spacing_sp.setFixedWidth(75)
+        wm_form.addRow("  Letter Spacing:", self.wm_txt_spacing_sp)
+
+        # Logo watermark
+        logo_hdr = QLabel("  Logo Watermark")
+        logo_hdr.setStyleSheet("color:#aaa; font-size:11px; font-weight:bold; background:transparent; border:none;")
+        wm_form.addRow(logo_hdr)
+
+        logo_en_row = QHBoxLayout()
+        self.wm_logo_enable_btn = QPushButton("OFF")
+        self.wm_logo_enable_btn.setCheckable(True); self.wm_logo_enable_btn.setFixedWidth(65)
+        self.wm_logo_enable_btn.clicked.connect(lambda: self._toggle_style(self.wm_logo_enable_btn))
+        logo_en_row.addWidget(self.wm_logo_enable_btn); logo_en_row.addStretch()
+        logo_en_w = QWidget(); logo_en_w.setStyleSheet("background:transparent; border:none;"); logo_en_w.setLayout(logo_en_row)
+        wm_form.addRow("  Enable Logo:", logo_en_w)
+
+        logo_path_row = QHBoxLayout()
+        self.wm_logo_path_edit = QLineEdit()
+        self.wm_logo_path_edit.setPlaceholderText("Leave blank to auto-detect logo.* in folder")
+        logo_browse_btn = QPushButton("Browse")
+        logo_browse_btn.setFixedWidth(65)
+        logo_browse_btn.clicked.connect(self._browse_logo)
+        logo_path_row.addWidget(self.wm_logo_path_edit); logo_path_row.addWidget(logo_browse_btn)
+        logo_path_w = QWidget(); logo_path_w.setStyleSheet("background:transparent; border:none;"); logo_path_w.setLayout(logo_path_row)
+        wm_form.addRow("  Logo Path:", logo_path_w)
+
+        self.wm_logo_pos_cb = QComboBox()
+        self.wm_logo_pos_cb.addItems(["TopLeft", "TopRight", "BottomLeft", "BottomRight", "Center", "AnimateAround"])
+        self.wm_logo_pos_cb.setFixedWidth(150)
+        wm_form.addRow("  Position:", self.wm_logo_pos_cb)
+
+        self.wm_logo_opacity_sl = QSlider(Qt.Horizontal)
+        self.wm_logo_opacity_sl.setRange(0, 100); self.wm_logo_opacity_sl.setValue(80)
+        self.wm_logo_opacity_lbl = QLabel("80%")
+        self.wm_logo_opacity_lbl.setStyleSheet("color:white; background:transparent; border:none; min-width:32px;")
+        self.wm_logo_opacity_sl.valueChanged.connect(lambda v: self.wm_logo_opacity_lbl.setText(f"{v}%"))
+        lop_row = QHBoxLayout(); lop_row.addWidget(self.wm_logo_opacity_sl); lop_row.addWidget(self.wm_logo_opacity_lbl)
+        lop_w = QWidget(); lop_w.setStyleSheet("background:transparent; border:none;"); lop_w.setLayout(lop_row)
+        wm_form.addRow("  Opacity:", lop_w)
+
+        v.addLayout(wm_form)
+
         # Buttons
         btn_row = QHBoxLayout()
         create_btn = QPushButton("✅  Create All")
@@ -622,6 +956,28 @@ class BulkAddDialog(QDialog):
         self.preset_combo.setVisible(idx == 1)
         self.split_spin.setVisible(idx == 2)
 
+    @staticmethod
+    def _toggle_style(btn: QPushButton):
+        on = btn.isChecked()
+        btn.setText("ON" if on else "OFF")
+        btn.setStyleSheet(
+            ("QPushButton { background:#1a5c1a; color:white; font-weight:bold;"
+             " border-radius:4px; padding:4px 12px; border:none; }"
+             "QPushButton:hover { background:#236e23; }")
+            if on else
+            ("QPushButton { background:#2a2a2a; color:#777; font-weight:bold;"
+             " border-radius:4px; padding:4px 12px; border:none; }"
+             "QPushButton:hover { background:#333; }")
+        )
+
+    def _browse_logo(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Logo File", "",
+            "Image Files (*.png *.jpg *.jpeg *.webp *.bmp *.svg *.gif);;All Files (*)"
+        )
+        if path:
+            self.wm_logo_path_edit.setText(path)
+
     def _collect_settings(self) -> Dict[str, object]:
         mode = ["none", "preset", "split"][self.mode_combo.currentIndex()]
         return {
@@ -634,6 +990,25 @@ class BulkAddDialog(QDialog):
             "prefer_popular_first": False,
             "randomize_links": self.rand_check.isChecked(),
             "keep_original_after_edit": self.keep_original_check.isChecked(),
+            "watermark_enabled": self.wm_enable_btn.isChecked(),
+            "watermark_text": {
+                "enabled":        self.wm_txt_enable_btn.isChecked(),
+                "text":           self.wm_text_edit.text().strip(),
+                "position":       self.wm_txt_pos_cb.currentText(),
+                "opacity":        self.wm_txt_opacity_sl.value(),
+                "font_family":    self.wm_txt_font_edit.text().strip() or "Arial",
+                "font_color":     self.wm_txt_color_edit.text().strip() or "#FFFFFF",
+                "font_size":      self.wm_txt_size_sp.value(),
+                "font_weight":    self.wm_txt_weight_cb.currentText(),
+                "font_style":     self.wm_txt_style_cb.currentText(),
+                "letter_spacing": self.wm_txt_spacing_sp.value(),
+            },
+            "watermark_logo": {
+                "enabled":  self.wm_logo_enable_btn.isChecked(),
+                "path":     self.wm_logo_path_edit.text().strip(),
+                "position": self.wm_logo_pos_cb.currentText(),
+                "opacity":  self.wm_logo_opacity_sl.value(),
+            },
         }
 
     def _create_all(self):

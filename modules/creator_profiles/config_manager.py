@@ -10,6 +10,26 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 from urllib.parse import parse_qs, urlparse
 
+_WATERMARK_TEXT_DEFAULTS = {
+    "enabled": False,
+    "text": "",                   # empty = use @folderName
+    "position": "BottomRight",    # TopLeft|TopRight|BottomLeft|BottomRight|Center|AnimateAround
+    "opacity": 80,
+    "font_family": "Arial",
+    "font_color": "#FFFFFF",
+    "font_size": 24,
+    "font_weight": "bold",
+    "font_style": "normal",
+    "letter_spacing": 0,
+}
+
+_WATERMARK_LOGO_DEFAULTS = {
+    "enabled": False,
+    "path": "",                   # empty = auto-detect logo.* in creator folder
+    "position": "TopLeft",
+    "opacity": 80,
+}
+
 _DEFAULTS = {
     "creator_url": "",
     "n_videos": 5,
@@ -21,6 +41,9 @@ _DEFAULTS = {
     "prefer_popular_first": False,
     "randomize_links": False,
     "keep_original_after_edit": True,
+    "watermark_enabled": False,
+    "watermark_text": _WATERMARK_TEXT_DEFAULTS.copy(),
+    "watermark_logo": _WATERMARK_LOGO_DEFAULTS.copy(),
     "downloaded_ids": [],
     "last_activity": {
         "date": None,
@@ -67,6 +90,13 @@ class CreatorConfig:
                     merged["last_activity"] = _DEFAULTS["last_activity"].copy()
                 if not isinstance(merged.get("downloaded_ids"), list):
                     merged["downloaded_ids"] = []
+                # Ensure watermark nested dicts have all keys
+                wm_text = _WATERMARK_TEXT_DEFAULTS.copy()
+                wm_text.update(merged.get("watermark_text") or {})
+                merged["watermark_text"] = wm_text
+                wm_logo = _WATERMARK_LOGO_DEFAULTS.copy()
+                wm_logo.update(merged.get("watermark_logo") or {})
+                merged["watermark_logo"] = wm_logo
                 return merged
             except Exception:
                 pass
@@ -322,3 +352,21 @@ class CreatorConfig:
     @property
     def last_activity(self) -> dict:
         return self.data.get("last_activity", {})
+
+    @property
+    def watermark_enabled(self) -> bool:
+        return bool(self.data.get("watermark_enabled", False))
+
+    @property
+    def watermark_text(self) -> dict:
+        wm = self.data.get("watermark_text") or {}
+        defaults = _WATERMARK_TEXT_DEFAULTS.copy()
+        defaults.update(wm)
+        return defaults
+
+    @property
+    def watermark_logo(self) -> dict:
+        wm = self.data.get("watermark_logo") or {}
+        defaults = _WATERMARK_LOGO_DEFAULTS.copy()
+        defaults.update(wm)
+        return defaults

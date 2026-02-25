@@ -26,7 +26,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .config_manager import CreatorConfig
-from .download_engine import CreatorDownloadWorker, has_links_in_creator_folder
+from .download_engine import CreatorDownloadWorker
 
 _BG_CARD = "#161b22"
 _BG_HOVER = "#1c2128"
@@ -295,6 +295,11 @@ class CreatorCard(QFrame):
         self.rand_btn.setCheckable(True)
         self.rand_btn.clicked.connect(self._on_toggle_changed)
         toggles.addWidget(self.rand_btn)
+
+        self.wm_btn = card_btn("WaterMark", "cyan")
+        self.wm_btn.setCheckable(True)
+        self.wm_btn.clicked.connect(self._on_toggle_changed)
+        toggles.addWidget(self.wm_btn)
         toggles.addStretch()
 
         v.addLayout(toggles)
@@ -414,6 +419,7 @@ class CreatorCard(QFrame):
             self.dup_btn,
             self.pop_btn,
             self.rand_btn,
+            self.wm_btn,
         ]
         for w in widgets_to_block:
             w.blockSignals(True)
@@ -427,6 +433,7 @@ class CreatorCard(QFrame):
             self.dup_btn.setChecked(c.duplication_control)
             self.pop_btn.setChecked(c.popular_fallback)
             self.rand_btn.setChecked(c.randomize_links)
+            self.wm_btn.setChecked(c.watermark_enabled)
         finally:
             for w in widgets_to_block:
                 w.blockSignals(False)
@@ -440,6 +447,7 @@ class CreatorCard(QFrame):
             (self.dup_btn, "#1a5c1a", "#222"),
             (self.pop_btn, "#6a4a0a", "#222"),
             (self.rand_btn, "#0a3f4b", "#222"),
+            (self.wm_btn,  "#1a3a5c", "#222"),
         ):
             if btn.isChecked():
                 btn.setStyleSheet(
@@ -464,6 +472,7 @@ class CreatorCard(QFrame):
                 "popular_fallback": self.pop_btn.isChecked(),
                 "prefer_popular_first": False,
                 "randomize_links": self.rand_btn.isChecked(),
+                "watermark_enabled": self.wm_btn.isChecked(),
             }
         )
         self.config.save()
@@ -502,23 +511,17 @@ class CreatorCard(QFrame):
             self._set_state("idle", "Stopping...")
             return
 
-        # Strict behavior requested:
-        # 1) If links file exists in creator folder -> use local links mode only.
-        # 2) If links file missing -> show simple error.
-        use_local_links = has_links_in_creator_folder(self.folder)
-        if use_local_links:
-            url = ""
-        else:
-            url = (self.config.creator_url or "").strip()
-            if not url:
-                inferred = self.config.ensure_creator_url()
-                if inferred:
-                    self.config = CreatorConfig(self.folder)
-                    self._refresh_header()
-                    url = inferred
-            if not url:
-                self._set_state("error", "No links file found in this folder.")
-                return
+        # Always use creator URL — never fall back to links files
+        url = (self.config.creator_url or "").strip()
+        if not url:
+            inferred = self.config.ensure_creator_url()
+            if inferred:
+                self.config = CreatorConfig(self.folder)
+                self._refresh_header()
+                url = inferred
+        if not url:
+            self._set_state("error", "No creator URL set. Use Edit to add the profile URL.")
+            return
 
         self._auto_save()
         self._set_state("running", "Starting...")

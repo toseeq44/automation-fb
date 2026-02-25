@@ -66,6 +66,13 @@ class MethodLearningSystem:
 
         return self.cache[creator_key].get('best_method')
 
+    def get_best_tab(self, creator: str, platform: str) -> Optional[str]:
+        """Get best-performing content tab for a creator/platform."""
+        creator_key = self._make_creator_key(creator, platform)
+        if creator_key not in self.cache:
+            return None
+        return self.cache[creator_key].get('best_tab')
+
     def get_method_order(self, creator: str, platform: str) -> List[str]:
         """
         Get methods ordered by performance for this creator.
@@ -124,10 +131,12 @@ class MethodLearningSystem:
                 'creator': creator,
                 'platform': platform,
                 'best_method': None,
+                'best_tab': None,
                 'total_extractions': 0,
                 'first_seen': datetime.now().isoformat(),
                 'last_extraction': None,
-                'performance_history': {}
+                'performance_history': {},
+                'tab_history': {},
             }
 
         # Update extraction count and timestamp
@@ -176,6 +185,62 @@ class MethodLearningSystem:
         self._update_best_method(creator_key)
 
         # Save cache
+        self.save_cache()
+
+    def record_best_tab(self, creator: str, platform: str, tab: str, available_tabs: List[str]):
+        """Record which content tab worked best for a creator."""
+        creator_key = self._make_creator_key(creator, platform)
+        tab_value = (tab or "").strip().lower()
+        if not tab_value:
+            return
+
+        if creator_key not in self.cache:
+            self.cache[creator_key] = {
+                'creator': creator,
+                'platform': platform,
+                'best_method': None,
+                'best_tab': None,
+                'total_extractions': 0,
+                'first_seen': datetime.now().isoformat(),
+                'last_extraction': datetime.now().isoformat(),
+                'performance_history': {},
+                'tab_history': {},
+            }
+
+        creator_entry = self.cache[creator_key]
+        tab_history = creator_entry.setdefault('tab_history', {})
+
+        for tab_name in available_tabs or []:
+            normalized = str(tab_name).strip().lower()
+            if not normalized:
+                continue
+            tab_history.setdefault(
+                normalized,
+                {
+                    'success_count': 0,
+                    'last_success': None,
+                },
+            )
+
+        tab_stats = tab_history.setdefault(
+            tab_value,
+            {
+                'success_count': 0,
+                'last_success': None,
+            },
+        )
+        tab_stats['success_count'] += 1
+        tab_stats['last_success'] = datetime.now().isoformat()
+
+        best_tab = tab_value
+        best_score = tab_stats['success_count']
+        for tab_name, stats in tab_history.items():
+            score = int(stats.get('success_count', 0) or 0)
+            if score > best_score:
+                best_score = score
+                best_tab = tab_name
+
+        creator_entry['best_tab'] = best_tab
         self.save_cache()
 
     def _calculate_score(self, stats: Dict) -> float:

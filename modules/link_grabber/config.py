@@ -132,6 +132,22 @@ YTDLP_CONFIG = {
 }
 
 # ============================================================================
+# TAB DETECTION (YouTube channel tab priority + staleness threshold)
+# ============================================================================
+
+# Ordered preference: first tab name found in detect_available_tabs() result wins.
+PLATFORM_TAB_PRIORITY: dict = {
+    'youtube':   ['videos', 'shorts', 'streams', 'live', 'playlists'],
+    'instagram': ['reels', 'posts', 'igtv', 'tagged'],
+    'facebook':  ['videos', 'reels'],
+    'tiktok':    ['videos'],
+    'twitter':   ['media', 'tweets'],
+}
+
+# How many days before a cached tab list is considered stale and re-probed.
+TABS_MAX_AGE_DAYS: int = 14
+
+# ============================================================================
 # METHOD PRIORITY (Intelligence System Default)
 # ============================================================================
 
@@ -172,9 +188,72 @@ INSTAGRAM_CONFIG = {
 # ============================================================================
 
 EXTRACTION_CONFIG = {
-    # When True, try all methods and merge results instead of stopping on first success.
-    'exhaustive_mode_default': True,
+    # When False (default), stop as soon as one method returns links.
+    # Set True only for debugging / when you need maximum link coverage.
+    'exhaustive_mode_default': False,
 }
+
+# ============================================================================
+# CHROMIUM BROWSER AUTH CONFIGURATION
+# ============================================================================
+
+BROWSER_AUTH_CONFIG = {
+    'profile_dir_name': 'browser_profile',   # Inside data_files/
+    'headless_during_grab': True,            # Silent mode by default
+    'viewport_width': 1920,
+    'viewport_height': 1080,
+    'locale': 'en-US',
+    'timezone': 'America/New_York',
+    'stealth_mode': True,                    # Hide automation detection
+    'scroll_delay_min': 1.5,                 # Seconds between scrolls
+    'scroll_delay_max': 3.0,
+    'max_scroll_attempts': 100,              # Max scrolls per page
+    'stagnant_limit': 5,                     # Stop after N scrolls with no new links
+}
+
+# ============================================================================
+# CONTENT FILTER RULES
+# ============================================================================
+
+CONTENT_FILTER_RULES = {
+    'youtube': {
+        'include_patterns': ['/watch?v=', '/shorts/'],
+        'exclude_patterns': ['/playlist?list=', '/community/', '/about'],
+        'grab_tabs': ['videos', 'shorts'],  # Grab BOTH tabs
+    },
+    'tiktok': {
+        'include_patterns': ['/video/'],
+        'exclude_patterns': [],
+        'grab_tabs': [],  # Main profile only
+    },
+    'instagram': {
+        'include_patterns': ['/reel/'],
+        'exclude_patterns': ['/p/', '/tv/', '/stories/'],
+        'grab_tabs': ['reels'],  # ONLY reels tab
+    },
+    'twitter': {
+        'include_patterns': ['/status/'],
+        'exclude_patterns': ['/i/', '/home', '/explore'],
+        'grab_tabs': ['media'],  # Media tab, then filter for video
+        'require_video_element': True,  # Only tweets with video
+    },
+    'facebook': {
+        'include_patterns': ['/reel/', '/videos/', '/watch/', '/share/v/'],
+        'exclude_patterns': ['/photos/', '/posts/', '/about/'],
+        'grab_tabs': ['videos', 'reels'],  # Both video tabs
+    },
+}
+
+# ============================================================================
+# EXTRACTION PRIORITY (NEW)
+# ============================================================================
+
+EXTRACTION_PRIORITY = [
+    'chromium_browser',      # Layer 1: Playwright Chromium with saved profile
+    'library_with_cookies',  # Layer 2: yt-dlp/Instaloader + extracted cookies
+    'library_no_auth',       # Layer 3: Library without auth (YouTube)
+    'notify_relogin',        # Layer FAIL: Ask user to re-login
+]
 
 # ============================================================================
 # HELPER FUNCTIONS

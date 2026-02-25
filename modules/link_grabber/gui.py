@@ -10,9 +10,9 @@ GUI for the link grabber using PyQt5.
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QProgressBar, QTextEdit, QSpinBox, QMessageBox, QListWidget, QMenu, QAction, QCheckBox,
-    QGroupBox, QComboBox, QFileDialog
+    QGroupBox, QFileDialog
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QObject, pyqtSignal, QThread
 from pathlib import Path
 import pyperclip
 import shutil
@@ -28,6 +28,66 @@ from .core import (
     _save_links_to_file
 )
 from .cookie_validator import EnhancedCookieValidator, validate_cookie_file
+
+class _AutoDetectWorker(QThread):
+    """QThread for auto-detecting cookies (thread-safe GUI updates via signals)."""
+    log_msg   = pyqtSignal(str)    # log line to append
+    status_ok  = pyqtSignal(str)   # green status text
+    status_err = pyqtSignal(str)   # red status text
+    finished_signal = pyqtSignal() # re-enable button
+
+    def __init__(self, cookies_dir: Path):
+        super().__init__()
+        self.cookies_dir = cookies_dir
+
+    def run(self):
+        from modules.shared.browser_extractor import extract_all_platforms_to_master
+        try:
+            save_path = self.cookies_dir / "chrome_cookies.txt"
+            success = extract_all_platforms_to_master(
+                save_path=save_path,
+                cb=lambda msg: self.log_msg.emit(msg),
+            )
+            if success:
+                self.status_ok.emit(f"Cookies saved → chrome_cookies.txt")
+                self.log_msg.emit(f"Auto-detect complete: cookies → {save_path.name}")
+            else:
+                self.status_err.emit("No cookies found – open Chrome and log in first")
+                self.log_msg.emit("Auto-detect: no cookies found in any browser")
+        except Exception as e:
+            self.log_msg.emit(f"Auto-detect error: {e}")
+            self.status_err.emit("Auto-detect failed – see log")
+        finally:
+            self.finished_signal.emit()
+
+
+class _BrowserLoginWorker(QThread):
+    """Runs ChromiumAuthManager.open_login_browser() off the GUI thread."""
+
+    status_signal = pyqtSignal(str, str)
+    finished_signal = pyqtSignal(bool)
+
+    def __init__(self, auth_manager):
+        super().__init__()
+        self.auth_manager = auth_manager
+
+    def run(self):
+        success = False
+        try:
+            if self.auth_manager:
+                success = bool(
+                    self.auth_manager.open_login_browser(
+                        callback=lambda platform, status: self.status_signal.emit(
+                            str(platform), str(status)
+                        )
+                    )
+                )
+        except Exception as e:
+            self.status_signal.emit("system", f"error: {str(e)[:120]}")
+            success = False
+        finally:
+            self.finished_signal.emit(success)
+
 
 class LinkGrabberPage(QWidget):
     @staticmethod
@@ -46,6 +106,7 @@ class LinkGrabberPage(QWidget):
     def __init__(self, go_back_callback=None, shared_links=None, download_callback=None):
         super().__init__()
         self.thread = None
+        self.browser_login_worker = None
         self.go_back_callback = go_back_callback
         self.download_callback = download_callback
         self.links = shared_links if shared_links is not None else []  # Use shared links
@@ -63,10 +124,20 @@ class LinkGrabberPage(QWidget):
         # Store validated proxies
         self.validated_proxies = []
 
+        # Chromium auth manager (optional dependency)
+        self.auth_manager = None
+        try:
+            from .browser_auth import ChromiumAuthManager
+            self.auth_manager = ChromiumAuthManager()
+        except ImportError:
+            self.auth_manager = None
+
         self.init_ui()
 
         # Load saved proxies after UI is initialized
         self.load_proxy_settings()
+
+        self._refresh_auth_status_indicators()
 
     def closeEvent(self, event):
         """Properly cleanup thread on close to prevent crash"""
@@ -74,6 +145,9 @@ class LinkGrabberPage(QWidget):
             self.thread.cancel()
             self.thread.wait(2000)  # Wait max 2 seconds
             self.thread.quit()
+        if self.browser_login_worker and self.browser_login_worker.isRunning():
+            self.browser_login_worker.quit()
+            self.browser_login_worker.wait(2000)
         event.accept()
 
     def init_ui(self):
@@ -98,6 +172,33 @@ class LinkGrabberPage(QWidget):
             margin-bottom: 15px;
         """)
         layout.addWidget(self.title)
+
+        auth_row = QHBoxLayout()
+        auth_label = QLabel("Platform Login Status:")
+        auth_label.setStyleSheet("color: #F5F6F5; font-size: 13px; font-weight: bold;")
+        self.platform_status_label = QLabel("Checking...")
+        self.platform_status_label.setStyleSheet("color: #AAAAAA; font-size: 12px;")
+        self.relogin_btn = QPushButton("Re-login to Platforms")
+        self.relogin_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #E67E22;
+                color: #F5F6F5;
+                border: none;
+                padding: 6px 12px;
+                border-radius: 6px;
+                font-size: 12px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #D35400; }
+            QPushButton:disabled { background-color: #555; color: #AAA; }
+        """)
+        self.relogin_btn.setEnabled(bool(self.auth_manager))
+        self.relogin_btn.clicked.connect(self._run_browser_login)
+
+        auth_row.addWidget(auth_label)
+        auth_row.addWidget(self.platform_status_label, 1)
+        auth_row.addWidget(self.relogin_btn)
+        layout.addLayout(auth_row)
 
         self.url_input = QLineEdit()
         self.url_input.setPlaceholderText("Enter URL(s) for YouTube, TikTok, Instagram, etc. (comma-separated)")
@@ -138,33 +239,38 @@ class LinkGrabberPage(QWidget):
         """)
         cookie_layout = QVBoxLayout()
 
-        # Cookie source selector
-        source_row = QHBoxLayout()
-        source_label = QLabel("Cookie Source:")
-        self.cookie_source_combo = QComboBox()
-        self.cookie_source_combo.addItems(["Upload File", "Use Browser (Chrome)", "Use Browser (Firefox)", "Use Browser (Edge)"])
-        self.cookie_source_combo.setStyleSheet("""
-            QComboBox {
-                background-color: #2C2F33;
-                color: #F5F6F5;
-                border: 2px solid #4B5057;
-                padding: 5px;
+        # ── Auto-detect row (Workflow 1 trigger) ──
+        auto_row = QHBoxLayout()
+        self.auto_detect_btn = QPushButton("Auto-Detect Cookies from Browser")
+        self.auto_detect_btn.setToolTip(
+            "Detects running Chrome/Edge, copies cookies automatically.\n"
+            "If no browser is open, opens the default browser briefly."
+        )
+        self.auto_detect_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2980B9;
+                color: white;
+                border: none;
+                padding: 6px 14px;
                 border-radius: 5px;
+                font-size: 12px;
+                font-weight: bold;
             }
+            QPushButton:hover { background-color: #2471A3; }
+            QPushButton:disabled { background-color: #555; }
         """)
-        source_row.addWidget(source_label)
-        source_row.addWidget(self.cookie_source_combo)
-        source_row.addStretch()
-        cookie_layout.addLayout(source_row)
+        auto_row.addWidget(self.auto_detect_btn)
+        auto_row.addStretch()
+        cookie_layout.addLayout(auto_row)
 
-        # Cookie text area (only for Upload File mode)
+        # ── Manual paste area ──
         self.cookie_text = QTextEdit()
         self.cookie_text.setPlaceholderText(
-            "Paste Chrome cookies here (Netscape format)...\n"
+            "Or paste cookies manually here (Netscape format)...\n"
             "TIP: Use 'Get cookies.txt' Chrome extension to export\n"
-            "Example: .youtube.com\tTRUE\t/\tTRUE\t1234567890\tSSID\tvalue123"
+            "Example: .instagram.com\tTRUE\t/\tTRUE\t1234567890\tsessionid\tABC123"
         )
-        self.cookie_text.setMaximumHeight(80)
+        self.cookie_text.setMaximumHeight(75)
         self.cookie_text.setStyleSheet("""
             QTextEdit {
                 background-color: #2C2F33;
@@ -177,24 +283,25 @@ class LinkGrabberPage(QWidget):
         """)
         cookie_layout.addWidget(self.cookie_text)
 
-        # Cookie buttons
+        # ── Manual cookie buttons ──
         cookie_btn_row = QHBoxLayout()
         self.upload_cookie_btn = QPushButton("Upload Cookie File")
-        self.save_cookie_btn = QPushButton("Save")
-        self.clear_cookie_btn = QPushButton("Clear")
+        self.save_cookie_btn   = QPushButton("Save")
+        self.clear_cookie_btn  = QPushButton("Clear")
 
+        btn_style = """
+            QPushButton {
+                background-color: #1ABC9C;
+                color: white;
+                border: none;
+                padding: 5px 10px;
+                border-radius: 5px;
+                font-size: 12px;
+            }
+            QPushButton:hover { background-color: #16A085; }
+        """
         for btn in [self.upload_cookie_btn, self.save_cookie_btn, self.clear_cookie_btn]:
-            btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #1ABC9C;
-                    color: white;
-                    border: none;
-                    padding: 5px 10px;
-                    border-radius: 5px;
-                    font-size: 12px;
-                }
-                QPushButton:hover { background-color: #16A085; }
-            """)
+            btn.setStyleSheet(btn_style)
 
         cookie_btn_row.addWidget(self.upload_cookie_btn)
         cookie_btn_row.addWidget(self.save_cookie_btn)
@@ -202,8 +309,8 @@ class LinkGrabberPage(QWidget):
         cookie_btn_row.addStretch()
         cookie_layout.addLayout(cookie_btn_row)
 
-        # Cookie status
-        self.cookie_status = QLabel("No cookies loaded - Using browser cookies or public access")
+        # ── Cookie status label ──
+        self.cookie_status = QLabel("Auto-detection will run before each extraction")
         self.cookie_status.setStyleSheet("color: #888; font-size: 11px;")
         cookie_layout.addWidget(self.cookie_status)
 
@@ -211,16 +318,10 @@ class LinkGrabberPage(QWidget):
         layout.addWidget(cookie_group)
 
         # Connect cookie signals
+        self.auto_detect_btn.clicked.connect(self.run_auto_detect_cookies)
         self.upload_cookie_btn.clicked.connect(self.upload_cookie_file)
         self.save_cookie_btn.clicked.connect(self.save_cookies)
         self.clear_cookie_btn.clicked.connect(self.clear_cookies)
-        self.cookie_source_combo.currentTextChanged.connect(self.on_cookie_source_changed)
-
-        # Set initial state - enable all buttons for "Upload File" mode
-        self.cookie_text.setEnabled(True)
-        self.upload_cookie_btn.setEnabled(True)
-        self.save_cookie_btn.setEnabled(True)
-        self.clear_cookie_btn.setEnabled(True)
 
         # ===== PROXY SECTION (2026 Upgrade) =====
         proxy_group = QGroupBox("Proxy Settings (Optional - Max 2 Proxies)")
@@ -779,13 +880,7 @@ class LinkGrabberPage(QWidget):
 
         max_videos = 0 if self.all_videos_check.isChecked() else self.limit_spin.value()
 
-        # Get cookie source
-        cookie_source = self.cookie_source_combo.currentText()
-        browser = None
-        if cookie_source != "Upload File":
-            # Extract browser name (e.g., "Use Browser (Chrome)" -> "chrome")
-            browser = cookie_source.split("(")[1].split(")")[0].lower()
-
+        # Cookies are handled automatically (Workflow 1) – no manual source selection
         # Collect proxies (if provided)
         proxies = []
         proxy1 = self.proxy1_input.text().strip()
@@ -801,10 +896,10 @@ class LinkGrabberPage(QWidget):
 
         options = {
             "max_videos": max_videos,
-            "cookie_browser": browser,  # None for file, "chrome"/"firefox"/"edge" for browser
-            "proxies": proxies,  # List of validated proxies
-            "use_enhancements": True,  # Enable enhanced extraction methods
-            "use_instaloader": False,  # Avoid long 429 waits by default
+            "cookie_browser": None,       # Always auto (Workflow 1 handles detection)
+            "proxies": proxies,
+            "use_enhancements": True,
+            "use_instaloader": False,     # Avoid 30-min 429 waits
             "interactive_login_fallback": True,
             "manual_login_wait_seconds": 120,
         }
@@ -1032,6 +1127,83 @@ FIX: Check proxy username/password, verify format
 
         msg.exec_()
 
+    def _show_first_time_setup(self):
+        """Show first-time setup dialog for platform login."""
+        if not self.auth_manager:
+            return
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle("First Time Setup")
+        msg.setText(
+            "Welcome to Link Grabber!\n\n"
+            "You need to log in to social media platforms once.\n"
+            "A browser will open - please log in to:\n\n"
+            "1. YouTube/Google\n"
+            "2. Instagram\n"
+            "3. TikTok\n"
+            "4. Twitter/X\n"
+            "5. Facebook\n\n"
+            "After logging in to all, close the browser tabs."
+        )
+        msg.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
+
+        if msg.exec_() == QMessageBox.Ok:
+            self._run_browser_login()
+
+    def _run_browser_login(self):
+        """Launch Chromium browser for user platform login."""
+        if not self.auth_manager:
+            self.log_area.append("Chromium auth manager not available.")
+            return
+        if self.browser_login_worker and self.browser_login_worker.isRunning():
+            self.log_area.append("Browser login is already running.")
+            return
+
+        self.log_area.append("Opening browser for login. Please log in to all platforms.")
+        self.log_area.append("Close browser tabs when done.")
+        self.relogin_btn.setEnabled(False)
+
+        self.browser_login_worker = _BrowserLoginWorker(self.auth_manager)
+        self.browser_login_worker.status_signal.connect(self._on_browser_login_status)
+        self.browser_login_worker.finished_signal.connect(self._on_browser_login_finished)
+        self.browser_login_worker.start()
+
+    def _on_browser_login_status(self, platform: str, status: str):
+        self.log_area.append(f"[Auth] {platform}: {status}")
+
+    def _on_browser_login_finished(self, success: bool):
+        self.log_area.append("Browser login finished." if success else "Browser login ended without new session.")
+        self.relogin_btn.setEnabled(bool(self.auth_manager))
+        self._refresh_auth_status_indicators()
+
+    def _refresh_auth_status_indicators(self):
+        if not hasattr(self, "platform_status_label"):
+            return
+        if not self.auth_manager:
+            self.platform_status_label.setText("Chromium auth unavailable")
+            self.platform_status_label.setStyleSheet("color: #888; font-size: 12px;")
+            if hasattr(self, "relogin_btn"):
+                self.relogin_btn.setEnabled(False)
+            return
+
+        try:
+            status = self.auth_manager.get_login_status()
+        except Exception:
+            status = {}
+
+        order = ["youtube", "tiktok", "instagram", "twitter", "facebook"]
+        parts = []
+        ok_count = 0
+        for key in order:
+            ok = bool(status.get(key, False))
+            ok_count += 1 if ok else 0
+            tag = "OK" if ok else "WARN"
+            parts.append(f"[{tag}] {key.title()}")
+
+        self.platform_status_label.setText("  ".join(parts))
+        color = "#2ECC71" if ok_count >= 3 else "#F39C12"
+        self.platform_status_label.setStyleSheet(f"color: {color}; font-size: 12px;")
+
     def on_progress_log(self, msg):
         self.log_area.append(self._repair_log_text(msg))
         self.log_area.ensureCursorVisible()
@@ -1148,23 +1320,37 @@ FIX: Check proxy username/password, verify format
         return cleaned
 
     # ========== COOKIE MANAGEMENT METHODS ==========
-    def on_cookie_source_changed(self, source):
-        """Handle cookie source selection change"""
-        if source == "Upload File":
-            self.cookie_text.setEnabled(True)
-            self.upload_cookie_btn.setEnabled(True)
-            self.save_cookie_btn.setEnabled(True)
-            self.clear_cookie_btn.setEnabled(True)
-            self.cookie_status.setText("Upload your Chrome cookie file (Netscape format)")
-        else:
-            # Browser mode - disable file upload controls
-            self.cookie_text.setEnabled(False)
-            self.upload_cookie_btn.setEnabled(False)
-            self.save_cookie_btn.setEnabled(False)
-            self.clear_cookie_btn.setEnabled(False)
-            browser = source.split("(")[1].split(")")[0]  # Extract browser name
-            self.cookie_status.setText(f" Will use cookies directly from {browser} browser")
-            self.cookie_status.setStyleSheet("color: #1ABC9C; font-size: 11px;")
+    def run_auto_detect_cookies(self):
+        """
+        Manually trigger Workflow 1 (Smart Browser Cookie Extraction).
+        Uses a QThread so all GUI updates are thread-safe via Qt signals.
+        """
+        self.auto_detect_btn.setEnabled(False)
+        self.auto_detect_btn.setText("Detecting...")
+        self.cookie_status.setText("Running Workflow 1 – smart browser detection...")
+        self.cookie_status.setStyleSheet("color: #F39C12; font-size: 11px;")
+
+        self._auto_detect_worker = _AutoDetectWorker(self.cookies_dir)
+        self._auto_detect_worker.log_msg.connect(self.log_area.append)
+        self._auto_detect_worker.status_ok.connect(
+            lambda t: (
+                self.cookie_status.setText(t),
+                self.cookie_status.setStyleSheet("color: #1ABC9C; font-size: 11px;"),
+            )
+        )
+        self._auto_detect_worker.status_err.connect(
+            lambda t: (
+                self.cookie_status.setText(t),
+                self.cookie_status.setStyleSheet("color: #E74C3C; font-size: 11px;"),
+            )
+        )
+        self._auto_detect_worker.finished_signal.connect(
+            lambda: (
+                self.auto_detect_btn.setEnabled(True),
+                self.auto_detect_btn.setText("Auto-Detect Cookies from Browser"),
+            )
+        )
+        self._auto_detect_worker.start()
 
     def upload_cookie_file(self):
         """Upload cookie file from disk"""

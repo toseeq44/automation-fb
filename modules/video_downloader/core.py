@@ -1,4 +1,4 @@
-﻿"""Core implementation for the smart video downloader."""
+"""Core implementation for the smart video downloader."""
 
 import os
 import subprocess
@@ -1326,9 +1326,158 @@ class VideoDownloaderThread(QThread):
             self.progress.emit(f"âš ï¸ youtube-dl error: {str(e)[:100]}")
             return False
 
+    def _method_youtube_smart(self, url, output_path, cookie_file=None):
+        """
+        YouTube-optimized download.
+        Key insight: android_vr/ios clients do NOT support cookies (yt-dlp skips them
+        and falls back to web which has PO-token issues). Must call them cookie-free.
+        """
+        try:
+            from datetime import datetime
+            start_time = datetime.now()
+            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] YouTube Smart Download")
+
+            user_agent = _get_random_user_agent()
+            is_shorts = '/shorts/' in url.lower()
+
+            user_fmt = self.format_override if self.format_override else None
+
+            # Clients and whether they accept cookies
+            # android_vr/ios: yt-dlp silently skips them when cookies are passed
+            # -> must be used without cookies
+            if is_shorts:
+                client_cookie_pairs = [
+                    ('android_vr', None),          # best for Shorts, no cookies
+                    ('ios',        None),          # fallback mobile, no cookies
+                    ('web',        cookie_file),   # web supports cookies
+                    ('android',    None),          # android no cookies
+                    ('web',        None),          # web anonymous last
+                ]
+            else:
+                client_cookie_pairs = [
+                    ('web',        cookie_file),   # web + cookies (most compatible)
+                    ('android_vr', None),          # android_vr no cookies
+                    ('ios',        None),          # ios no cookies
+                    ('android',    None),          # android no cookies
+                    ('web',        None),          # web anonymous last
+                ]
+            # Deduplicate
+            seen_cc = set()
+            unique_pairs = []
+            for cc in client_cookie_pairs:
+                key = (cc[0], cc[1] or '')
+                if key not in seen_cc:
+                    seen_cc.add(key)
+                    unique_pairs.append(cc)
+
+            def _build_fmts():
+                fmts = []
+                if user_fmt:
+                    fmts.append(user_fmt)
+                fmts.append(None)                       # yt-dlp picks best
+                fmts.append('bestvideo+bestaudio/best') # no ext restriction
+                fmts.append('best')
+                seen = set()
+                result = []
+                for f in fmts:
+                    k = f or '__default__'
+                    if k not in seen:
+                        seen.add(k)
+                        result.append(f)
+                return result
+
+            def _try_yt(fmt, client, cookie, use_proxy):
+                ydl_opts = {
+                    'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
+                    'quiet': True,
+                    'no_warnings': True,
+                    'retries': self.max_retries,
+                    'fragment_retries': self.max_retries,
+                    'continuedl': True,
+                    'nocheckcertificate': True,
+                    'restrictfilenames': True,
+                    'progress_hooks': [self._progress_hook],
+                    'http_headers': {'User-Agent': user_agent},
+                    'extractor_args': {'youtube': {'player_client': [client]}},
+                }
+                if fmt:
+                    ydl_opts['format'] = fmt
+                if cookie:
+                    ydl_opts['cookiefile'] = cookie
+                self._apply_ffmpeg_ydl_opts(ydl_opts)
+                if use_proxy:
+                    proxy = self._get_current_proxy()
+                    if proxy:
+                        ydl_opts['proxy'] = proxy
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([url])
+                return True
+
+            def _run_strategy(label, use_proxy):
+                if use_proxy:
+                    proxy_info = self._get_current_proxy()
+                    self.progress.emit(f"   [YT] {label} | proxy: {proxy_info.split('@')[-1][:20] if proxy_info else 'none'}")
+                else:
+                    self.progress.emit(f"   [YT] {label} | direct")
+
+                fmts = _build_fmts()
+                for client, cookie in unique_pairs:
+                    if self.cancelled:
+                        return False
+                    cookie_label = Path(cookie).name if cookie else 'no-cookie'
+                    for fmt in fmts:
+                        if self.cancelled:
+                            return False
+                        fmt_label = fmt if fmt else '(default)'
+                        self.progress.emit(f"   [YT] {client} / {cookie_label} / {fmt_label[:40]}")
+                        try:
+                            if _try_yt(fmt, client, cookie, use_proxy):
+                                elapsed = (datetime.now() - start_time).total_seconds()
+                                self.progress.emit(f"   [YT] SUCCESS in {elapsed:.1f}s  [{client}/{cookie_label}]")
+                                return True
+                        except Exception as e:
+                            err = str(e).lower()
+                            if 'requested format is not available' in err:
+                                continue        # try next format for this client
+                            elif 'only images are available' in err:
+                                self.progress.emit("   [YT] No video in this URL (images only)")
+                                return False
+                            elif any(x in err for x in ('failed to extract any player response',
+                                                         'no video formats found')):
+                                self.progress.emit(f"   [YT] {client}: player blocked, skip")
+                                break           # this client blocked, try next
+                            elif any(x in err for x in ('sign in', 'login required',
+                                                         'private', 'join this channel')):
+                                self.progress.emit(f"   [YT] Login required")
+                                return False
+                            else:
+                                self.progress.emit(f"   [YT] {client}: {str(e)[:80]}")
+                                break           # unknown error, try next client
+                return False
+
+            if _run_strategy("Strategy 1: Direct", use_proxy=False):
+                return True
+
+            if self.cancelled:
+                return False
+
+            current_proxy = self._get_current_proxy()
+            if current_proxy:
+                if _run_strategy("Strategy 2: Via proxy", use_proxy=True):
+                    return True
+
+            elapsed = (datetime.now() - start_time).total_seconds()
+            self.progress.emit(f"   [YT] FAILED ({elapsed:.1f}s)")
+            self.progress.emit("   [YT] Hint: refresh cookies or run: yt-dlp -U")
+            return False
+
+        except Exception as e:
+            self.progress.emit(f"   [YT] error: {str(e)[:120]}")
+            return False
+
     def _method4_alternative_formats(self, url, output_path, cookie_file=None):
         try:
-            self.progress.emit("ðŸ”„ Method 4: Alternative formats")
+            self.progress.emit("Method 4: Alternative formats")
 
             # Get UA and proxy once for this method
             user_agent = _get_random_user_agent()
@@ -1576,6 +1725,15 @@ class VideoDownloaderThread(QThread):
                         self._method_gallery_dl,
                         self._method4_alternative_formats,
                         self._method5_force_ipv4,
+                    ]
+                elif platform == 'youtube':
+                    methods = [
+                        self._method_youtube_smart,          # No-proxy first + smart format fallback
+                        self._method1_batch_file_approach,
+                        self._method3_optimized_ytdlp,
+                        self._method4_alternative_formats,
+                        self._method5_force_ipv4,
+                        self._method6_youtube_dl_fallback,
                     ]
                 else:
                     methods = [

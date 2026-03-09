@@ -13,9 +13,16 @@ class SettingsManager:
     """High level helper around the shared settings.json file."""
 
     def __init__(self, settings_path: Optional[Path] = None):
-        base_dir = Path(__file__).resolve().parents[1]
-        self._base_dir = base_dir
-        self._settings_path = Path(settings_path or (base_dir / "data_files" / "settings.json"))
+        if settings_path is None:
+            try:
+                from modules.config.paths import get_data_dir
+                data_dir = get_data_dir()
+                settings_path = data_dir / "settings.json"
+            except ImportError:
+                base_dir = Path(__file__).resolve().parents[1]
+                settings_path = base_dir / "data_files" / "settings.json"
+        
+        self._settings_path = Path(settings_path)
         self._settings_path.parent.mkdir(parents=True, exist_ok=True)
 
         logging.debug("SettingsManager initialized (path=%s)", self._settings_path)

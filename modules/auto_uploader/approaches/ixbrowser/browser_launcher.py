@@ -219,7 +219,15 @@ class BrowserLauncher:
             return True
 
         except Exception as e:
-            logger.error("[IXLauncher] Error launching profile: %s", str(e))
+            error_msg = str(e)
+            logger.error("[IXLauncher] Error launching profile: %s", error_msg)
+            # Detect ixBrowser kernel errors (e.g. error 2013 = corrupted kernel)
+            if "kernel" in error_msg.lower() or "2013" in error_msg:
+                logger.error("[IXLauncher] ════════════════════════════════════════")
+                logger.error("[IXLauncher] ixBrowser KERNEL ERROR detected!")
+                logger.error("[IXLauncher] Fix: Open ixBrowser → Settings → Repair kernel")
+                logger.error("[IXLauncher] This affects ALL profiles until fixed.")
+                logger.error("[IXLauncher] ════════════════════════════════════════")
             return False
 
     def attach_selenium(self) -> bool:

@@ -38,6 +38,26 @@ def _detect_platform(url: str) -> str:
     if 'twitter.com' in url or 'x.com' in url: return 'twitter'
     return 'other'
 
+def _extract_creator_from_url(url: str) -> str:
+    """Extract creator/channel name from URL path as fallback."""
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        parts = [p for p in (parsed.path or '').split('/') if p]
+        if not parts:
+            return ""
+        # Skip common non-creator path segments
+        skip = {'watch', 'reel', 'reels', 'video', 'videos', 'shorts', 'live', 'p', 'tv', 'share', 'stories'}
+        for part in parts:
+            if part.startswith('@'):
+                return part.lstrip('@')
+            if part.lower() not in skip and not part.isdigit():
+                return part
+    except Exception:
+        pass
+    return ""
+
+
 def _get_random_user_agent() -> str:
     """
     Get random user agent from shared pool to avoid detection.
@@ -302,6 +322,12 @@ class VideoDownloaderThread(QThread):
         super().__init__(parent)
         self.auth_hub = AuthNetworkHub()
         # Accept flexible input for URLs (string, list, dicts from Link Grabber, etc.)
+        # Preserve _meta from Link Grabber entries before extracting URLs
+        self._url_meta = {}
+        if isinstance(urls, list):
+            for item in urls:
+                if isinstance(item, dict) and '_meta' in item and 'url' in item:
+                    self._url_meta[item['url'].strip()] = item['_meta']
         self.urls = extract_urls(urls)
         self.save_path = save_path
         # Ensure options behave like a dict so feature flags don't break older callers
@@ -324,6 +350,9 @@ class VideoDownloaderThread(QThread):
         )
         self.max_retries = self.options.get('max_retries', 3)
         self.force_all_methods = bool(self.options.get('force_all_methods', False))
+        # Optional per-URL budgets (used by some platform strategies)
+        self.youtube_time_budget_sec = float(self.options.get('youtube_time_budget_sec', 0) or 0)
+        self.youtube_max_attempts = int(self.options.get('youtube_max_attempts', 0) or 0)
         # Map quality preference to yt-dlp format selection if caller didn't supply one
         format_override = self.options.get('format')
         if not format_override:
@@ -343,6 +372,48 @@ class VideoDownloaderThread(QThread):
         self.current_proxy_index = 0
         self.proxy_url = self.options.get('proxy_url', os.environ.get('HTTPS_PROXY', ''))  # Legacy support
 
+        # Auth configuration: Collect ALL and prioritize (profile-first)
+        self._all_cookie_files = []
+        if self.urls:
+            first_url = self.urls[0]
+            first_platform = self.auth_hub.detect_platform(first_url)
+            try:
+                from modules.shared.session_authority import get_session_authority
+                authority = get_session_authority()
+                profile_cookie = authority.ensure_fresh_cookies(first_platform)
+                if profile_cookie:
+                    self._all_cookie_files.append(profile_cookie)
+            except Exception:
+                pass
+            # Managed CDP auth assist: when managed Chrome is running,
+            # its active session keeps cookies fresh.  Re-export from the
+            # profile if no cookie was obtained above and the flag is ON.
+            if not self._all_cookie_files and first_platform in (
+                "instagram", "facebook", "tiktok",
+            ):
+                try:
+                    from modules.shared.managed_chrome_session import (
+                        MANAGED_CDP_ATTACH_FIRST,
+                        get_managed_chrome_session,
+                    )
+                    if MANAGED_CDP_ATTACH_FIRST:
+                        mgr = get_managed_chrome_session()
+                        if mgr.is_running():
+                            # Managed Chrome is alive — force a fresh export
+                            try:
+                                sa = get_session_authority()
+                                fresh = sa.force_browser_cookie_refresh(first_platform)
+                                if fresh:
+                                    self._all_cookie_files.append(fresh)
+                            except Exception:
+                                pass
+                except ImportError:
+                    pass
+            # Add file-scan candidates (dedup against profile cookie)
+            for cf in self.auth_hub.valid_cookie_files(first_platform):
+                if cf not in self._all_cookie_files:
+                    self._all_cookie_files.append(cf)
+            
         # Rate limiting (to avoid triggering IP blocks)
         self.last_request_times = {}  # domain -> timestamp
         self.rate_limit_delay = self.options.get('rate_limit_delay', 2.5)  # seconds between requests
@@ -674,19 +745,53 @@ class VideoDownloaderThread(QThread):
 
     def get_cookie_file(self, url, source_folder=None):
         """
-        Return the most relevant cookie file for a URL using shared hub priority.
+        Return the most relevant cookie file for a URL.
+
+        Decision order (profile-first):
+          1. SessionAuthority: fresh export from persistent browser profile
+          2. AuthNetworkHub: existing per-platform cookie files
+          3. Generic / legacy fallbacks
 
         Also stores all valid cookie files in self._all_cookie_files for fallback attempts.
         """
+        import logging
+
+        platform = self.auth_hub.detect_platform(url)
+
+        # Step 1: Try SessionAuthority (fresh profile export)
         try:
-            platform = _detect_platform(url)
+            from modules.shared.session_authority import get_session_authority
+            authority = get_session_authority()
+            best = authority.get_best_cookie_file(platform, source_folder)
+            if best:
+                # Also populate fallback list
+                valid_cookies = self.auth_hub.valid_cookie_files(platform, source_folder)
+                # Ensure the authority's pick is first
+                if best not in valid_cookies:
+                    valid_cookies.insert(0, best)
+                self._all_cookie_files = valid_cookies
+                logging.info(
+                    "[VideoDownloader] Cookie for %s: %s (via SessionAuthority)",
+                    platform, Path(best).name,
+                )
+                return best
+        except Exception as exc:
+            logging.debug("[VideoDownloader] SessionAuthority unavailable: %s", exc)
+
+        # Step 2: Fallback to direct file scan
+        try:
             valid_cookies = self.auth_hub.valid_cookie_files(platform, source_folder)
             self._all_cookie_files = valid_cookies
             if valid_cookies:
+                logging.info(
+                    "[VideoDownloader] Cookie for %s: %s (file scan fallback)",
+                    platform, Path(valid_cookies[0]).name,
+                )
                 return valid_cookies[0]
         except Exception:
             pass
 
+        logging.info("[VideoDownloader] No cookie file found for %s", platform)
         return None
 
     # -----------------------
@@ -712,52 +817,52 @@ class VideoDownloaderThread(QThread):
             # Get current proxy
             current_proxy = self._get_current_proxy()
 
-            cmd = [
-                ytdlp_cmd,  # Use detected command instead of hardcoded 'yt-dlp'
-                '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
-                '--rm-cache-dir',
-                '-f', format_string,
-                '--restrict-filenames', '--no-warnings', '--retries', str(self.max_retries),
-                '--continue', '--no-check-certificate',
-                '--no-playlist',  # Don't download playlists
-                '--user-agent', user_agent,  # Random UA rotation
-            ]
-
-            # ENHANCED: Add realistic Chrome 120 headers to avoid detection
-            cmd.extend(_get_chrome120_headers())
-            cmd.extend(self._ffmpeg_cli_args())
+            ydl_opts = {
+                'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
+                'format': format_string,
+                'rm_cachedir': True,
+                'restrictfilenames': True,
+                'no_warnings': True,
+                'retries': self.max_retries,
+                'continuedl': True,
+                'nocheckcertificate': True,
+                'noplaylist': True,
+                'progress_hooks': [self._progress_hook],
+                'http_headers': {
+                    'User-Agent': user_agent,
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                }
+            }
+            self._apply_ffmpeg_ydl_opts(ydl_opts)
 
             # Add proxy if available
             if current_proxy:
-                cmd.extend(['--proxy', current_proxy])
+                ydl_opts['proxy'] = current_proxy
                 self.progress.emit(f"   ðŸŒ Proxy: {current_proxy.split('@')[-1][:20]}...")  # Hide credentials
             else:
                 self.progress.emit(f"   âš ï¸ No proxy (IP blocks possible)")
 
             if cookie_file:
-                cmd.extend(['--cookies', cookie_file])
+                ydl_opts['cookiefile'] = cookie_file
                 self.progress.emit(f"   ðŸª Cookies: {Path(cookie_file).name}")
 
             self.progress.emit(f"   ðŸŽ­ UA: {user_agent[:45]}...")
 
-            cmd.append(url)
-
             self.progress.emit(f"   â³ Starting download...")
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, encoding='utf-8', errors='replace')
-
-            elapsed = (datetime.now() - start_time).total_seconds()
-
-            if result.returncode == 0:
+            
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([url])
+                elapsed = (datetime.now() - start_time).total_seconds()
                 self.progress.emit(f"   âœ… SUCCESS in {elapsed:.1f}s")
                 return True
-            else:
-                error_msg = result.stderr[:300] if result.stderr else "Unknown error"
+            except Exception as e:
+                elapsed = (datetime.now() - start_time).total_seconds()
+                error_msg = str(e)[:300]
                 self.progress.emit(f"   âŒ FAILED ({elapsed:.1f}s)")
                 self.progress.emit(f"   ðŸ“ Error: {error_msg}")
-            return False
-        except subprocess.TimeoutExpired:
-            self.progress.emit(f"   â±ï¸ TIMEOUT (30min limit)")
-            return False
+                return False
         except Exception as e:
             self.progress.emit(f"   âŒ Exception: {str(e)[:100]}")
             return False
@@ -816,7 +921,9 @@ class VideoDownloaderThread(QThread):
             ip_blocked = result.get('ip_blocked', False)
 
             # STRATEGY 2: Try with proxy (if available and IP blocked)
-            if ip_blocked and self.proxy_url:
+            # Prefer proxy pool first; fall back to legacy self.proxy_url.
+            proxy_available = bool(self._get_current_proxy() or self.proxy_url)
+            if ip_blocked and proxy_available:
                 self.progress.emit(f"   ðŸŒ Strategy 2: Trying with proxy (IP block detected)")
                 time.sleep(2)  # Brief delay before retry
 
@@ -826,6 +933,9 @@ class VideoDownloaderThread(QThread):
                     elapsed = (datetime.now() - start_time).total_seconds()
                     self.progress.emit(f"   âœ… SUCCESS via proxy ({elapsed:.1f}s) {result['message']}")
                     return True
+                # Rotate proxy pool for the remaining attempts (best-effort)
+                if self._rotate_proxy():
+                    self.progress.emit("   ðŸ”„ Rotating proxy for retries...")
 
             # STRATEGY 3: Retry with exponential backoff (if IP blocked)
             if ip_blocked:
@@ -837,8 +947,10 @@ class VideoDownloaderThread(QThread):
                     time.sleep(wait_time)
 
                     # Try with enhanced headers and random user agent
+                    # Retry with proxy if we have any proxy source.
+                    retry_use_proxy = bool(self._get_current_proxy() or self.proxy_url)
                     result = self._try_tiktok_download(url, output_path, cookie_files_to_try,
-                                                       tiktok_formats, use_proxy=bool(self.proxy_url),
+                                                       tiktok_formats, use_proxy=retry_use_proxy,
                                                        retry_count=retry_attempt + 1)
                     if result['success']:
                         elapsed = (datetime.now() - start_time).total_seconds()
@@ -913,9 +1025,12 @@ class VideoDownloaderThread(QThread):
                     cmd.extend(self._ffmpeg_cli_args())
                     cmd.extend(['--add-header', 'Referer:https://www.tiktok.com/'])
 
-                    # Add proxy if requested
-                    if use_proxy and self.proxy_url:
-                        cmd.extend(['--proxy', self.proxy_url])
+                    # Add proxy if requested.
+                    # Prefer proxy pool; fall back to legacy proxy_url/env proxy.
+                    if use_proxy:
+                        proxy = self._get_current_proxy() or self.proxy_url
+                        if proxy:
+                            cmd.extend(['--proxy', proxy])
 
                     if current_cookie:
                         cmd.extend(['--cookies', current_cookie])
@@ -1019,9 +1134,11 @@ class VideoDownloaderThread(QThread):
 
             if cookie_file:
                 ydl_opts['cookiefile'] = cookie_file
-                self.progress.emit(f"   ðŸª Cookies: {Path(cookie_file).name}")
+                cf_path = Path(cookie_file)
+                source_tag = " [Profile]" if "_chromium_profile" in cf_path.name else " [Manual/Auth]"
+                self.progress.emit(f"   ðŸ ª Cookies: {cf_path.name}{source_tag}")
             else:
-                self.progress.emit(f"   âš ï¸ No cookies (may fail for private content)")
+                self.progress.emit(f"   âš ï¸  No cookies (may fail for private content)")
 
             self.progress.emit(f"   ðŸŽ­ UA: {user_agent[:45]}...")
 
@@ -1115,37 +1232,36 @@ class VideoDownloaderThread(QThread):
                 user_agent = _get_random_user_agent()
                 current_proxy = self._get_current_proxy()
 
-                cmd = [
-                    ytdlp_cmd,  # Use detected command
-                    '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
-                    '--cookies', current_cookie_file,
-                    '-f', 'best',
-                    '--no-playlist',
-                    '--restrict-filenames',
-                    '--no-warnings',
-                    '--user-agent', user_agent,
-                ]
-
-                # ENHANCED: Add realistic Chrome 120 headers to avoid detection
-                cmd.extend(_get_chrome120_headers())
-                cmd.extend(self._ffmpeg_cli_args())
-
-                # Add proxy
+                ydl_opts = {
+                    'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
+                    'cookiefile': current_cookie_file,
+                    'format': 'best',
+                    'quiet': True,
+                    'no_warnings': True,
+                    'restrictfilenames': True,
+                    'progress_hooks': [self._progress_hook],
+                    'http_headers': {
+                        'User-Agent': user_agent,
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                    }
+                }
+                self._apply_ffmpeg_ydl_opts(ydl_opts)
                 if current_proxy:
-                    cmd.extend(['--proxy', current_proxy])
-                    self.progress.emit(f"   ðŸŒ Proxy: {current_proxy.split('@')[-1][:20]}...")
+                    ydl_opts['proxy'] = current_proxy
+                    self.progress.emit(f"   ðŸŒ  Proxy: {current_proxy.split('@')[-1][:20]}...")
 
                 self.progress.emit(f"   ðŸŽ­ UA: {user_agent[:45]}...")
-                cmd.append(url)
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, encoding='utf-8', errors='replace')
-
-                if result.returncode == 0:
+                
+                try:
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        ydl.download([url])
                     elapsed = (datetime.now() - start_time).total_seconds()
                     self.progress.emit(f"   âœ… SUCCESS with {Path(current_cookie_file).name} ({elapsed:.1f}s)")
                     return True
-                else:
-                    error_snippet = result.stderr[:100] if result.stderr else "Unknown"
-                    self.progress.emit(f"   âŒ Download failed: {error_snippet}")
+                except Exception as e:
+                    error_snippet = str(e)[:100]
+                    self.progress.emit(f"   â Œ Download failed: {error_snippet}")
 
             # If all cookie files failed, show helpful error message
             elapsed = (datetime.now() - start_time).total_seconds()
@@ -1179,6 +1295,97 @@ class VideoDownloaderThread(QThread):
 
         except Exception as e:
             self.progress.emit(f"   âŒ Instagram enhanced error: {str(e)[:100]}")
+            return False
+
+
+    def _method_facebook_enhanced(self, url, output_path, cookie_file=None):
+        """
+        Robust Facebook download strategy:
+        1. Try with primary cookie file
+        2. Fallback to all other valid cookie files
+        3. Rotating User Agents and headers
+        """
+        try:
+            if 'facebook.com' not in url.lower() and 'fb.com' not in url.lower():
+                return False
+
+            from datetime import datetime
+            start_time = datetime.now()
+            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] ðŸ“¦ Facebook Enhanced Strategy")
+
+            # Collect candidates
+            cookie_files = []
+            if cookie_file:
+                cookie_files.append(cookie_file)
+            
+            # Add all known valid cookies from the hub
+            if hasattr(self, '_all_cookie_files'):
+                for cf in self._all_cookie_files:
+                    if cf and cf not in cookie_files:
+                        cookie_files.append(cf)
+            
+            # Deduplicate while preserving order
+            seen = set()
+            unique_cookies = []
+            for cf in cookie_files:
+                if cf not in seen:
+                    seen.add(cf)
+                    unique_cookies.append(cf)
+            
+            if not unique_cookies:
+                unique_cookies = [None]
+
+            total_cookies = len([c for c in unique_cookies if c])
+            self.progress.emit(f"   ðŸ”  Found {total_cookies} cookie candidate(s)")
+
+            for idx, current_cookie_file in enumerate(unique_cookies, 1):
+                if self.cancelled: return False
+
+                user_agent = _get_random_user_agent()
+                current_proxy = self._get_current_proxy()
+                
+                # Simplified but robust opts
+                ydl_opts = {
+                    'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
+                    'format': self.format_override or 'best',
+                    'quiet': True,
+                    'no_warnings': True,
+                    'retries': self.max_retries,
+                    'continuedl': True,
+                    'nocheckcertificate': True,
+                    'restrictfilenames': True,
+                    'progress_hooks': [self._progress_hook],
+                    'http_headers': {
+                        'User-Agent': user_agent,
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                    }
+                }
+                
+                if current_cookie_file:
+                    ydl_opts['cookiefile'] = current_cookie_file
+                    self.progress.emit(f"   ðŸ ª Attempt {idx}: {Path(current_cookie_file).name}")
+                else:
+                    self.progress.emit(f"   âš ï¸  Attempt {idx}: No cookies")
+
+                if current_proxy:
+                    ydl_opts['proxy'] = current_proxy
+                
+                try:
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        ydl.download([url])
+                    elapsed = (datetime.now() - start_time).total_seconds()
+                    self.progress.emit(f"   âœ… Facebook Success ({elapsed:.1f}s)")
+                    return True
+                except Exception as e:
+                    error_snippet = str(e)[:100]
+                    self.progress.emit(f"   âš ï¸  Attempt failed: {error_snippet}")
+                    continue
+
+            return False
+
+        except Exception as e:
+            self.progress.emit(f"   â Œ Facebook error: {str(e)[:100]}")
             return False
 
     def _method_instaloader(self, url, output_path, cookie_file=None):
@@ -1341,6 +1548,9 @@ class VideoDownloaderThread(QThread):
             is_shorts = '/shorts/' in url.lower()
 
             user_fmt = self.format_override if self.format_override else None
+            time_budget_sec = float(self.youtube_time_budget_sec or 0)
+            max_attempts = int(self.youtube_max_attempts or 0)
+            attempt_count = 0
 
             # Clients and whether they accept cookies
             # android_vr/ios: yt-dlp silently skips them when cookies are passed
@@ -1387,10 +1597,16 @@ class VideoDownloaderThread(QThread):
                 return result
 
             def _try_yt(fmt, client, cookie, use_proxy):
+                class SilentLogger:
+                    def debug(self, msg): pass
+                    def warning(self, msg): pass
+                    def error(self, msg): pass
+
                 ydl_opts = {
                     'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
                     'quiet': True,
                     'no_warnings': True,
+                    'logger': SilentLogger(),
                     'retries': self.max_retries,
                     'fragment_retries': self.max_retries,
                     'continuedl': True,
@@ -1414,6 +1630,7 @@ class VideoDownloaderThread(QThread):
                 return True
 
             def _run_strategy(label, use_proxy):
+                nonlocal attempt_count
                 if use_proxy:
                     proxy_info = self._get_current_proxy()
                     self.progress.emit(f"   [YT] {label} | proxy: {proxy_info.split('@')[-1][:20] if proxy_info else 'none'}")
@@ -1424,13 +1641,27 @@ class VideoDownloaderThread(QThread):
                 for client, cookie in unique_pairs:
                     if self.cancelled:
                         return False
+                    if time_budget_sec > 0:
+                        elapsed = (datetime.now() - start_time).total_seconds()
+                        if elapsed >= time_budget_sec:
+                            self.progress.emit(f"   [YT] Budget hit ({elapsed:.1f}s/{time_budget_sec:.0f}s), stopping smart loop")
+                            return False
                     cookie_label = Path(cookie).name if cookie else 'no-cookie'
                     for fmt in fmts:
                         if self.cancelled:
                             return False
+                        if time_budget_sec > 0:
+                            elapsed = (datetime.now() - start_time).total_seconds()
+                            if elapsed >= time_budget_sec:
+                                self.progress.emit(f"   [YT] Budget hit ({elapsed:.1f}s/{time_budget_sec:.0f}s), stopping smart loop")
+                                return False
+                        if max_attempts > 0 and attempt_count >= max_attempts:
+                            self.progress.emit(f"   [YT] Attempt cap hit ({attempt_count}/{max_attempts}), stopping smart loop")
+                            return False
                         fmt_label = fmt if fmt else '(default)'
                         self.progress.emit(f"   [YT] {client} / {cookie_label} / {fmt_label[:40]}")
                         try:
+                            attempt_count += 1
                             if _try_yt(fmt, client, cookie, use_proxy):
                                 elapsed = (datetime.now() - start_time).total_seconds()
                                 self.progress.emit(f"   [YT] SUCCESS in {elapsed:.1f}s  [{client}/{cookie_label}]")
@@ -1502,10 +1733,15 @@ class VideoDownloaderThread(QThread):
                 format_options.insert(0, self.format_override)
             for fmt in format_options:
                 try:
+                    class SilentLogger:
+                        def debug(self, msg): pass
+                        def warning(self, msg): pass
+                        def error(self, msg): pass
+
                     ydl_opts = {
                         'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
                         'format': fmt,
-                        'quiet': True, 'no_warnings': True, 'retries': self.max_retries,
+                        'quiet': True, 'no_warnings': True, 'logger': SilentLogger(), 'retries': self.max_retries,
                         'continuedl': True, 'nocheckcertificate': True, 'restrictfilenames': True,
                         'http_headers': {'User-Agent': user_agent},
                     }
@@ -1735,6 +1971,13 @@ class VideoDownloaderThread(QThread):
                         self._method5_force_ipv4,
                         self._method6_youtube_dl_fallback,
                     ]
+                elif platform == 'facebook':
+                    methods = [
+                        self._method_facebook_enhanced,
+                        self._method1_batch_file_approach,
+                        self._method3_optimized_ytdlp,
+                        self._method4_alternative_formats,
+                    ]
                 else:
                     methods = [
                         self._method1_batch_file_approach,
@@ -1743,42 +1986,145 @@ class VideoDownloaderThread(QThread):
                         self._method5_force_ipv4,
                         self._method6_youtube_dl_fallback,
                     ]
-
                 # Force all methods adds extras
                 if not self.force_all_methods:
                     # Limit to first 3-4 methods for speed (but will try all if they fail)
                     methods = methods[:4]
 
-                # BULLETPROOF FALLBACK: Try ALL methods until one succeeds
-                # No method is skipped - ensures maximum success rate
+                # Resolve creator for strategy memory
+                _creator = ""
+                _meta = self._url_meta.get(url, {})
+                if _meta.get('creator'):
+                    _creator = _meta['creator']
+                elif self.options.get('_creator_hint'):
+                    _creator = self.options['_creator_hint']
+                else:
+                    _creator = _extract_creator_from_url(url)
+
+                # Strategy memory: reorder methods if we have learning data
+                try:
+                    from modules.link_grabber.intelligence import get_learning_system
+                    _ls = get_learning_system()
+                    _best_dl = _ls.get_best_download_method(_creator, platform)
+                    if _best_dl:
+                        _method_ids = {m.__name__: m for m in methods}
+                        if _best_dl in _method_ids:
+                            _best_m = _method_ids[_best_dl]
+                            methods = [_best_m] + [m for m in methods if m is not _best_m]
+                except Exception:
+                    pass
+
+                # Try all methods until one succeeds
                 success = False
                 attempted_methods = 0
+                last_dl_error = ""
                 for method in methods:
                     if self.cancelled: break
                     attempted_methods += 1
+                    _dl_start = time.time()
                     try:
                         if method(url, folder, cookie_file):
                             success = True
-                            # Success! Stop trying other methods
+                            try:
+                                from modules.link_grabber.intelligence import get_learning_system
+                                get_learning_system().record_download_performance(
+                                    _creator, platform, method.__name__,
+                                    True, time.time() - _dl_start)
+                            except Exception:
+                                pass
                             break
                         else:
-                            # Method returned False (failed) - continue to next method
+                            last_dl_error = f"method_returned_false:{method.__name__}"
                             if attempted_methods < len(methods):
-                                self.progress.emit(f"   ðŸ”„ Method failed, trying next method...")
+                                self.progress.emit("Trying next approach...")
                     except Exception as e:
-                        self.progress.emit(f"   âš ï¸ Method exception: {str(e)[:100]}")
+                        last_dl_error = str(e)[:200]
                         if attempted_methods < len(methods):
-                            self.progress.emit(f"   ðŸ”„ Continuing with next method...")
+                            self.progress.emit("Trying next approach...")
+                    try:
+                        from modules.link_grabber.intelligence import get_learning_system
+                        get_learning_system().record_download_performance(
+                            _creator, platform, method.__name__,
+                            False, time.time() - _dl_start, last_dl_error)
+                    except Exception:
+                        pass
+
+                # Recovery chain if all methods failed
+                if not success and not self.cancelled:
+                    try:
+                        from modules.shared.failure_classifier import classify_failure, is_auth_failure
+                        from modules.shared.recovery_chain import RecoveryChain
+                        from modules.shared.session_authority import get_session_authority
+                        _ft = classify_failure(last_dl_error, platform)
+                        _auth_triggered = is_auth_failure(_ft)
+
+                        # Auth-wall fallback: some methods fail with generic
+                        # "method_returned_false" while the browser session is
+                        # actually valid. In that case still trigger recovery.
+                        if not _auth_triggered:
+                            try:
+                                _sa = get_session_authority()
+                                _sess = _sa.get_session_status()
+                                _strict = _sa.get_login_status()
+                                if _sess.get(platform) or _strict.get(platform):
+                                    _auth_triggered = True
+                                    _ft = classify_failure("auth_wall_suspected", platform)
+                            except Exception:
+                                pass
+
+                        if _auth_triggered:
+                            self.progress.emit("Checking access...")
+                            # Pre-recovery: managed CDP fresh export
+                            try:
+                                from modules.shared.managed_chrome_session import (
+                                    MANAGED_CDP_ATTACH_FIRST,
+                                    get_managed_chrome_session,
+                                )
+                                if MANAGED_CDP_ATTACH_FIRST and platform in (
+                                    "instagram", "facebook", "tiktok",
+                                ):
+                                    _mgr = get_managed_chrome_session()
+                                    if _mgr.is_running():
+                                        _sa2 = get_session_authority()
+                                        _cdp_fresh = _sa2.force_browser_cookie_refresh(platform)
+                                        if _cdp_fresh and _cdp_fresh not in self._all_cookie_files:
+                                            self._all_cookie_files.insert(0, _cdp_fresh)
+                                            for method in methods[:2]:
+                                                try:
+                                                    if method(url, folder, _cdp_fresh):
+                                                        success = True
+                                                        break
+                                                except Exception:
+                                                    pass
+                            except ImportError:
+                                pass
+                            except Exception:
+                                pass
+                            if not success:
+                                _rc = RecoveryChain().attempt_recovery(platform, _ft)
+                                if _rc.cookie_path:
+                                    cookie_file = _rc.cookie_path
+                                    if cookie_file not in self._all_cookie_files:
+                                        self._all_cookie_files.insert(0, cookie_file)
+                                    for method in methods[:2]:
+                                        try:
+                                            if method(url, folder, cookie_file):
+                                                success = True
+                                                break
+                                        except Exception:
+                                            pass
+                    except ImportError:
+                        pass
+
+                # Final outcome: success or fail
                 if success:
                     self.success_count += 1
-                    self.progress.emit(f"âœ… [{processed}/{total}] Downloaded!")
+                    self.progress.emit(f"Downloaded [{processed}/{total}]")
                     self._mark_as_downloaded(url)
                     self._remove_from_source_txt(url, folder)
-                    # Timestamp tracking handled by history.json
                     self.video_complete.emit(url)
-                else:
-                    self.progress.emit(f"âŒ [{processed}/{total}] ALL METHODS FAILED")
-                    # Track failed URL with reason
+                elif not self.cancelled:
+                    self.progress.emit(f"Failed [{processed}/{total}]")
                     reason = "All download methods failed"
                     self.failed_urls.append((url, reason))
                 pct = int((processed / total) * 100)

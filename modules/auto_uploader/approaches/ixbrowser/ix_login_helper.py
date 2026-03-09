@@ -329,7 +329,22 @@ class IXBrowserLoginHelper:
                         break
 
                 if not password_field_activated:
-                    logger.error("[IXLogin] ✗ Failed to activate password field after 3 attempts")
+                    # Fallback: use Tab key to move from email field to password field
+                    logger.warning("[IXLogin] Image match failed — trying Tab key fallback")
+                    try:
+                        # Click back on email field area first to ensure focus
+                        if email_icon_location:
+                            pyautogui.click(email_icon_location[0] + 50, email_icon_location[1])
+                            time.sleep(0.3)
+                        pyautogui.press('tab')
+                        time.sleep(0.5)
+                        password_field_activated = True
+                        logger.info("[IXLogin] ✓ Password field activated via Tab key")
+                    except Exception as tab_err:
+                        logger.error("[IXLogin] Tab fallback failed: %s", tab_err)
+
+                if not password_field_activated:
+                    logger.error("[IXLogin] ✗ Failed to activate password field (image + Tab)")
                     time.sleep(2)
                     continue
 

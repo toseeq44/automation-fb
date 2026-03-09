@@ -18,13 +18,6 @@ from modules.config import get_config
 from modules.license import LicenseManager, sync_all_plans
 from modules.ui import LicenseActivationDialog
 
-# Import development mode settings
-try:
-    from dev_config import DEV_MODE, DEV_CONFIG
-except ImportError:
-    DEV_MODE = False
-    DEV_CONFIG = {}
-
 
 import os
 import shutil
@@ -121,17 +114,9 @@ def main():
     server_url = config.get('license.server_url', 'http://localhost:5000')
     license_manager = LicenseManager(server_url=server_url)
 
-    # 🔧 DEVELOPMENT MODE CHECK
-    if DEV_MODE:
-        logger.warning("⚠️  DEVELOPMENT MODE ENABLED - License checks bypassed!", "App")
-        logger.warning("⚠️  Set DEV_MODE = False in dev_config.py for production", "App")
-        is_valid = True
-        message = "Development Mode - License checks skipped"
-        license_info = DEV_CONFIG.get('mock_license_info', {})
-    else:
-        logger.info(f"License server: {server_url}", "License")
-        # Check license on startup
-        is_valid, message, license_info = license_manager.validate_license()
+    logger.info(f"License server: {server_url}", "License")
+    # Production enforcement: always validate license on startup.
+    is_valid, message, license_info = license_manager.validate_license()
 
     if not is_valid:
         logger.warning(f"License validation failed: {message}", "License")

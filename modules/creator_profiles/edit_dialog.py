@@ -4,15 +4,33 @@ Edit Creator Settings modal — all labels and messages in English.
 """
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QFont, QColor
 from PyQt5.QtWidgets import (
     QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
     QFormLayout, QFrame, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QScrollArea, QSlider, QSpinBox, QVBoxLayout, QWidget,
+    QPushButton, QScrollArea, QSlider, QSpinBox, QToolButton, QStyle,
+    QVBoxLayout, QWidget,
 )
-from PyQt5.QtCore import Qt
-
 from .config_manager import CreatorConfig
+
+_WM_FONT_PRESETS = [
+    "Arial",
+    "Verdana",
+    "Times New Roman",
+    "Georgia",
+    "Trebuchet MS",
+]
+
+_WM_COLOR_PRESETS = [
+    ("White", "#FFFFFF"),
+    ("Black", "#000000"),
+    ("Cyan", "#00D4FF"),
+    ("Gold", "#DEBF07"),
+    ("Red", "#FF4D4D"),
+    ("Lime", "#7CFC00"),
+    ("Orange", "#FFA500"),
+    ("Purple", "#B388FF"),
+]
 
 
 class EditCreatorDialog(QDialog):
@@ -138,7 +156,7 @@ class EditCreatorDialog(QDialog):
         dup_row = QHBoxLayout()
         self.dup_btn = QPushButton("ON")
         self.dup_btn.setCheckable(True)
-        self.dup_btn.setFixedWidth(76)
+        self.dup_btn.setFixedWidth(86)
         self.dup_btn.clicked.connect(lambda: self._apply_toggle_style(self.dup_btn))
         dup_note = QLabel(
             "ON  =  Tiered scan (Latest → Popular → Weekly) + skip already downloaded\n"
@@ -161,7 +179,7 @@ class EditCreatorDialog(QDialog):
         pop_row = QHBoxLayout()
         self.pop_btn = QPushButton("ON")
         self.pop_btn.setCheckable(True)
-        self.pop_btn.setFixedWidth(76)
+        self.pop_btn.setFixedWidth(86)
         self.pop_btn.clicked.connect(lambda: self._apply_toggle_style(self.pop_btn))
         pop_note = QLabel("Use popular videos if latest/week backlog cannot fill N.")
         pop_note.setStyleSheet(
@@ -181,7 +199,7 @@ class EditCreatorDialog(QDialog):
         rnd_row = QHBoxLayout()
         self.rnd_btn = QPushButton("OFF")
         self.rnd_btn.setCheckable(True)
-        self.rnd_btn.setFixedWidth(76)
+        self.rnd_btn.setFixedWidth(86)
         self.rnd_btn.clicked.connect(lambda: self._apply_toggle_style(self.rnd_btn))
         rnd_note = QLabel("Shuffle candidates before download.")
         rnd_note.setStyleSheet(
@@ -201,7 +219,7 @@ class EditCreatorDialog(QDialog):
         keep_row = QHBoxLayout()
         self.keep_btn = QPushButton("ON")
         self.keep_btn.setCheckable(True)
-        self.keep_btn.setFixedWidth(76)
+        self.keep_btn.setFixedWidth(86)
         self.keep_btn.clicked.connect(lambda: self._apply_toggle_style(self.keep_btn))
         keep_note = QLabel("ON = keep original video, OFF = delete original after edit.")
         keep_note.setStyleSheet(
@@ -234,7 +252,7 @@ class EditCreatorDialog(QDialog):
         wm_en_row = QHBoxLayout()
         self.wm_enable_btn = QPushButton("OFF")
         self.wm_enable_btn.setCheckable(True)
-        self.wm_enable_btn.setFixedWidth(76)
+        self.wm_enable_btn.setFixedWidth(86)
         self.wm_enable_btn.clicked.connect(lambda: self._apply_toggle_style(self.wm_enable_btn))
         self.wm_enable_btn.clicked.connect(self._on_wm_enable_change)
         wm_en_note = QLabel("Enable watermark on all downloaded/split videos.")
@@ -254,7 +272,7 @@ class EditCreatorDialog(QDialog):
         txt_en_row = QHBoxLayout()
         self.wm_txt_enable_btn = QPushButton("OFF")
         self.wm_txt_enable_btn.setCheckable(True)
-        self.wm_txt_enable_btn.setFixedWidth(76)
+        self.wm_txt_enable_btn.setFixedWidth(86)
         self.wm_txt_enable_btn.clicked.connect(lambda: self._apply_toggle_style(self.wm_txt_enable_btn))
         txt_en_row.addWidget(self.wm_txt_enable_btn); txt_en_row.addStretch()
         txt_en_w = QWidget(); txt_en_w.setStyleSheet("background:transparent; border:none;"); txt_en_w.setLayout(txt_en_row)
@@ -281,15 +299,16 @@ class EditCreatorDialog(QDialog):
         op_w = QWidget(); op_w.setStyleSheet("background:transparent; border:none;"); op_w.setLayout(op_row)
         wm_form.addRow("  Opacity:", op_w)
 
-        self.wm_txt_font_edit = QLineEdit()
-        self.wm_txt_font_edit.setPlaceholderText("Arial")
-        self.wm_txt_font_edit.setFixedWidth(140)
+        self.wm_txt_font_edit = QComboBox()
+        self.wm_txt_font_edit.setEditable(True)
+        self.wm_txt_font_edit.setMinimumWidth(160)
+        self._init_wm_font_presets(self.wm_txt_font_edit)
         wm_form.addRow("  Font Family:", self.wm_txt_font_edit)
 
-        self.wm_txt_color_edit = QLineEdit()
-        self.wm_txt_color_edit.setPlaceholderText("#FFFFFF")
-        self.wm_txt_color_edit.setFixedWidth(100)
-        wm_form.addRow("  Font Color:", self.wm_txt_color_edit)
+        self.wm_txt_color_preset_cb = QComboBox()
+        self.wm_txt_color_preset_cb.setMinimumWidth(248)
+        self._init_wm_color_presets(self.wm_txt_color_preset_cb)
+        wm_form.addRow("  Font Color:", self.wm_txt_color_preset_cb)
 
         self.wm_txt_size_sp = QSpinBox()
         self.wm_txt_size_sp.setRange(8, 200)
@@ -307,6 +326,37 @@ class EditCreatorDialog(QDialog):
         self.wm_txt_style_cb.setFixedWidth(100)
         wm_form.addRow("  Font Style:", self.wm_txt_style_cb)
 
+        self.wm_txt_render_style_cb = QComboBox()
+        self.wm_txt_render_style_cb.addItems(
+            ["normal", "outline_hollow", "outline_shadow"]
+        )
+        self.wm_txt_render_style_cb.setFixedWidth(140)
+        wm_form.addRow("  Render Style:", self.wm_txt_render_style_cb)
+
+        self.wm_txt_shadow_opacity_sl = QSlider(Qt.Horizontal)
+        self.wm_txt_shadow_opacity_sl.setRange(0, 100)
+        self.wm_txt_shadow_opacity_sl.setValue(75)
+        self.wm_txt_shadow_opacity_lbl = QLabel("75%")
+        self.wm_txt_shadow_opacity_lbl.setStyleSheet(
+            "color:white; background:transparent; border:none; min-width:32px;"
+        )
+        self.wm_txt_shadow_opacity_sl.valueChanged.connect(
+            lambda v: self.wm_txt_shadow_opacity_lbl.setText(f"{v}%")
+        )
+        sop_row = QHBoxLayout()
+        sop_row.addWidget(self.wm_txt_shadow_opacity_sl)
+        sop_row.addWidget(self.wm_txt_shadow_opacity_lbl)
+        sop_w = QWidget()
+        sop_w.setStyleSheet("background:transparent; border:none;")
+        sop_w.setLayout(sop_row)
+        wm_form.addRow("  Shadow Opacity:", sop_w)
+
+        self.wm_txt_shadow_offset_sp = QSpinBox()
+        self.wm_txt_shadow_offset_sp.setRange(0, 50)
+        self.wm_txt_shadow_offset_sp.setValue(2)
+        self.wm_txt_shadow_offset_sp.setFixedWidth(80)
+        wm_form.addRow("  Shadow Offset:", self.wm_txt_shadow_offset_sp)
+
         self.wm_txt_spacing_sp = QSpinBox()
         self.wm_txt_spacing_sp.setRange(0, 50)
         self.wm_txt_spacing_sp.setValue(0)
@@ -321,7 +371,7 @@ class EditCreatorDialog(QDialog):
         logo_en_row = QHBoxLayout()
         self.wm_logo_enable_btn = QPushButton("OFF")
         self.wm_logo_enable_btn.setCheckable(True)
-        self.wm_logo_enable_btn.setFixedWidth(76)
+        self.wm_logo_enable_btn.setFixedWidth(86)
         self.wm_logo_enable_btn.clicked.connect(lambda: self._apply_toggle_style(self.wm_logo_enable_btn))
         logo_en_row.addWidget(self.wm_logo_enable_btn); logo_en_row.addStretch()
         logo_en_w = QWidget(); logo_en_w.setStyleSheet("background:transparent; border:none;"); logo_en_w.setLayout(logo_en_row)
@@ -330,8 +380,15 @@ class EditCreatorDialog(QDialog):
         logo_path_row = QHBoxLayout()
         self.wm_logo_path_edit = QLineEdit()
         self.wm_logo_path_edit.setPlaceholderText("Leave blank to auto-detect logo.* in creator folder")
-        logo_browse_btn = QPushButton("Browse")
-        logo_browse_btn.setFixedWidth(70)
+        logo_browse_btn = QToolButton()
+        logo_browse_btn.setIcon(self.style().standardIcon(QStyle.SP_DirOpenIcon))
+        logo_browse_btn.setToolTip("Select logo file")
+        logo_browse_btn.setAutoRaise(True)
+        logo_browse_btn.setFixedSize(30, 28)
+        logo_browse_btn.setStyleSheet(
+            "QToolButton { background:#2a2410; border:1px solid rgba(222,191,7,0.7); border-radius:4px; }"
+            "QToolButton:hover { background:#3a3216; border-color:#DEBF07; }"
+        )
         logo_browse_btn.clicked.connect(self._browse_logo)
         logo_path_row.addWidget(self.wm_logo_path_edit)
         logo_path_row.addWidget(logo_browse_btn)
@@ -354,6 +411,8 @@ class EditCreatorDialog(QDialog):
         lop_row = QHBoxLayout(); lop_row.addWidget(self.wm_logo_opacity_sl); lop_row.addWidget(self.wm_logo_opacity_lbl)
         lop_w = QWidget(); lop_w.setStyleSheet("background:transparent; border:none;"); lop_w.setLayout(lop_row)
         wm_form.addRow("  Opacity:", lop_w)
+
+        self._set_color_preset_from_hex(self.wm_txt_color_preset_cb, "#FFFFFF")
 
         outer.addLayout(wm_form)
         outer.addStretch(1)  # push content to top inside scroll
@@ -390,6 +449,37 @@ class EditCreatorDialog(QDialog):
         )
         return d
 
+    @staticmethod
+    def _init_wm_font_presets(combo: QComboBox):
+        seen = set()
+        for font_name in _WM_FONT_PRESETS:
+            key = font_name.lower()
+            if key in seen:
+                continue
+            combo.addItem(font_name)
+            seen.add(key)
+        combo.setCurrentText("Arial")
+
+    @staticmethod
+    def _init_wm_color_presets(combo: QComboBox):
+        for name, hex_color in _WM_COLOR_PRESETS:
+            combo.addItem(f"{name} ({hex_color})", hex_color)
+            idx = combo.count() - 1
+            bg = QColor(hex_color)
+            combo.setItemData(idx, bg, Qt.BackgroundRole)
+            luminance = (bg.red() * 299 + bg.green() * 587 + bg.blue() * 114) / 1000
+            fg = QColor("#111111") if luminance > 150 else QColor("#f5f7ff")
+            combo.setItemData(idx, fg, Qt.ForegroundRole)
+
+    @staticmethod
+    def _set_color_preset_from_hex(combo: QComboBox, hex_color: str):
+        wanted = (hex_color or "").strip().upper()
+        for i in range(combo.count()):
+            val = str(combo.itemData(i) or "").strip().upper()
+            if val == wanted:
+                combo.setCurrentIndex(i)
+                return
+
     def _load(self):
         c = self.config
         self.url_edit.setText(c.creator_url)
@@ -423,13 +513,20 @@ class EditCreatorDialog(QDialog):
         if txt_pos in pos_list:
             self.wm_txt_pos_cb.setCurrentText(txt_pos)
         self.wm_txt_opacity_sl.setValue(int(wt.get("opacity", 80)))
-        self.wm_txt_font_edit.setText(wt.get("font_family", "Arial"))
-        self.wm_txt_color_edit.setText(wt.get("font_color", "#FFFFFF"))
+        self.wm_txt_font_edit.setCurrentText(wt.get("font_family", "Arial"))
+        font_color = wt.get("font_color", "#FFFFFF")
+        self._set_color_preset_from_hex(self.wm_txt_color_preset_cb, font_color)
         self.wm_txt_size_sp.setValue(int(wt.get("font_size", 24)))
         fw = wt.get("font_weight", "bold")
         self.wm_txt_weight_cb.setCurrentText(fw if fw in ["normal", "bold"] else "bold")
         fs = wt.get("font_style", "normal")
         self.wm_txt_style_cb.setCurrentText(fs if fs in ["normal", "italic"] else "normal")
+        rs = str(wt.get("render_style", "normal") or "normal").strip().lower()
+        self.wm_txt_render_style_cb.setCurrentText(
+            rs if rs in ["normal", "outline_hollow", "outline_shadow"] else "normal"
+        )
+        self.wm_txt_shadow_opacity_sl.setValue(int(wt.get("shadow_opacity", 75)))
+        self.wm_txt_shadow_offset_sp.setValue(int(wt.get("shadow_offset", 2)))
         self.wm_txt_spacing_sp.setValue(int(wt.get("letter_spacing", 0)))
 
         wl = c.watermark_logo
@@ -453,12 +550,12 @@ class EditCreatorDialog(QDialog):
         btn.setText("ON" if on else "OFF")
         btn.setStyleSheet(
             ("QPushButton { background:#1a5c1a; color:white; font-weight:bold;"
-             " border-radius:4px; padding:5px 14px; border:none; }"
-             "QPushButton:hover { background:#236e23; }")
+             " border-radius:4px; padding:6px 16px; border:1px solid rgba(67,181,129,0.75); }"
+             "QPushButton:hover { background:#236e23; border-color:#43B581; }")
             if on else
-            ("QPushButton { background:#2a2a2a; color:#777; font-weight:bold;"
-             " border-radius:4px; padding:5px 14px; border:none; }"
-             "QPushButton:hover { background:#333; }")
+            ("QPushButton { background:#2a2a2a; color:#9AA6B2; font-weight:bold;"
+             " border-radius:4px; padding:6px 16px; border:1px solid rgba(255,255,255,0.22); }"
+             "QPushButton:hover { background:#333; border-color:rgba(255,255,255,0.35); }")
         )
 
     def _on_wm_enable_change(self):
@@ -491,11 +588,14 @@ class EditCreatorDialog(QDialog):
                 "text":           self.wm_text_edit.text().strip(),
                 "position":       self.wm_txt_pos_cb.currentText(),
                 "opacity":        self.wm_txt_opacity_sl.value(),
-                "font_family":    self.wm_txt_font_edit.text().strip() or "Arial",
-                "font_color":     self.wm_txt_color_edit.text().strip() or "#FFFFFF",
+                "font_family":    self.wm_txt_font_edit.currentText().strip() or "Arial",
+                "font_color":     str(self.wm_txt_color_preset_cb.currentData() or "#FFFFFF"),
                 "font_size":      self.wm_txt_size_sp.value(),
                 "font_weight":    self.wm_txt_weight_cb.currentText(),
                 "font_style":     self.wm_txt_style_cb.currentText(),
+                "render_style":   self.wm_txt_render_style_cb.currentText(),
+                "shadow_opacity": self.wm_txt_shadow_opacity_sl.value(),
+                "shadow_offset":  self.wm_txt_shadow_offset_sp.value(),
                 "letter_spacing": self.wm_txt_spacing_sp.value(),
             },
             "watermark_logo": {

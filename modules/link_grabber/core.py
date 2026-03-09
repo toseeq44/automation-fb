@@ -2487,6 +2487,9 @@ def _method_instaloader(url: str, platform_key: str, cookie_file: str = None, ma
                         'date': post.date_utc.strftime('%Y%m%d') if post.date_utc else '00000000'
                     })
 
+                if not error_msg:
+                    last_method_error = f"0_links:{method_id}"
+
                     # IP PROTECTION: Add delay between post fetches to avoid rate limiting
                     # Instagram allows ~1-2 requests per second, so we use 1.5-3 second delay
                     if idx > 1 and idx % 5 == 0:  # Every 5 posts, add a longer delay
@@ -3945,8 +3948,14 @@ def extract_links_intelligent(
         use_instaloader = bool(options.get('use_instaloader', False))
         interactive_login_fallback = bool(options.get('interactive_login_fallback', True))
         manual_login_wait_seconds = int(options.get('manual_login_wait_seconds', 90) or 90)
+        managed_profile_only = bool(options.get('managed_profile_only', False))
         cookie_browser = options.get('cookie_browser')  # "chrome", "firefox", "edge", or None
         explicit_browser_mode = bool(cookie_browser)
+        if managed_profile_only:
+            # CreatorProfile-safe mode: avoid touching local user browser profiles.
+            cookie_browser = None
+            explicit_browser_mode = False
+            interactive_login_fallback = False
         url = _normalize_source_url(url, platform_key)
         creator = _extract_creator_from_url(url, platform_key)
 
@@ -3956,6 +3965,25 @@ def extract_links_intelligent(
         # Cookie handling: browser OR file
         cookie_file = None
         temp_cookie_files: typing.List[str] = []
+        _auth_source_id: typing.Optional[str] = None  # tracks which source provided cookies
+
+        # ── Managed-profile auth fallback chain ───────────────────────
+        # When running in CreatorProfile mode (managed_profile_only),
+        # use the AuthFallbackChain to resolve cookies with proper
+        # priority, cooldown awareness, and source memory.
+        if managed_profile_only:
+            try:
+                from modules.shared.session_authority import AuthFallbackChain
+                _chain = AuthFallbackChain()
+                cookie_file, _auth_source_id = _chain.resolve_cookie(
+                    platform_key, creator=creator,
+                )
+                if cookie_file and progress_callback:
+                    progress_callback(f"Cookies ready ({Path(cookie_file).name})")
+                elif not cookie_file and progress_callback:
+                    progress_callback("No authenticated cookies available. Trying API methods...")
+            except Exception as _chain_err:
+                logging.debug("[AuthFallbackChain] init/resolve failed: %s", _chain_err)
 
         browser_cookie_extract_failed = False
         if cookie_browser:
@@ -3984,13 +4012,13 @@ def extract_links_intelligent(
                 explicit_browser_mode = False
                 cookie_browser = None
 
-        if not cookie_file and not explicit_browser_mode:
+        if not cookie_file and not explicit_browser_mode and not managed_profile_only:
             cookie_file = _find_cookie_file(cookies_dir, platform_key)
             if cookie_file and progress_callback:
                 progress_callback(f"Cookie source: Saved file ({Path(cookie_file).name})")
 
         # If still no cookies â†’ auto-run Workflow 1 (smart browser extraction)
-        if not cookie_file and not explicit_browser_mode:
+        if not cookie_file and not explicit_browser_mode and not managed_profile_only:
             if progress_callback:
                 progress_callback("No saved cookies found. Running Workflow 1 (smart browser detection)...")
             extracted = _extract_browser_cookies_db_copy(
@@ -4002,7 +4030,7 @@ def extract_links_intelligent(
                 temp_cookie_files.append(extracted)
                 cookie_file = extracted
 
-        if not cookie_file and not explicit_browser_mode:
+        if not cookie_file and not explicit_browser_mode and not managed_profile_only:
             extracted = _extract_browser_cookies(platform_key)
             if extracted:
                 temp_cookie_files.append(extracted)
@@ -4030,6 +4058,7 @@ def extract_links_intelligent(
         entries: typing.List[dict] = []
         seen_normalized: typing.Set[str] = set()
         pre_successful_method: typing.Optional[str] = None
+        successful_method_id: str = ""
         auth_manager = None
         if ChromiumAuthManager is not None:
             try:
@@ -4246,90 +4275,151 @@ def extract_links_intelligent(
                         "Layer 2: Using cookies from browser profile for library methods..."
                     )
 
+        # ── Managed CDP attach-first path ──────────────────────────────
+        # When feature flag is ON, try extracting via the managed Chrome CDP
+        # session BEFORE the normal method chain.  This uses the real
+        # logged-in Chrome session and requires no cookies.
+        if not entries:
+            try:
+                from modules.shared.managed_chrome_session import (
+                    MANAGED_CDP_ATTACH_FIRST,
+                    extract_links_via_managed_cdp,
+                )
+                if MANAGED_CDP_ATTACH_FIRST:
+                    if platform_key == "tiktok":
+                        logging.info(
+                            "[TikTokPath] CDP attach-first: attempting attach-only "
+                            "(no browser launch) for %s", url[:80],
+                        )
+                    cdp_entries = extract_links_via_managed_cdp(
+                        url=url,
+                        platform_key=platform_key,
+                        max_videos=max_videos,
+                        progress_callback=progress_callback,
+                        expected_count=expected_count or 0,
+                    )
+                    if not cdp_entries and platform_key == "tiktok":
+                        logging.info(
+                            "[TikTokPath][ManagedCDP-Fallback] CDP returned 0 links "
+                            "— falling back to normal extraction chain"
+                        )
+                    for entry in (cdp_entries or []):
+                        if max_videos > 0 and len(entries) >= max_videos:
+                            break
+                        url_value = entry.get('url')
+                        if not url_value:
+                            continue
+                        normalized = _normalize_url(url_value)
+                        if normalized in seen_normalized:
+                            continue
+                        seen_normalized.add(normalized)
+                        entries.append(entry)
+                    if entries:
+                        pre_successful_method = "Managed Chrome CDP"
+                        successful_method_id = "managed_cdp_attach"
+                        if progress_callback:
+                            progress_callback(f"Found {len(entries)} links (managed session)")
+            except ImportError:
+                pass
+            except Exception as _cdp_err:
+                logging.debug("[ManagedCDP] attach-first failed: %s", _cdp_err)
+
         # Define all available methods
         # PRIORITY ORDER: Fast API methods first, browser methods as fallback
         all_methods = [
             # â”€â”€ yt-dlp methods (YouTube, TikTok, Facebook â€” NOT Instagram) â”€â”€
             ("Method 0: yt-dlp primary (Dual API + Proxy + UA Rotation)",
              lambda: _method_ytdlp_primary(url, platform_key, cookie_file, max_videos, cookie_browser, active_proxy),
+             "ytdlp_primary",
              use_enhancements),
 
             ("Method 2: yt-dlp --get-url",
              lambda: _method_ytdlp_get_url(url, platform_key, cookie_file, max_videos, cookie_browser, active_proxy),
+             "ytdlp_get_url",
              True),
 
             ("Method 1: yt-dlp --dump-json (with dates)",
              lambda: _method_ytdlp_dump_json(url, platform_key, cookie_file, max_videos, cookie_browser, active_proxy),
+             "ytdlp_dump_json",
              True),
 
             ("Method 3: yt-dlp with retries",
              lambda: _method_ytdlp_with_retry(url, platform_key, cookie_file, max_videos, cookie_browser, active_proxy),
+             "ytdlp_with_retry",
              True),
 
             # â”€â”€ gallery-dl (Instagram, TikTok fallback) â”€â”€
             ("Method 6: gallery-dl",
              lambda: _method_gallery_dl(url, platform_key, cookie_file, active_proxy),
+             "gallery_dl",
              platform_key in ['instagram', 'tiktok']),
 
             # â”€â”€ Instagram-specific API methods â”€â”€
             ("Method 6b: Instagram GraphQL API (cookies)",
              lambda: _method_instagram_graphql(url, platform_key, cookie_file, max_videos, active_proxy),
+             "instagram_graphql",
              platform_key == 'instagram'),
 
             ("Method 5: Instaloader",
              lambda: _method_instaloader(url, platform_key, cookie_file, max_videos, active_proxy),
+             "instaloader",
              platform_key == 'instagram' and use_instaloader),
 
             # â”€â”€ Facebook-specific JSON extraction â”€â”€
             ("Method C: Facebook Page JSON (c_user+xs cookies -> video links)",
              lambda: _method_facebook_json(url, platform_key, cookie_file, max_videos, active_proxy),
+             "facebook_json",
              platform_key == 'facebook'),
 
             # â”€â”€ Browser methods (all platforms) â”€â”€
             ("Method B: Instagram Mobile API (sessionid -> direct JSON)",
              lambda: _method_instagram_mobile_api(url, platform_key, cookie_file, max_videos, active_proxy),
+             "instagram_mobile_api",
              platform_key == 'instagram'),
 
             ("Method D: Attach Selenium to running Chrome (CDP port)",
              lambda: _method_selenium_cdp_attach(url, platform_key, max_videos, progress_callback, expected_count or 0),
-             platform_key in {'instagram', 'facebook', 'tiktok', 'youtube'}),
+             "selenium_cdp_attach",
+             (platform_key in {'instagram', 'facebook', 'tiktok', 'youtube'}) and (not managed_profile_only)),
 
             ("Method A: Selenium (Chrome user-data-dir profile)",
              lambda: _method_selenium_profile(url, platform_key, cookies_dir, max_videos, progress_callback),
-             platform_key in {'instagram', 'facebook'}),
+             "selenium_profile",
+             (platform_key in {'instagram', 'facebook'}) and (not managed_profile_only)),
 
             ("Method 7: Playwright (Stealth + Proxy + Human Behavior)",
              lambda: _method_playwright(url, platform_key, cookie_file, active_proxy, max_videos),
+             "playwright",
              platform_key in ['tiktok', 'instagram', 'youtube', 'facebook']),
 
             ("Method 8: Selenium Headless (Proxy + Cookies + Stealth)",
              lambda: _method_selenium(url, platform_key, max_videos, cookie_file, active_proxy, progress_callback, expected_count),
-             True),
+             "selenium_headless",
+             not managed_profile_only),
         ]
 
         # Filter allowed methods
-        available_methods = [(name, func) for name, func, allowed in all_methods if allowed]
+        available_methods = [(name, func, mid) for name, func, mid, allowed in all_methods if allowed]
 
         # INTELLIGENCE: Check if we have learning data for this creator
-        best_method_name = None
+        best_method_id = None
         if learning_system:
-            best_method_name = learning_system.get_best_method(creator, platform_key)
+            best_method_id = learning_system.get_best_method(creator, platform_key)
 
-            if best_method_name and progress_callback:
-                progress_callback(f"Ã°Å¸Â§Â  Learning cache found for @{creator}")
-                progress_callback(f"Ã°Å¸Å½Â¯ Best method: {best_method_name}")
+            if best_method_id and progress_callback:
+                progress_callback("Using preferred approach...")
 
         # Reorder methods to try best one first
-        if best_method_name:
+        if best_method_id:
             # Move best method to front
             reordered = []
             best_method_func = None
 
-            for name, func in available_methods:
-                if name == best_method_name:
-                    best_method_func = (name, func)
+            for name, func, mid in available_methods:
+                if mid == best_method_id:
+                    best_method_func = (name, func, mid)
                 else:
-                    reordered.append((name, func))
+                    reordered.append((name, func, mid))
 
             if best_method_func:
                 available_methods = [best_method_func] + reordered
@@ -4343,54 +4433,51 @@ def extract_links_intelligent(
         #   7 â†’ Playwright headless
         #   6b â†’ Instagram GraphQL Web API
         if platform_key == 'instagram':
-            _INSTAGRAM_BROWSER_METHODS = {
-                "Method B: Instagram Mobile API (sessionid â†’ direct JSON)",
-                "Method D: Attach Selenium to running Chrome (CDP port)",
-                "Method A: Existing Browser Session (Chrome user-data-dir)",
-                "Method 8: Selenium Headless (ENHANCED: Proxy + Cookies + Stealth)",
-                "Method 7: Playwright (ENHANCED: Stealth + Proxy + Human Behavior)",
-                "Method 6b: Instagram Web API (cookies)",
+            _INSTAGRAM_METHOD_IDS = {
+                "instagram_mobile_api",
+                "selenium_cdp_attach",
+                "selenium_profile",
+                "selenium_headless",
+                "playwright",
+                "instagram_graphql",
             }
             insta_filtered = [
-                (name, func) for name, func in available_methods
-                if name in _INSTAGRAM_BROWSER_METHODS
+                (name, func, mid) for name, func, mid in available_methods
+                if mid in _INSTAGRAM_METHOD_IDS
             ]
             if insta_filtered:
                 if progress_callback:
-                    progress_callback(
-                        "Instagram: yt-dlp extractor is broken. Using Mobile API + CDP + Selenium directly."
-                    )
+                    progress_callback("Scanning...")
                 available_methods = insta_filtered
-            # Priority order
+            # Priority order by method_id
             _insta_order = [
-                "Method B: Instagram Mobile API (sessionid â†’ direct JSON)",
-                "Method D: Attach Selenium to running Chrome (CDP port)",
-                "Method A: Existing Browser Session (Chrome user-data-dir)",
-                "Method 8: Selenium Headless (ENHANCED: Proxy + Cookies + Stealth)",
-                "Method 7: Playwright (ENHANCED: Stealth + Proxy + Human Behavior)",
-                "Method 6b: Instagram Web API (cookies)",
+                "instagram_mobile_api",
+                "selenium_cdp_attach",
+                "selenium_profile",
+                "selenium_headless",
+                "playwright",
+                "instagram_graphql",
             ]
-            _order_map = {n: i for i, n in enumerate(_insta_order)}
-            available_methods = sorted(available_methods, key=lambda x: _order_map.get(x[0], 99))
+            _order_map = {mid: i for i, mid in enumerate(_insta_order)}
+            available_methods = sorted(available_methods, key=lambda x: _order_map.get(x[2], 99))
 
         # Facebook: put our new fast methods (JSON extraction + CDP + user-data-dir) first,
         # then Selenium/Playwright, then yt-dlp as last resort.
         elif platform_key == 'facebook':
-            priority_names = [
-                "Method C: Facebook Page JSON (c_user+xs cookies â†’ video links)",
-                "Method D: Attach Selenium to running Chrome (CDP port)",
-                "Method A: Existing Browser Session (Chrome user-data-dir)",
-                "Method 8: Selenium Headless (ENHANCED: Proxy + Cookies + Stealth)",
-                "Method 7: Playwright (ENHANCED: Stealth + Proxy + Human Behavior)",
-                "Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)",
-                "Method 1: yt-dlp --dump-json (with dates)",
-                "Method 3: yt-dlp with retries",
-                "Method 4: yt-dlp with user agent",
+            _fb_priority_ids = [
+                "facebook_json",
+                "selenium_cdp_attach",
+                "selenium_profile",
+                "selenium_headless",
+                "playwright",
+                "ytdlp_get_url",
+                "ytdlp_dump_json",
+                "ytdlp_with_retry",
             ]
-            priority_map = {name: idx for idx, name in enumerate(priority_names)}
+            _fb_map = {mid: idx for idx, mid in enumerate(_fb_priority_ids)}
             available_methods = sorted(
                 available_methods,
-                key=lambda item: priority_map.get(item[0], 999),
+                key=lambda item: _fb_map.get(item[2], 999),
             )
 
         # Facebook profile URLs are often blocked/unsupported via plain yt-dlp listing.
@@ -4414,27 +4501,28 @@ def extract_links_intelligent(
         if fb_profile_shape:
             if progress_callback:
                 progress_callback("Facebook profile URL detected; prioritizing browser extraction methods.")
-            browser_method_names = {
-                "Method 8: Selenium Headless (ENHANCED: Proxy + Cookies + Stealth)",
-                "Method 7: Playwright (ENHANCED: Stealth + Proxy + Human Behavior)",
-            }
-            filtered = [(name, func) for name, func in available_methods if name in browser_method_names]
+            _fb_browser_ids = {"selenium_headless", "playwright"}
+            filtered = [(name, func, mid) for name, func, mid in available_methods if mid in _fb_browser_ids]
             if filtered:
                 available_methods = filtered
 
         # Try methods
         successful_method = pre_successful_method
+        # Preserve successful_method_id if already set by managed CDP pre-path
+        if not successful_method_id:
+            successful_method_id = ""
+        last_method_error = ""
         if entries:
             successful_method = successful_method or "Existing Browser Session"
             if not exhaustive_mode:
                 available_methods = []
 
-        for method_name, method_func in available_methods:
+        for _idx, (method_name, method_func, method_id) in enumerate(available_methods):
             if max_videos > 0 and len(entries) >= max_videos:
                 break
 
             if progress_callback:
-                progress_callback(f"Ã°Å¸â€â€ž Trying: {method_name}")
+                progress_callback("Scanning...")
 
             start_time = time.time()
             method_entries = []
@@ -4444,6 +4532,7 @@ def extract_links_intelligent(
                 method_entries = method_func()
             except Exception as e:
                 error_msg = str(e)[:200]
+                last_method_error = error_msg
                 if progress_callback:
                     progress_callback(f"Ã¢Å¡Â Ã¯Â¸Â {method_name} failed: {error_msg[:100]}")
 
@@ -4473,7 +4562,7 @@ def extract_links_intelligent(
                 learning_system.record_performance(
                     creator,
                     platform_key,
-                    method_name,
+                    method_id,
                     success,
                     added,
                     time_taken,
@@ -4482,8 +4571,9 @@ def extract_links_intelligent(
 
             if added > 0:
                 successful_method = method_name
+                successful_method_id = method_id
                 if progress_callback:
-                    progress_callback(f"Ã¢Å“â€¦ {method_name} Ã¢â€ â€™ {added} links in {time_taken:.1f}s")
+                    progress_callback(f"Found {added} links")
 
                 if target_count > 0 and len(entries) >= target_count:
                     if progress_callback:
@@ -4497,19 +4587,18 @@ def extract_links_intelligent(
                     progress_callback(f"Ã¢Å¡Â Ã¯Â¸Â {method_name} Ã¢â€ â€™ 0 links")
 
                     # If this was the learned "best" method and it failed, inform user we'll try others
-                    if method_name == best_method_name and best_method_name:
-                        progress_callback(f"   Ã°Å¸â€â€ž Best method didn't work, continuing with other methods...")
+                    if method_id == best_method_id and best_method_id:
+                        progress_callback("Trying other approaches...")
 
                 # ============================================================
                 # IP PROTECTION: Mandatory delay between failed method attempts
                 # This prevents rapid-fire requests that could trigger IP blocking
                 # ============================================================
                 # Check if there are more methods to try (don't delay after last method)
-                current_index = available_methods.index((method_name, method_func))
-                if current_index < len(available_methods) - 1:
+                if _idx < len(available_methods) - 1:
                     delay = random.uniform(2.0, 4.0)
                     if progress_callback:
-                        progress_callback(f"Ã¢ÂÂ³ IP Protection: Waiting {delay:.1f}s before next method...")
+                        progress_callback(f"Waiting {delay:.1f}s...")
                     time.sleep(delay)
 
         # â”€â”€ Step 2.3 Tab Fallback: if primary tab yielded 0 results, try others â”€
@@ -4616,27 +4705,47 @@ def extract_links_intelligent(
 
             # Instagram: yt-dlp is officially broken â€” only use browser methods in retry
             if platform_key == 'instagram':
-                no_proxy_methods = [
-                    ("Method 8: Selenium Headless (ENHANCED: Proxy + Cookies + Stealth)",
-                     lambda: _method_selenium(url, platform_key, max_videos, cookie_file, None, progress_callback, expected_count)),
-                    ("Method 7: Playwright (ENHANCED: Stealth + Proxy + Human Behavior)",
-                     lambda: _method_playwright(url, platform_key, cookie_file, None, max_videos)),
-                    ("Method 6b: Instagram Web API (cookies)",
-                     lambda: _method_instagram_graphql(url, platform_key, cookie_file, max_videos, None)),
-                ]
+                if managed_profile_only:
+                    no_proxy_methods = [
+                        ("Method 7: Playwright (ENHANCED: Stealth + Proxy + Human Behavior)",
+                         lambda: _method_playwright(url, platform_key, cookie_file, None, max_videos)),
+                        ("Method 6b: Instagram Web API (cookies)",
+                         lambda: _method_instagram_graphql(url, platform_key, cookie_file, max_videos, None)),
+                    ]
+                else:
+                    no_proxy_methods = [
+                        ("Method 8: Selenium Headless (ENHANCED: Proxy + Cookies + Stealth)",
+                         lambda: _method_selenium(url, platform_key, max_videos, cookie_file, None, progress_callback, expected_count)),
+                        ("Method 7: Playwright (ENHANCED: Stealth + Proxy + Human Behavior)",
+                         lambda: _method_playwright(url, platform_key, cookie_file, None, max_videos)),
+                        ("Method 6b: Instagram Web API (cookies)",
+                         lambda: _method_instagram_graphql(url, platform_key, cookie_file, max_videos, None)),
+                    ]
             else:
-                no_proxy_methods = [
-                    ("Method 8: Selenium Headless (ENHANCED: Proxy + Cookies + Stealth)",
-                     lambda: _method_selenium(url, platform_key, max_videos, cookie_file, None, progress_callback, expected_count)),
-                    ("Method 7: Playwright (ENHANCED: Stealth + Proxy + Human Behavior)",
-                     lambda: _method_playwright(url, platform_key, cookie_file, None, max_videos)),
-                    ("Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)",
-                     lambda: _method_ytdlp_get_url(url, platform_key, cookie_file, max_videos, cookie_browser, None)),
-                    ("Method 1: yt-dlp --dump-json (with dates)",
-                     lambda: _method_ytdlp_dump_json(url, platform_key, cookie_file, max_videos, cookie_browser, None)),
-                    ("Method 3: yt-dlp with retries",
-                     lambda: _method_ytdlp_with_retry(url, platform_key, cookie_file, max_videos, cookie_browser, None)),
-                ]
+                if managed_profile_only:
+                    no_proxy_methods = [
+                        ("Method 7: Playwright (ENHANCED: Stealth + Proxy + Human Behavior)",
+                         lambda: _method_playwright(url, platform_key, cookie_file, None, max_videos)),
+                        ("Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)",
+                         lambda: _method_ytdlp_get_url(url, platform_key, cookie_file, max_videos, cookie_browser, None)),
+                        ("Method 1: yt-dlp --dump-json (with dates)",
+                         lambda: _method_ytdlp_dump_json(url, platform_key, cookie_file, max_videos, cookie_browser, None)),
+                        ("Method 3: yt-dlp with retries",
+                         lambda: _method_ytdlp_with_retry(url, platform_key, cookie_file, max_videos, cookie_browser, None)),
+                    ]
+                else:
+                    no_proxy_methods = [
+                        ("Method 8: Selenium Headless (ENHANCED: Proxy + Cookies + Stealth)",
+                         lambda: _method_selenium(url, platform_key, max_videos, cookie_file, None, progress_callback, expected_count)),
+                        ("Method 7: Playwright (ENHANCED: Stealth + Proxy + Human Behavior)",
+                         lambda: _method_playwright(url, platform_key, cookie_file, None, max_videos)),
+                        ("Method 2: yt-dlp --get-url (SIMPLE - Like Batch Script)",
+                         lambda: _method_ytdlp_get_url(url, platform_key, cookie_file, max_videos, cookie_browser, None)),
+                        ("Method 1: yt-dlp --dump-json (with dates)",
+                         lambda: _method_ytdlp_dump_json(url, platform_key, cookie_file, max_videos, cookie_browser, None)),
+                        ("Method 3: yt-dlp with retries",
+                         lambda: _method_ytdlp_with_retry(url, platform_key, cookie_file, max_videos, cookie_browser, None)),
+                    ]
 
             for method_name, method_func in no_proxy_methods:
                 if max_videos > 0 and len(entries) >= max_videos:
@@ -4672,7 +4781,12 @@ def extract_links_intelligent(
                     break
 
         # â”€â”€ Workflow 2 fallback: auto-login when all methods failed + no cookies â”€â”€
-        if not entries and platform_key in {'instagram', 'facebook'} and not cookie_file:
+        if (
+            not entries
+            and platform_key in {'instagram', 'facebook'}
+            and not cookie_file
+            and not managed_profile_only
+        ):
             if progress_callback:
                 progress_callback("All methods failed without cookies. Attempting Workflow 2 (auto-login)...")
             try:
@@ -4720,6 +4834,85 @@ def extract_links_intelligent(
             except Exception as wf2_ex:
                 if progress_callback:
                     progress_callback(f"[WF2] Auto-login error: {wf2_ex}")
+
+        # -- Recovery chain: managed browser/profile recovery --
+        if not entries:
+            try:
+                from modules.shared.failure_classifier import classify_failure, is_auth_failure
+                from modules.shared.recovery_chain import RecoveryChain
+
+                _failure_type = classify_failure(last_method_error, platform_key)
+                _auth_triggered = is_auth_failure(_failure_type)
+
+                if not _auth_triggered:
+                    try:
+                        from modules.shared.session_authority import get_session_authority as _get_sa
+                        _sa = _get_sa()
+                        _sess = _sa.get_session_status()
+                        _strict = _sa.get_login_status()
+                        if _sess.get(platform_key) or _strict.get(platform_key):
+                            _auth_triggered = True
+                            _failure_type = classify_failure("auth_wall_suspected", platform_key)
+                    except Exception:
+                        pass
+
+                if _auth_triggered:
+                    if progress_callback:
+                        progress_callback("Checking access...")
+
+                    _recovery = RecoveryChain().attempt_recovery(platform_key, _failure_type)
+
+                    if _recovery.cookie_path:
+                        cookie_file = _recovery.cookie_path
+                        for _rname, _rfunc, _rmid in available_methods[:3]:
+                            try:
+                                _r_entries = _rfunc()
+                                for _re in (_r_entries or []):
+                                    _rurl = _re.get("url")
+                                    if not _rurl:
+                                        continue
+                                    _rnorm = _normalize_url(_rurl)
+                                    if _rnorm not in seen_normalized:
+                                        seen_normalized.add(_rnorm)
+                                        entries.append(_re)
+                                if entries:
+                                    successful_method = f"Recovery ({_recovery.recovery_type})"
+                                    successful_method_id = "recovery_cookie_refresh"
+                                    break
+                            except Exception:
+                                pass
+
+                    if not entries:
+                        try:
+                            from modules.shared.session_authority import get_session_authority
+                            _auth_sa = get_session_authority()
+                            if not _auth_sa.is_profile_busy():
+                                _sess = _auth_sa.get_session_status()
+                                if _sess.get(platform_key) and auth_manager:
+                                    _content_filter = {
+                                        'youtube': 'all_videos', 'tiktok': 'all_videos',
+                                        'instagram': 'reels_only', 'twitter': 'video_tweets',
+                                        'facebook': 'videos_reels',
+                                    }.get(platform_key, 'all')
+                                    _r_entries = auth_manager.grab_links_via_browser(
+                                        url=url, platform_key=platform_key,
+                                        content_filter=_content_filter, max_items=max_videos,
+                                        progress_callback=progress_callback)
+                                    for _re in (_r_entries or []):
+                                        _rurl = _re.get("url")
+                                        if not _rurl:
+                                            continue
+                                        _rnorm = _normalize_url(_rurl)
+                                        if _rnorm not in seen_normalized:
+                                            seen_normalized.add(_rnorm)
+                                            entries.append(_re)
+                                    if entries:
+                                        successful_method = "Recovery (browser_extraction)"
+                                        successful_method_id = "recovery_browser_extraction"
+                        except Exception:
+                            pass
+            except ImportError:
+                pass
 
         # Final fallback: open visible browser session and ask user to login manually.
         if not entries and platform_key in {'instagram', 'facebook'} and interactive_login_fallback:
@@ -4783,6 +4976,21 @@ def extract_links_intelligent(
             if max_videos > 0:
                 entries = entries[:max_videos]
 
+            # Attach _meta to each entry for downstream consumers
+            _meta = {
+                'creator': creator,
+                'platform': platform_key,
+                'extraction_method_id': successful_method_id or '',
+                'auth_source': 'browser_profile' if cookie_file else 'none',
+                'browser_session_used': bool(successful_method and any(
+                    t in (successful_method or '').lower()
+                    for t in ['chromium', 'selenium', 'browser', 'interactive', 'cdp', 'playwright', 'recovery']
+                )),
+                'fresh_cookie_exported': bool(cookie_file),
+            }
+            for entry in entries:
+                entry['_meta'] = _meta
+
             if progress_callback:
                 progress_callback(f"Ã¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€Â")
                 progress_callback(f"Ã¢Å“â€¦ Extraction Complete!")
@@ -4801,6 +5009,14 @@ def extract_links_intelligent(
                 progress_callback(f"   Ã¢â‚¬Â¢ Use a different proxy")
                 progress_callback(f"   Ã¢â‚¬Â¢ Check if the account is private")
                 progress_callback(f"Ã¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€Â")
+
+        # Record auth source success for future preference
+        if entries and _auth_source_id and managed_profile_only:
+            try:
+                from modules.shared.session_authority import AuthFallbackChain
+                AuthFallbackChain().record_success(creator, platform_key, _auth_source_id)
+            except Exception:
+                pass
 
         return entries, creator
 

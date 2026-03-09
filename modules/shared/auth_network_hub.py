@@ -45,9 +45,21 @@ class AuthNetworkHub:
     def list_cookie_candidates(self, platform: str, source_folder: Optional[str] = None) -> List[Path]:
         candidates: List[Path] = []
 
-        candidates.append(self.cookies_dir / "chrome_cookies.txt")
         if platform and platform != "other":
+            # PRIORITY 1: Canonical Platform-Specific (Most reliable, synced from all sources)
             candidates.append(self.cookies_dir / f"{platform}.txt")
+            
+            # PRIORITY 2: Direct Chromium Sync (Browser Auth Sync standard)
+            candidates.append(self.cookies_dir / "browser_cookies" / f"{platform}_chromium_profile.txt")
+            candidates.append(self.cookies_dir / f"{platform}_chromium_profile.txt")
+            
+            # PRIORITY 3: Legacy/Shared Master (May be stale)
+            candidates.append(self.cookies_dir / "chrome_cookies.txt")
+            
+        else:
+            candidates.append(self.cookies_dir / "chrome_cookies.txt")
+
+        # Fallbacks
         candidates.append(self.cookies_dir / "cookies.txt")
         candidates.append(Path.home() / "Desktop" / "toseeq-cookies.txt")
 

@@ -399,6 +399,68 @@ def calculate_dimensions_for_aspect_ratio(
 
 # ==================== FFMPEG UTILITIES ====================
 
+def _ffmpeg_has_companion_dlls(ffmpeg_path: str) -> bool:
+    """
+    Windows dynamic FFmpeg builds require their DLLs in the same directory.
+    """
+    try:
+        path = Path(ffmpeg_path)
+        if not path.exists() or path.suffix.lower() != ".exe":
+            return False
+        directory = path.parent
+        required_patterns = ("avcodec-*.dll", "avformat-*.dll", "avutil-*.dll")
+        return all(any(directory.glob(pattern)) for pattern in required_patterns)
+    except Exception:
+        return False
+
+
+def _ffmpeg_candidate_is_usable(candidate: str) -> bool:
+    """
+    Validate FFmpeg candidates before the app depends on them.
+
+    On Windows, small dynamically linked FFmpeg builds can crash with
+    0xc0000142 if their companion DLLs were not copied to the target machine.
+    """
+    if not candidate:
+        return False
+
+    candidate = str(candidate).strip()
+    if not candidate:
+        return False
+
+    if candidate == "ffmpeg":
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-version"],
+                capture_output=True,
+                timeout=5,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    path = Path(candidate)
+    if not path.exists():
+        return False
+
+    try:
+        if os.name == "nt":
+            # This repo uses a tiny dynamically linked FFmpeg build.
+            # Reject obviously incomplete copies before executing them,
+            # otherwise Windows shows a modal 0xc0000142 application error.
+            if path.stat().st_size < 5 * 1024 * 1024 and not _ffmpeg_has_companion_dlls(candidate):
+                logger.warning(f"Skipping FFmpeg candidate missing companion DLLs: {candidate}")
+                return False
+
+        result = subprocess.run(
+            [candidate, "-version"],
+            capture_output=True,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
 def get_ffmpeg_path() -> str:
     """
     Get FFmpeg executable path
@@ -410,85 +472,57 @@ def get_ffmpeg_path() -> str:
     import sys
     import os
 
+    candidates = []
+
     # Check if running as PyInstaller bundle
     if getattr(sys, 'frozen', False):
-        # Running as exe - check bundled ffmpeg
         exe_dir = os.path.dirname(sys.executable)
+        candidates.extend([
+            os.path.join(exe_dir, '_internal', 'ffmpeg', 'bin', 'ffmpeg.exe'),
+            os.path.join(exe_dir, '_internal', 'ffmpeg', 'ffmpeg.exe'),
+        ])
 
-        # Priority 1: Check _internal folder (PyInstaller --onedir mode)
-        # This is where PyInstaller extracts bundled files
-
-        # _internal/ffmpeg/bin/ffmpeg.exe (standard FFmpeg folder structure)
-        internal_bin_ffmpeg = os.path.join(exe_dir, '_internal', 'ffmpeg', 'bin', 'ffmpeg.exe')
-        if os.path.exists(internal_bin_ffmpeg):
-            logger.info(f"Using _internal/ffmpeg/bin FFmpeg: {internal_bin_ffmpeg}")
-            return internal_bin_ffmpeg
-
-        # _internal/ffmpeg/ffmpeg.exe (direct in ffmpeg folder)
-        internal_ffmpeg = os.path.join(exe_dir, '_internal', 'ffmpeg', 'ffmpeg.exe')
-        if os.path.exists(internal_ffmpeg):
-            logger.info(f"Using _internal/ffmpeg FFmpeg: {internal_ffmpeg}")
-            return internal_ffmpeg
-
-        # Priority 2: Check _MEIPASS (PyInstaller temp extraction)
         if hasattr(sys, '_MEIPASS'):
-            # _MEIPASS/ffmpeg/bin/ffmpeg.exe
-            meipass_bin_ffmpeg = os.path.join(sys._MEIPASS, 'ffmpeg', 'bin', 'ffmpeg.exe')
-            if os.path.exists(meipass_bin_ffmpeg):
-                logger.info(f"Using MEIPASS/ffmpeg/bin FFmpeg: {meipass_bin_ffmpeg}")
-                return meipass_bin_ffmpeg
+            candidates.extend([
+                os.path.join(sys._MEIPASS, 'ffmpeg', 'bin', 'ffmpeg.exe'),
+                os.path.join(sys._MEIPASS, 'ffmpeg', 'ffmpeg.exe'),
+            ])
 
-            # _MEIPASS/ffmpeg/ffmpeg.exe
-            meipass_ffmpeg = os.path.join(sys._MEIPASS, 'ffmpeg', 'ffmpeg.exe')
-            if os.path.exists(meipass_ffmpeg):
-                logger.info(f"Using MEIPASS/ffmpeg FFmpeg: {meipass_ffmpeg}")
-                return meipass_ffmpeg
+        candidates.extend([
+            os.path.join(exe_dir, 'ffmpeg', 'bin', 'ffmpeg.exe'),
+            os.path.join(exe_dir, 'ffmpeg', 'ffmpeg.exe'),
+            os.path.join(exe_dir, 'ffmpeg.exe'),
+        ])
 
-        # Priority 3: Check exe directory directly
-        # exe_dir/ffmpeg/bin/ffmpeg.exe
-        exe_bin_ffmpeg = os.path.join(exe_dir, 'ffmpeg', 'bin', 'ffmpeg.exe')
-        if os.path.exists(exe_bin_ffmpeg):
-            logger.info(f"Using exe/ffmpeg/bin FFmpeg: {exe_bin_ffmpeg}")
-            return exe_bin_ffmpeg
-
-        # exe_dir/ffmpeg/ffmpeg.exe
-        exe_ffmpeg = os.path.join(exe_dir, 'ffmpeg', 'ffmpeg.exe')
-        if os.path.exists(exe_ffmpeg):
-            logger.info(f"Using exe/ffmpeg FFmpeg: {exe_ffmpeg}")
-            return exe_ffmpeg
-
-        # exe_dir/ffmpeg.exe
-        dist_ffmpeg = os.path.join(exe_dir, 'ffmpeg.exe')
-        if os.path.exists(dist_ffmpeg):
-            logger.info(f"Using exe directory FFmpeg: {dist_ffmpeg}")
-            return dist_ffmpeg
-
-    # Development mode or system PATH
-    # Check if ffmpeg is in PATH
-    try:
-        result = subprocess.run(['ffmpeg', '-version'],
-                              capture_output=True,
-                              timeout=3)
-        if result.returncode == 0:
-            logger.info("Using system PATH FFmpeg")
-            return 'ffmpeg'
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
-
-    # Last resort: check common locations
-    common_paths = [
-        r'C:\ffmpeg\bin\ffmpeg.exe',
-        r'C:\Program Files\ffmpeg\bin\ffmpeg.exe',
+    # Development mode and explicit local copies
+    candidates.extend([
         os.path.join(os.getcwd(), 'ffmpeg', 'bin', 'ffmpeg.exe'),
         os.path.join(os.getcwd(), 'ffmpeg', 'ffmpeg.exe'),
         str(Path(__file__).resolve().parents[2] / 'ffmpeg' / 'bin' / 'ffmpeg.exe'),
         str(Path(__file__).resolve().parents[2] / 'ffmpeg' / 'ffmpeg.exe'),
-    ]
+    ])
 
-    for path in common_paths:
-        if os.path.exists(path):
-            logger.info(f"Using FFmpeg from common location: {path}")
-            return path
+    # User-provided ffmpeg on C:\ drive (user copies full ffmpeg folder to C:\ffmpeg)
+    candidates.extend([
+        r'C:\ffmpeg\bin\ffmpeg.exe',
+        r'C:\ffmpeg\ffmpeg.exe',
+        r'C:\Program Files\ffmpeg\bin\ffmpeg.exe',
+        r'C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe',
+    ])
+
+    seen = set()
+    for candidate in candidates:
+        normalized = os.path.normcase(os.path.normpath(candidate))
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        if _ffmpeg_candidate_is_usable(candidate):
+            logger.info(f"Using FFmpeg from validated location: {candidate}")
+            return candidate
+
+    if _ffmpeg_candidate_is_usable('ffmpeg'):
+        logger.info("Using system PATH FFmpeg")
+        return 'ffmpeg'
 
     # Fallback to 'ffmpeg' and hope it's in PATH
     logger.warning("FFmpeg not found in bundle or PATH, using 'ffmpeg' as fallback")
@@ -504,8 +538,8 @@ def check_ffmpeg() -> bool:
     """
     try:
         ffmpeg_path = get_ffmpeg_path()
-        subprocess.run([ffmpeg_path, '-version'], capture_output=True, timeout=5)
-        return True
+        result = subprocess.run([ffmpeg_path, '-version'], capture_output=True, timeout=5)
+        return result.returncode == 0
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return False
 

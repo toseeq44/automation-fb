@@ -1,4 +1,5 @@
 yt-dlp>=2024.3.10
+pyinstaller
 PyQt5>=5.15.9
 PyQtWebEngine>=5.15.0  # For animated OneSoul Flow logo (optional)
 requests>=2.31.0
@@ -25,16 +26,22 @@ pytesseract>=0.3.10         # OCR text extraction
 
 pyperclip>=1.8.2
 
-# Browser Automation Dependencies (NEW - for intelligent automation)
+# Browser Automation Dependencies
+selenium>=4.15.0           # WebDriver for ixBrowser/auto uploader
 opencv-python>=4.8.0       # Image recognition for UI detection
 pyautogui>=0.9.54         # Mouse and keyboard automation
 pygetwindow>=0.0.9        # Window management (cross-platform)
 psutil>=5.9.0             # Process management
+pywin32>=306;sys_platform=="win32"  # Windows COM API (win32gui, win32con)
 
-# AR Face Effects Dependencies (NEW - for professional video effects)
+# AR Face Effects Dependencies
 mediapipe>=0.10.0         # Google's AR framework - 468 face landmarks tracking
 protobuf>=3.20.0          # Required by MediaPipe
 
+# Misc dependencies used by moviepy/other packages
+decorator>=5.0.0
+tqdm>=4.0.0
+proglog>=0.1.10
 
 Flask
 Flask-Limiter

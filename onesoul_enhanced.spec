@@ -20,24 +20,32 @@ optional_binaries = []
 if os.path.exists('cloudflared.exe'):
     optional_binaries.append(('cloudflared.exe', '.'))
 else:
-    print("⚠️  WARNING: cloudflared.exe not found - skipping")
+    print("WARNING: cloudflared.exe not found - skipping")
 
 # Optional data files - only include if they exist
 optional_datas = []
 
-# Check for ffmpeg
+# Check for ffmpeg - bundle entire folder preserving bin/ structure
 if os.path.exists('ffmpeg') and os.path.isdir('ffmpeg'):
-    optional_datas.append(('ffmpeg', 'ffmpeg'))
-    print("✓ ffmpeg directory found")
+    # Bundle ffmpeg/bin/* (exe + DLLs) into ffmpeg/bin/ so companion DLLs stay together
+    if os.path.isdir(os.path.join('ffmpeg', 'bin')):
+        optional_datas.append((os.path.join('ffmpeg', 'bin'), os.path.join('ffmpeg', 'bin')))
+        print("INFO: ffmpeg/bin directory found (exe + DLLs will be bundled together)")
+    else:
+        optional_datas.append(('ffmpeg', 'ffmpeg'))
+        print("INFO: ffmpeg directory found (flat structure)")
+    # Also bundle presets if present inside ffmpeg
+    if os.path.isdir(os.path.join('ffmpeg', 'presets')):
+        optional_datas.append((os.path.join('ffmpeg', 'presets'), os.path.join('ffmpeg', 'presets')))
 else:
-    print("⚠️  WARNING: ffmpeg directory not found - video editing may not work")
+    print("WARNING: ffmpeg directory not found - video editing/watermark/split WILL NOT WORK")
 
 # Check for presets
 if os.path.exists('presets') and os.path.isdir('presets'):
     optional_datas.append(('presets', 'presets'))
-    print("✓ presets directory found")
+    print("INFO: presets directory found")
 else:
-    print("⚠️  WARNING: presets directory not found")
+    print("WARNING: presets directory not found")
 
 # Check for MediaPipe models (for AR features)
 try:
@@ -53,11 +61,11 @@ try:
 
     if mp_path:
         optional_datas.append((mp_path, 'mediapipe/modules'))
-        print("✓ MediaPipe models found - AR features will be available")
+        print("INFO: MediaPipe models found - AR features will be available")
     else:
-        print("⚠️  WARNING: MediaPipe models not found - AR features may not work")
+        print("WARNING: MediaPipe models not found - AR features may not work")
 except ImportError:
-    print("⚠️  WARNING: MediaPipe not installed - AR features disabled")
+    print("WARNING: MediaPipe not installed - AR features disabled")
 
 a = Analysis(
     ['main.py'],
@@ -77,10 +85,11 @@ a = Analysis(
 
         # NOTE: ix_data is NOT included - it's a runtime workspace created automatically
 
-        # GUI assets (new design)
+        # GUI assets (new design) - includes platform icons (.png)
         ('gui-redesign/assets/*.html', 'gui-redesign/assets'),
         ('gui-redesign/assets/*.svg', 'gui-redesign/assets'),
         ('gui-redesign/assets/*.ico', 'gui-redesign/assets'),
+        ('gui-redesign/assets/*.png', 'gui-redesign/assets'),
 
         # Configs to bundle
         ('api_config.json', '.'),
@@ -92,93 +101,131 @@ a = Analysis(
         'PyQt5.QtCore',
         'PyQt5.QtGui',
         'PyQt5.QtWidgets',
-        
+
         # Video downloader dependencies
         'yt_dlp',
         'yt_dlp.extractor',
         'yt_dlp.downloader',
         'yt_dlp.postprocessor',
-        
+
         # HTTP and networking
         'requests',
         'urllib3',
         'certifi',
-        
+
         # Cookies and authentication
         'browser_cookie3',
         'cryptography',
         'cryptography.fernet',
-        
+
         # Video editor dependencies
         'moviepy',
         'moviepy.video',
+        'moviepy.video.fx',
+        'moviepy.video.fx.all',
+        'moviepy.video.io',
+        'moviepy.video.io.VideoFileClip',
         'moviepy.audio',
+        'moviepy.audio.fx',
+        'moviepy.audio.fx.all',
         'moviepy.editor',
         'imageio',
         'imageio_ffmpeg',
+        'imageio_ffmpeg._utils',
         'proglog',
+        'decorator',
+        'tqdm',
         'numpy',
         'scipy',
+        'scipy.ndimage',
+        'scipy.signal',
         'PIL',
-        'pillow',
-        
-        # Browser automation
+        'PIL.Image',
+        'PIL.ImageDraw',
+        'PIL.ImageFont',
+
+        # Browser automation - Selenium (CRITICAL for auto uploader)
+        'selenium',
+        'selenium.webdriver',
+        'selenium.webdriver.chrome',
+        'selenium.webdriver.chrome.options',
+        'selenium.webdriver.chrome.service',
+        'selenium.webdriver.common',
+        'selenium.webdriver.common.by',
+        'selenium.webdriver.common.keys',
+        'selenium.webdriver.common.action_chains',
+        'selenium.webdriver.support',
+        'selenium.webdriver.support.ui',
+        'selenium.webdriver.support.expected_conditions',
+        'selenium.common',
+        'selenium.common.exceptions',
+
+        # Browser automation - UI control
         'pyautogui',
         'pygetwindow',
-        'opencv-python',
         'cv2',
         'psutil',
 
-        # AR Face Effects (NEW - MediaPipe)
+        # Windows COM API (pywin32) - for window management
+        'win32gui',
+        'win32con',
+        'win32api',
+        'pywintypes',
+        'pythoncom',
+
+        # AR Face Effects - MediaPipe
         'mediapipe',
         'mediapipe.python',
         'mediapipe.python.solutions',
         'mediapipe.python.solutions.face_mesh',
         'mediapipe.python.solutions.drawing_utils',
         'mediapipe.python.solutions.drawing_styles',
-        'google.protobuf',  # Required by MediaPipe
-        'protobuf',
-        
+        'google.protobuf',
+        'google.protobuf.descriptor',
+
         # License system
         'json',
         'hashlib',
         'hmac',
         'base64',
-        
+
         # API Manager
         'google.auth',
         'googleapiclient',
         'googleapiclient.discovery',
-        
+
         # Instagram
         'instaloader',
-        
+
         # Parsing
-        'beautifulsoup4',
         'bs4',
         'lxml',
         'lxml.etree',
-        
+        'lxml.html',
+
         # Utilities
         'pyperclip',
         'pathlib',
-        
+
         # Logging
         'logging',
         'logging.handlers',
-        
+
         # Config
         'modules.config',
         'modules.config.config_manager',
         'modules.config.utils',
-        
+
         # All major modules
         'modules.api_manager',
         'modules.auto_uploader',
+        'modules.creator_profiles',
         'modules.license',
         'modules.link_grabber',
         'modules.logging',
         'modules.metadata_remover',
+        'modules.shared',
+        'modules.title_generator',
         'modules.ui',
         'modules.video_downloader',
         'modules.video_editor',

@@ -1055,44 +1055,44 @@ def extract_cookies_smart(
         _dbg(cb, f"[WF1] {browser_key}: no cookies found")
 
     # ── PHASE 3: no browser has cookies → launch default browser ────────────
-    _dbg(cb, "[WF1] PHASE 3: No cookies found. Checking registry for default browser...")
-    default_browser = get_default_browser_windows(cb)
-
-    if default_browser:
-        if default_browser in running:
-            _dbg(cb, f"[WF1] {default_browser} already tried (was running). Skipping re-launch.")
-        else:
-            _dbg(cb, f"[WF1] Launching default browser ({default_browser}) to refresh session...")
-            result = _launch_and_extract(default_browser, platform_key, save_to, cb)
-            if result:
-                return result
-    else:
-        _dbg(cb, "[WF1] No default browser detected – cannot auto-launch")
+    _dbg(cb, "[WF1] PHASE 3: Skipped. Auto-launching system Chrome is disabled to prevent opening personal profiles.")
+    
+    # default_browser = get_default_browser_windows(cb)
+    #
+    # if default_browser:
+    #     if default_browser in running:
+    #         _dbg(cb, f"[WF1] {default_browser} already tried (was running). Skipping re-launch.")
+    #     else:
+    #         _dbg(cb, f"[WF1] Launching default browser ({default_browser}) to refresh session...")
+    #         result = _launch_and_extract(default_browser, platform_key, save_to, cb)
+    #         if result:
+    #             return result
+    # else:
+    #     _dbg(cb, "[WF1] No default browser detected – cannot auto-launch")
 
     # ── PHASE 3b: CDP relaunch (v20 App-Bound last resort) ───────────────────
     # Chrome 127+ App-Bound Encryption cannot be bypassed any other way.
     # Kill the running Chrome and relaunch with --remote-debugging-port=9222
     # and --restore-last-session so ALL tabs come back automatically.
+    # Skipped to prevent aggressively restarting user's personal Chrome.
+    _dbg(cb, "[WF1] PHASE 3b: Skipped. CDP Relaunch is disabled to prevent restarting user's personal Chrome.")
+    
+    # if "chrome" in running:
+    #     cdp_browser = "chrome"
+    # elif running:
+    #     cdp_browser = running[0]
+    # elif default_browser:
+    #     cdp_browser = default_browser
+    # else:
+    #     cdp_browser = None
     #
-    # Priority: Chrome running > any other running browser > registry default.
-    # We do NOT blindly use get_default_browser_windows() here — it reads the
-    # Windows registry which may return Edge even when Chrome is running.
-    if "chrome" in running:
-        cdp_browser = "chrome"
-    elif running:
-        cdp_browser = running[0]
-    elif default_browser:
-        cdp_browser = default_browser
-    else:
-        cdp_browser = None
-
-    if cdp_browser:
-        _dbg(cb, f"[WF1] PHASE 3b: Chrome v20 workaround – relaunching {cdp_browser} with CDP...")
-        _dbg(cb, "[WF1] Chrome will restart. All your tabs will be restored automatically.")
-        result = _relaunch_chrome_with_cdp(cdp_browser, platform_key, save_to, cb)
-        if result:
-            _dbg(cb, "[WF1] ✓ Cookies extracted via CDP relaunch")
-            return result
+    # if cdp_browser:
+    #     _dbg(cb, f"[WF1] PHASE 3b: Chrome v20 workaround – relaunching {cdp_browser} with CDP...")
+    #     _dbg(cb, "[WF1] Chrome will restart. All your tabs will be restored automatically.")
+    #     result = _relaunch_chrome_with_cdp(cdp_browser, platform_key, save_to, cb)
+    #     if result:
+    #         _dbg(cb, "[WF1] ✓ Cookies extracted via CDP relaunch")
+    #         return result
 
     _dbg(cb, "[WF1] ✗ All phases exhausted – no cookies obtained")
     _dbg(cb, "[WF1] TIP: Chrome 127+ uses App-Bound Encryption (v20) that blocks external extraction.")

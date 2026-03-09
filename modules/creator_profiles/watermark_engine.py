@@ -9,7 +9,6 @@ Supports:
   - Both text + logo simultaneously, each with independent position
 """
 
-import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -21,65 +20,92 @@ _LOGO_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".svg", ".gif"}
 # Margin from edges (pixels)
 _MARGIN = 20
 
-# AnimateAround: keyframe stops (x_expr, y_expr, t_start_frac, t_end_frac)
-# Video is split into 4 equal segments, corner moves TopLeft→TopRight→BottomRight→BottomLeft
-_ANIMATE_EXPR = (
-    "x='if(lt(mod(t,4*{dur}),{dur}),{m},"
-    "if(lt(mod(t,4*{dur}),2*{dur}),W-w-{m},"
-    "if(lt(mod(t,4*{dur}),3*{dur}),W-w-{m},{m})))':"
-    "y='if(lt(mod(t,4*{dur}),{dur}),{m},"
-    "if(lt(mod(t,4*{dur}),2*{dur}),{m},"
-    "if(lt(mod(t,4*{dur}),3*{dur}),H-h-{m},H-h-{m})))'"
-)
-_ANIMATE_DURATION = 3  # seconds per corner
+# AnimateAround: fallback loop period (seconds) when duration is unavailable.
+_ANIMATE_CYCLE_SEC_DEFAULT = 8.0
 
 
 def _ffmpeg_path() -> str:
     try:
         from modules.video_editor.utils import check_ffmpeg, get_ffmpeg_path
         if check_ffmpeg():
-            p = get_ffmpeg_path()
-            if p:
-                return p
+            return get_ffmpeg_path()
     except Exception:
         pass
-    which = shutil.which("ffmpeg")
-    if which:
-        return which
-    for candidate in [
-        Path("bin/ffmpeg/ffmpeg.exe"),
-        Path("C:/ffmpeg/bin/ffmpeg.exe"),
-        Path("C:/ffmpeg/ffmpeg.exe"),
-    ]:
-        if candidate.exists():
-            return str(candidate)
     return "ffmpeg"
 
 
-def _position_expr(position: str, margin: int = _MARGIN) -> tuple:
-    """Return (x_expr, y_expr) for drawtext/overlay filter."""
+def _animate_rect_expr(
+    width_expr: str,
+    height_expr: str,
+    margin: int,
+    cycle_sec: float,
+) -> tuple:
+    """
+    Build 4-corner rectangular path:
+      TopLeft -> TopRight -> BottomRight -> BottomLeft -> TopLeft
+    """
+    m = margin
+    cycle = max(1.0, float(cycle_sec or _ANIMATE_CYCLE_SEC_DEFAULT))
+    quarter = cycle / 4.0
+    t_mod = f"mod(t,{cycle:g})"
+    x_max = f"{width_expr}-{m}"
+    y_max = f"{height_expr}-{m}"
+    x_rng = f"({x_max}-{m})"
+    y_rng = f"({y_max}-{m})"
+
+    x_expr = (
+        f"if(lt({t_mod},{quarter:g}),{m}+{x_rng}*({t_mod}/{quarter:g}),"
+        f"if(lt({t_mod},{(2 * quarter):g}),{x_max},"
+        f"if(lt({t_mod},{(3 * quarter):g}),"
+        f"{x_max}-{x_rng}*(({t_mod}-{(2 * quarter):g})/{quarter:g}),{m})))"
+    )
+    y_expr = (
+        f"if(lt({t_mod},{quarter:g}),{m},"
+        f"if(lt({t_mod},{(2 * quarter):g}),"
+        f"{m}+{y_rng}*(({t_mod}-{quarter:g})/{quarter:g}),"
+        f"if(lt({t_mod},{(3 * quarter):g}),{y_max},"
+        f"{y_max}-{y_rng}*(({t_mod}-{(3 * quarter):g})/{quarter:g}))))"
+    )
+    return x_expr, y_expr
+
+
+def _escape_filter_expr(expr: str) -> str:
+    """Escape expression chars that break ffmpeg option parsing."""
+    return str(expr).replace("\\", "\\\\").replace(",", "\\,")
+
+
+def _position_expr(
+    position: str,
+    margin: int = _MARGIN,
+    target: str = "overlay",
+    cycle_sec: float = _ANIMATE_CYCLE_SEC_DEFAULT,
+) -> tuple:
+    """Return (x_expr, y_expr) for drawtext or overlay filter."""
     m = margin
     pos = (position or "BottomRight").strip()
-    mapping = {
-        "TopLeft":     (f"{m}", f"{m}"),
-        "TopRight":    (f"W-w-{m}", f"{m}"),
-        "BottomLeft":  (f"{m}", f"H-h-{m}"),
-        "BottomRight": (f"W-w-{m}", f"H-h-{m}"),
-        "Center":      ("(W-w)/2", "(H-h)/2"),
-    }
+    is_text = str(target).strip().lower() == "text"
+
+    if is_text:
+        mapping = {
+            "TopLeft":     (f"{m}", f"{m}"),
+            "TopRight":    (f"w-text_w-{m}", f"{m}"),
+            "BottomLeft":  (f"{m}", f"h-text_h-{m}"),
+            "BottomRight": (f"w-text_w-{m}", f"h-text_h-{m}"),
+            "Center":      ("(w-text_w)/2", "(h-text_h)/2"),
+        }
+    else:
+        mapping = {
+            "TopLeft":     (f"{m}", f"{m}"),
+            "TopRight":    (f"W-w-{m}", f"{m}"),
+            "BottomLeft":  (f"{m}", f"H-h-{m}"),
+            "BottomRight": (f"W-w-{m}", f"H-h-{m}"),
+            "Center":      ("(W-w)/2", "(H-h)/2"),
+        }
+
     if pos == "AnimateAround":
-        dur = _ANIMATE_DURATION
-        x = (
-            f"if(lt(mod(t,4*{dur}),{dur}),{m},"
-            f"if(lt(mod(t,4*{dur}),2*{dur}),W-w-{m},"
-            f"if(lt(mod(t,4*{dur}),3*{dur}),W-w-{m},{m})))"
-        )
-        y = (
-            f"if(lt(mod(t,4*{dur}),{dur}),{m},"
-            f"if(lt(mod(t,4*{dur}),2*{dur}),{m},"
-            f"if(lt(mod(t,4*{dur}),3*{dur}),H-h-{m},H-h-{m})))"
-        )
-        return x, y
+        if is_text:
+            return _animate_rect_expr("w-text_w", "h-text_h", m, cycle_sec)
+        return _animate_rect_expr("W-w", "H-h", m, cycle_sec)
     return mapping.get(pos, mapping["BottomRight"])
 
 
@@ -89,14 +115,25 @@ def _opacity_to_alpha(opacity: int) -> float:
 
 
 def _hex_to_ffmpeg_color(hex_color: str, opacity: int) -> str:
-    """Convert #RRGGBB + opacity(0-100) to ffmpeg color string 0xRRGGBBAA."""
+    """Convert #RRGGBB + opacity(0-100) to ffmpeg color string 0xRRGGBB@A.
+
+    Using @alpha is more reliable across ffmpeg builds for drawtext than
+    packed hex with trailing AA.
+    """
     hex_color = (hex_color or "#FFFFFF").strip().lstrip("#")
     if len(hex_color) == 3:
         hex_color = "".join(c * 2 for c in hex_color)
     if len(hex_color) != 6:
         hex_color = "FFFFFF"
-    alpha_byte = int((opacity / 100.0) * 255)
-    return f"0x{hex_color.upper()}{alpha_byte:02X}"
+    alpha = max(0.0, min(1.0, float(opacity) / 100.0))
+    return f"0x{hex_color.upper()}@{alpha:.3f}"
+
+
+def _normalize_render_style(value: str) -> str:
+    style = str(value or "normal").strip().lower()
+    if style in {"normal", "outline_hollow", "outline_shadow"}:
+        return style
+    return "normal"
 
 
 def _sanitize_text(text: str) -> str:
@@ -105,6 +142,53 @@ def _sanitize_text(text: str) -> str:
     text = text.replace("'", "\\'")
     text = text.replace(":", "\\:")
     return text
+
+
+def _ffprobe_path(ffmpeg_path: str) -> str:
+    """Best-effort ffprobe resolver matching selected ffmpeg binary."""
+    try:
+        ffmpeg_p = Path(ffmpeg_path)
+        if ffmpeg_p.exists():
+            # Common layout: .../bin/ffmpeg.exe -> .../bin/ffprobe.exe
+            candidate = ffmpeg_p.with_name("ffprobe.exe")
+            if candidate.exists():
+                return str(candidate)
+            candidate2 = ffmpeg_p.with_name("ffprobe")
+            if candidate2.exists():
+                return str(candidate2)
+    except Exception:
+        pass
+
+    return shutil.which("ffprobe") or "ffprobe"
+
+
+def _probe_duration_sec(input_path: Path, ffmpeg_path: str) -> Optional[float]:
+    """Return media duration in seconds using ffprobe, else None."""
+    ffprobe = _ffprobe_path(ffmpeg_path)
+    try:
+        run = subprocess.run(
+            [
+                ffprobe,
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(input_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if run.returncode != 0:
+            return None
+        value = (run.stdout or "").strip()
+        if not value:
+            return None
+        sec = float(value)
+        if sec <= 0:
+            return None
+        return sec
+    except Exception:
+        return None
 
 
 def auto_detect_logo(creator_folder: Path) -> Optional[str]:
@@ -139,9 +223,11 @@ def apply_watermark(
 
     input_path = Path(input_path)
     output_path = Path(output_path)
+    media_duration_sec = _probe_duration_sec(input_path, ffmpeg) or _ANIMATE_CYCLE_SEC_DEFAULT
 
-    text_enabled = bool(wm_text_cfg.get("enabled", False))
-    logo_enabled = bool(wm_logo_cfg.get("enabled", False))
+    explicit_layer_selection = bool(wm_text_cfg.get("enabled", False)) or bool(wm_logo_cfg.get("enabled", False))
+    text_enabled = bool(wm_text_cfg.get("enabled", False)) if explicit_layer_selection else True
+    logo_enabled = bool(wm_logo_cfg.get("enabled", False)) if explicit_layer_selection else True
 
     if not text_enabled and not logo_enabled:
         # Nothing to do — copy as-is
@@ -178,7 +264,9 @@ def apply_watermark(
         raw_text = (wm_text_cfg.get("text") or "").strip()
         if not raw_text:
             folder_name = Path(creator_folder).name
-            raw_text = f"@{folder_name}"
+            folder_name = str(folder_name or "").strip()
+            # Avoid accidental "@@name" when folder already starts with '@'.
+            raw_text = folder_name if folder_name.startswith("@") else f"@{folder_name}"
 
         text = _sanitize_text(raw_text)
         font_family = (wm_text_cfg.get("font_family") or "Arial").strip()
@@ -189,8 +277,21 @@ def apply_watermark(
         font_style = (wm_text_cfg.get("font_style") or "normal").strip().lower()
         letter_spacing = int(wm_text_cfg.get("letter_spacing") or 0)
         position = wm_text_cfg.get("position") or "BottomRight"
+        render_style = _normalize_render_style(wm_text_cfg.get("render_style"))
+        default_shadow_opacity = max(35, min(100, int(opacity * 0.75)))
+        default_shadow_offset = max(2, int(round(font_size * 0.08)))
+        try:
+            shadow_alpha = int(wm_text_cfg.get("shadow_opacity", default_shadow_opacity))
+        except Exception:
+            shadow_alpha = default_shadow_opacity
+        shadow_alpha = max(0, min(100, shadow_alpha))
+        try:
+            shadow_offset = int(wm_text_cfg.get("shadow_offset", default_shadow_offset))
+        except Exception:
+            shadow_offset = default_shadow_offset
+        shadow_offset = max(0, min(80, shadow_offset))
 
-        x_expr, y_expr = _position_expr(position)
+        x_expr_raw, y_expr_raw = _position_expr(position, target="text", cycle_sec=media_duration_sec)
         color_str = _hex_to_ffmpeg_color(font_color_hex, opacity)
 
         # Bold/italic: ffmpeg drawtext uses fontfile or font name with style suffix
@@ -202,43 +303,122 @@ def apply_watermark(
             font_with_style = f"{font_family}:Bold"
         elif font_style == "italic":
             font_with_style = f"{font_family}:Italic"
+        font_with_style = _sanitize_text(font_with_style)
 
-        drawtext_opts = [
-            f"text='{text}'",
-            f"font='{font_with_style}'",
-            f"fontsize={font_size}",
-            f"fontcolor={color_str}",
-            f"x={x_expr}",
-            f"y={y_expr}",
-        ]
-        if letter_spacing > 0:
-            drawtext_opts.append(f"expansion=normal")
+        transparent_fill = _hex_to_ffmpeg_color(font_color_hex, 0)
 
-        out_label = "[vtxt]"
-        filter_parts.append(
-            f"{last_label}drawtext={':'.join(drawtext_opts)}{out_label}"
-        )
-        last_label = out_label
+        def _drawtext_opts(
+            x_raw: str,
+            y_raw: str,
+            font_color: str,
+            border_w: int = 0,
+            border_color: str = "",
+            shadow_x: int = 0,
+            shadow_y: int = 0,
+            shadow_color: str = "",
+        ) -> str:
+            x_expr = _escape_filter_expr(x_raw)
+            y_expr = _escape_filter_expr(y_raw)
+            opts = [
+                f"text='{text}'",
+                f"font='{font_with_style}'",
+                f"fontsize={font_size}",
+                f"fontcolor={font_color}",
+                f"x='{x_expr}'",
+                f"y='{y_expr}'",
+            ]
+            if border_w > 0 and border_color:
+                opts.append(f"borderw={border_w}")
+                opts.append(f"bordercolor={border_color}")
+            if shadow_x or shadow_y:
+                opts.append(f"shadowx={int(shadow_x)}")
+                opts.append(f"shadowy={int(shadow_y)}")
+                if shadow_color:
+                    opts.append(f"shadowcolor={shadow_color}")
+            if letter_spacing > 0:
+                opts.append("expansion=normal")
+            return ":".join(opts)
+
+        if render_style == "normal":
+            out_label = "[vtxt]"
+            drawtext = _drawtext_opts(
+                x_raw=x_expr_raw,
+                y_raw=y_expr_raw,
+                font_color=color_str,
+            )
+            filter_parts.append(f"{last_label}drawtext={drawtext}{out_label}")
+            last_label = out_label
+
+        elif render_style == "outline_hollow":
+            # Stable hollow: transparent fill + visible stroke.
+            border_w = max(1, int(round(font_size * 0.06)))
+            out_label = "[vtxt]"
+            drawtext = _drawtext_opts(
+                x_raw=x_expr_raw,
+                y_raw=y_expr_raw,
+                font_color=transparent_fill,
+                border_w=border_w,
+                border_color=color_str,
+            )
+            filter_parts.append(f"{last_label}drawtext={drawtext}{out_label}")
+            last_label = out_label
+
+        else:  # outline_shadow
+            # Readable style:
+            # 1) offset shadow fill
+            # 2) main fill + stroke
+            border_w = max(1, int(round(font_size * 0.06)))
+            shadow_color = _hex_to_ffmpeg_color("#000000", shadow_alpha)
+            shadow_x_raw = f"({x_expr_raw})+{shadow_offset}"
+            shadow_y_raw = f"({y_expr_raw})+{shadow_offset}"
+            fill_color = _hex_to_ffmpeg_color("#FFFFFF", opacity)
+
+            shadow_label = "[vtxt_sh]"
+            out_label = "[vtxt]"
+
+            shadow_draw = _drawtext_opts(
+                x_raw=shadow_x_raw,
+                y_raw=shadow_y_raw,
+                font_color=shadow_color,
+            )
+            main_draw = _drawtext_opts(
+                x_raw=x_expr_raw,
+                y_raw=y_expr_raw,
+                font_color=fill_color,
+                border_w=border_w,
+                border_color=color_str,
+            )
+
+            filter_parts.append(f"{last_label}drawtext={shadow_draw}{shadow_label}")
+            filter_parts.append(f"{shadow_label}drawtext={main_draw}{out_label}")
+            last_label = out_label
 
     # ── Logo watermark filter ──────────────────────────────────────────────
     if logo_enabled and logo_path:
         logo_opacity = int(wm_logo_cfg.get("opacity") or 80)
         alpha = _opacity_to_alpha(logo_opacity)
         position = wm_logo_cfg.get("position") or "TopLeft"
-        x_expr, y_expr = _position_expr(position)
+        x_expr, y_expr = _position_expr(position, target="overlay", cycle_sec=media_duration_sec)
+        x_expr = _escape_filter_expr(x_expr)
+        y_expr = _escape_filter_expr(y_expr)
 
         logo_idx = logo_input_index
         logo_scaled = f"[logo_sc]"
+        base_label = f"[vbase]"
         logo_alpha = f"[logo_a]"
         out_label = "[vlogo]"
 
         # Scale logo to max 15% of video width, keep aspect ratio
         filter_parts.append(
-            f"[{logo_idx}:v]scale=iw*min(W*0.15/iw\\,1):ih*min(W*0.15/iw\\,1)"
-            f",format=rgba,colorchannelmixer=aa={alpha:.3f}{logo_alpha}"
+            f"[{logo_idx}:v]{last_label}scale2ref="
+            f"w='min(iw\\,main_w*0.15)':h=-1"
+            f"{logo_scaled}{base_label}"
         )
         filter_parts.append(
-            f"{last_label}{logo_alpha}overlay=x={x_expr}:y={y_expr}{out_label}"
+            f"{logo_scaled}format=rgba,colorchannelmixer=aa={alpha:.3f}{logo_alpha}"
+        )
+        filter_parts.append(
+            f"{base_label}{logo_alpha}overlay=eval=frame:x='{x_expr}':y='{y_expr}'{out_label}"
         )
         last_label = out_label
 
@@ -250,7 +430,7 @@ def apply_watermark(
         + inputs
         + [
             "-filter_complex", filter_str,
-            "-map", last_label.strip("[]"),
+            "-map", last_label,
             "-map", "0:a?",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
             "-c:a", "copy",

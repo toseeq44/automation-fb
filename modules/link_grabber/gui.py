@@ -14,6 +14,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QObject, pyqtSignal, QThread
 from pathlib import Path
+import json
 import pyperclip
 import shutil
 from datetime import datetime
@@ -65,7 +66,7 @@ class _BrowserLoginWorker(QThread):
     """Runs ChromiumAuthManager.open_login_browser() off the GUI thread."""
 
     status_signal = pyqtSignal(str, str)
-    finished_signal = pyqtSignal(bool)
+    finished_signal = pyqtSignal(bool, dict)  # also emits per-platform status
 
     def __init__(self, auth_manager):
         super().__init__()
@@ -73,20 +74,28 @@ class _BrowserLoginWorker(QThread):
 
     def run(self):
         success = False
+        platform_status = {}
         try:
             if self.auth_manager:
                 success = bool(
                     self.auth_manager.open_login_browser(
                         callback=lambda platform, status: self.status_signal.emit(
                             str(platform), str(status)
-                        )
+                        ),
+                        open_even_if_logged_in=True,
                     )
+                )
+                # Use the status captured from the live context inside
+                # open_login_browser — no separate headless launch needed.
+                platform_status = getattr(
+                    self.auth_manager, "_last_login_status", {}
                 )
         except Exception as e:
             self.status_signal.emit("system", f"error: {str(e)[:120]}")
             success = False
         finally:
-            self.finished_signal.emit(success)
+            self.finished_signal.emit(success, platform_status)
+
 
 
 class LinkGrabberPage(QWidget):
@@ -1171,8 +1180,19 @@ FIX: Check proxy username/password, verify format
     def _on_browser_login_status(self, platform: str, status: str):
         self.log_area.append(f"[Auth] {platform}: {status}")
 
-    def _on_browser_login_finished(self, success: bool):
+    def _on_browser_login_finished(self, success: bool, platform_status: dict = None):
         self.log_area.append("Browser login finished." if success else "Browser login ended without new session.")
+
+        # Display login results (actual sync already handled by browser_auth.py
+        # via notify_login_complete in open_login_browser).
+        # platform_status is from has_platform_session() (browser session layer).
+        if platform_status:
+            sessions = sorted([k for k, v in platform_status.items() if v])
+            if sessions:
+                self.log_area.append(f" Browser sessions detected: {', '.join(sessions)}")
+            else:
+                self.log_area.append(" No sessions detected. Try Re-login again.")
+
         self.relogin_btn.setEnabled(bool(self.auth_manager))
         self._refresh_auth_status_indicators()
 
@@ -1186,25 +1206,68 @@ FIX: Check proxy username/password, verify format
                 self.relogin_btn.setEnabled(False)
             return
 
+        # IMPORTANT: do not launch Playwright from GUI init path.
+        # Read last known auth status from shared auth_state cache.
+        # This shows the BROWSER SESSION layer (broad indicators).
+        status = self._read_cached_platform_status()
+
+        # Check cooldown state (lightweight file read, no Playwright)
+        cooldowns = {}
         try:
-            status = self.auth_manager.get_login_status()
+            from .browser_auth import ChromiumAuthManager
+            if self.auth_manager:
+                cooldowns = self.auth_manager.get_all_cooldowns()
         except Exception:
-            status = {}
+            pass
 
         order = ["youtube", "tiktok", "instagram", "twitter", "facebook"]
         parts = []
         ok_count = 0
         for key in order:
-            ok = bool(status.get(key, False))
-            ok_count += 1 if ok else 0
-            tag = "OK" if ok else "WARN"
-            parts.append(f"[{tag}] {key.title()}")
+            if key in cooldowns:
+                parts.append(f"[COOL] {key.title()}")
+            elif bool(status.get(key, False)):
+                ok_count += 1
+                parts.append(f"[OK] {key.title()}")
+            else:
+                parts.append(f"[WARN] {key.title()}")
 
         self.platform_status_label.setText("  ".join(parts))
         color = "#2ECC71" if ok_count >= 3 else "#F39C12"
         self.platform_status_label.setStyleSheet(f"color: {color}; font-size: 12px;")
 
+    def _read_cached_platform_status(self):
+        """Return platform status from config/auth_state.json without launching browser."""
+        status = {
+            "youtube": False,
+            "tiktok": False,
+            "instagram": False,
+            "twitter": False,
+            "facebook": False,
+        }
+        try:
+            state_file = self.auth_hub.auth_state_file
+            if not state_file.exists():
+                return status
+            raw = json.loads(state_file.read_text(encoding="utf-8"))
+            platforms = raw.get("cookies", {}).get("platforms", []) or []
+            for p in platforms:
+                key = str(p).strip().lower()
+                if key in status:
+                    status[key] = True
+        except Exception:
+            pass
+        return status
+
     def on_progress_log(self, msg):
+        try:
+            from modules.shared.progress_filter import filter_for_gui
+            filtered = filter_for_gui(msg)
+            if filtered is None:
+                return
+            msg = filtered
+        except ImportError:
+            pass
         self.log_area.append(self._repair_log_text(msg))
         self.log_area.ensureCursorVisible()
 
@@ -1314,7 +1377,11 @@ FIX: Check proxy username/password, verify format
                 continue
 
             seen.add(url)
-            cleaned.append({'url': url})
+            clean_entry = {'url': url}
+            # Preserve _meta from extraction for downstream consumers
+            if isinstance(entry, dict) and '_meta' in entry:
+                clean_entry['_meta'] = entry['_meta']
+            cleaned.append(clean_entry)
 
         self.links.extend(cleaned)
         return cleaned

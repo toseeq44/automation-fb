@@ -9,8 +9,8 @@ from PyQt5.QtWidgets import (
     QPushButton, QStackedWidget, QSpacerItem, QSizePolicy, QScrollArea,
     QGraphicsDropShadowEffect, QApplication
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve, QTimer, QSize, QUrl
-from PyQt5.QtGui import QFont, QColor, QIcon
+from PyQt5.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve, QTimer, QSize, QUrl, QPointF
+from PyQt5.QtGui import QFont, QColor, QIcon, QPainter, QPen, QPainterPath
 from PyQt5.QtSvg import QSvgWidget
 import os
 import sys
@@ -475,6 +475,102 @@ class Modern3DSidebar(QWidget):
             self.module_selected.emit(module_id)
 
 
+class AnimatedBorderLabel(QLabel):
+    """Label with a subtle moving light on the border."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._phase = 0.0
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._on_tick)
+        # Slower + smoother border movement
+        self._timer.start(20)
+
+    def _on_tick(self):
+        self._phase = (self._phase + 0.0025) % 1.0
+        self.update()
+
+    @staticmethod
+    def _perimeter(width: float, height: float) -> float:
+        return max(1.0, 2.0 * (width + height))
+
+    def _point_on_rect(self, d: float, width: float, height: float, x0: float, y0: float) -> QPointF:
+        perimeter = self._perimeter(width, height)
+        d = d % perimeter
+        if d <= width:
+            return QPointF(x0 + d, y0)
+        d -= width
+        if d <= height:
+            return QPointF(x0 + width, y0 + d)
+        d -= height
+        if d <= width:
+            return QPointF(x0 + width - d, y0 + height)
+        d -= width
+        return QPointF(x0, y0 + height - d)
+
+    def _light_path(
+        self,
+        center: float,
+        length: float,
+        width: float,
+        height: float,
+        x0: float,
+        y0: float,
+        steps: int = 84,
+    ) -> QPainterPath:
+        start = center - (length / 2.0)
+        step = max(1.0, length / max(1, steps - 1))
+        path = QPainterPath()
+        for i in range(steps):
+            pt = self._point_on_rect(start + i * step, width, height, x0, y0)
+            if i == 0:
+                path.moveTo(pt)
+            else:
+                path.lineTo(pt)
+        return path
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+
+        painter = QPainter(self)
+        if not painter.isActive():
+            return
+
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        rect = self.rect().adjusted(0, 0, -1, -1)
+        if rect.width() <= 4 or rect.height() <= 4:
+            return
+
+        # Base border
+        base_pen = QPen(QColor(0, 212, 255, 120), 1.4)
+        painter.setPen(base_pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRoundedRect(rect, 6, 6)
+
+        width = float(rect.width())
+        height = float(rect.height())
+        x0 = float(rect.left())
+        y0 = float(rect.top())
+        perimeter = self._perimeter(width, height)
+
+        # Moving highlight segment (restore previous width)
+        segment_len = max(18.0, perimeter * 0.16)
+        center = self._phase * perimeter
+        segment = self._light_path(center, segment_len, width, height, x0, y0)
+
+        glow_pen = QPen(QColor(234, 197, 2, 70), 4.0)
+        glow_pen.setCapStyle(Qt.RoundCap)
+        glow_pen.setJoinStyle(Qt.RoundJoin)
+        painter.setPen(glow_pen)
+        painter.drawPath(segment)
+
+        light_pen = QPen(QColor(234, 197, 2), 1.8)
+        light_pen.setCapStyle(Qt.RoundCap)
+        light_pen.setJoinStyle(Qt.RoundJoin)
+        painter.setPen(light_pen)
+        painter.drawPath(segment)
+
+
 # ==================== MODERN TOP BAR ====================
 
 class ModernTopBar(QWidget):
@@ -493,7 +589,7 @@ class ModernTopBar(QWidget):
         self.setFixedHeight(OneSoulTheme.TOPBAR_HEIGHT)
 
         layout = QHBoxLayout()
-        layout.setContentsMargins(20, 5, 20, 5)  # Reduced vertical margins for compact look
+        layout.setContentsMargins(20, 8, 20, 8)
 
         # Left: ANIMATED Logo (2x size, no text)
         animated_logo_path = asset_path("onesoul_animated_logo.html")
@@ -534,13 +630,23 @@ class ModernTopBar(QWidget):
             """)
             layout.addWidget(logo_text)
 
-        layout.addStretch()
+        layout.addStretch(1)
 
-        # Right: License status (aligned to top)
+        # Center: branded powered/contact block (two-line, centered)
+        self.brand_contact_label = AnimatedBorderLabel()
+        self.brand_contact_label.setWordWrap(False)
+        self.brand_contact_label.setAlignment(Qt.AlignCenter)
+        self.brand_contact_label.setTextFormat(Qt.RichText)
+        layout.addWidget(self.brand_contact_label, alignment=Qt.AlignVCenter)
+
+        # Keep contact badge centered between logo and license badge
+        layout.addStretch(1)
+
+        # Right: License status
         self.license_label = QLabel()
         self.license_label.setCursor(Qt.PointingHandCursor)
         self.license_label.mousePressEvent = lambda e: self.license_clicked.emit()
-        layout.addWidget(self.license_label, alignment=Qt.AlignTop)
+        layout.addWidget(self.license_label, alignment=Qt.AlignVCenter | Qt.AlignRight)
 
         self.setLayout(layout)
 
@@ -576,11 +682,36 @@ class ModernTopBar(QWidget):
             color: {color};
             font-weight: bold;
             font-size: 11px;
-            padding: 3px 24px;
+            padding: 4px 24px;
             background: {OneSoulTheme.BG_ELEVATED};
             border: 1px solid {color};
             border-radius: 4px;
         """)
+        self.license_label.setFixedHeight(28)
+
+        brand_html = (
+            "<div style='text-align:center; line-height:145%;'>"
+            "<span style='color:#EAC502;'>Powerd By</span>"
+            "<span style='color:#00D4FF;'> : OneSoul From The House Of MuskanWaves</span>"
+            "<br/>"
+            "<span style='color:#EAC502;'>Email  </span>"
+            "<span style='color:#EAC502;'>: </span> "
+            "<span style='color:#00D4FF;'>onesoulforeveryone@gmail.com</span>"
+            "<span style='color:#EAC502;'>  |  Contact  </span>"
+            "<span style='color:#EAC502;'>: </span> "
+            "<span style='color:#00D4FF;'>+92 3077361139 & +92 3026768888</span>"
+            "</div>"
+        )
+        self.brand_contact_label.setText(brand_html)
+        self.brand_contact_label.setStyleSheet(f"""
+            font-size: 11px;
+            font-weight: bold;
+            padding: 6px 30px;
+            background: {OneSoulTheme.BG_ELEVATED};
+            border: none;
+            border-radius: 6px;
+        """)
+        self.brand_contact_label.setFixedHeight(48)
 
 
 # ==================== 3D CONTENT WRAPPER ====================
@@ -649,6 +780,15 @@ class VideoToolSuiteGUI(QMainWindow):
         self.apply_global_theme()
         self.update_license_status()
         self.setup_responsive()
+
+    def closeEvent(self, event):
+        """Clean up resources (IXBrowser session etc.) on app exit."""
+        try:
+            if hasattr(self, "downloading_editing") and hasattr(self.downloading_editing, "cleanup"):
+                self.downloading_editing.cleanup()
+        except Exception as e:
+            print(f"[App] Cleanup error: {e}")
+        super().closeEvent(event)
 
     def init_ui(self):
         """Initialize UI"""

@@ -7,10 +7,13 @@ echo   OneSoul EXE Builder
 echo ============================================
 echo.
 
+set "PYTHON_EXE=python"
+
 REM Check if virtual environment exists
-if exist ".venv\Scripts\activate.bat" (
-    echo [1/5] Activating virtual environment...
-    call .venv\Scripts\activate.bat
+if exist ".venv\Scripts\python.exe" (
+    set "PYTHON_EXE=.venv\Scripts\python.exe"
+    echo [1/5] Using virtual environment Python...
+    echo     %PYTHON_EXE%
 ) else (
     echo [!] Warning: Virtual environment not found
     echo     Continuing with global Python...
@@ -18,10 +21,10 @@ if exist ".venv\Scripts\activate.bat" (
 
 echo.
 echo [2/5] Checking PyInstaller...
-python -c "import PyInstaller" 2>nul
+%PYTHON_EXE% -c "import PyInstaller" 2>nul
 if errorlevel 1 (
     echo [!] PyInstaller not found. Installing...
-    pip install pyinstaller
+    %PYTHON_EXE% -m pip install pyinstaller
 ) else (
     echo     PyInstaller is installed
 )
@@ -35,10 +38,18 @@ if exist "cloudflared.exe" (
 )
 
 if exist "ffmpeg" (
-    if exist "ffmpeg\ffmpeg.exe" (
-        echo     [OK] ffmpeg directory found
+    if exist "ffmpeg\bin\ffmpeg.exe" (
+        if exist "ffmpeg\bin\avcodec-*.dll" (
+            echo     [OK] ffmpeg directory found with companion DLLs
+        ) else (
+            echo     [!] ffmpeg\bin\ffmpeg.exe found but companion DLLs are missing
+            echo         Second PC may show ffmpeg.exe 0xc0000142 errors
+        )
+    ) else if exist "ffmpeg\ffmpeg.exe" (
+        echo     [!] legacy ffmpeg layout detected (ffmpeg\ffmpeg.exe)
+        echo         Recommended layout is ffmpeg\bin\ffmpeg.exe plus DLL files
     ) else (
-        echo     [!] ffmpeg folder exists but ffmpeg.exe missing
+        echo     [!] ffmpeg folder exists but ffmpeg\bin\ffmpeg.exe missing
     )
 ) else (
     echo     [!] ffmpeg directory NOT found - will skip
@@ -63,7 +74,7 @@ echo [5/5] Building EXE with PyInstaller...
 echo     This may take 5-10 minutes...
 echo.
 
-pyinstaller --clean onesoul_enhanced.spec
+%PYTHON_EXE% -m PyInstaller --clean onesoul_enhanced.spec
 
 if errorlevel 1 (
     echo.

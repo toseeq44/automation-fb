@@ -270,46 +270,92 @@ def auto_login_and_get_cookies(
 
             launch_args = [
                 "--disable-blink-features=AutomationControlled",
-                "--disable-dev-shm-usage",
-                "--no-sandbox",
-                "--disable-web-security",
-                f"--window-size={random.choice([1366, 1440, 1920])},{random.choice([768, 900, 1080])}",
+                # GPU flags removed for better stability in headless mode
             ]
 
             # Use bundled Chromium from bin/ if available
-            from pathlib import Path as _Path
-            bin_dir = _Path(__file__).parent.parent.parent / "bin"
-            chromium_candidates = [
-                bin_dir / "chromium" / "chromium.exe",
-                bin_dir / "chromium.exe",
-            ]
-            exe_path = next((str(p) for p in chromium_candidates if p.exists()), None)
+            from .browser_utils import delete_browser_profile, get_chromium_executable_path
+            def launch_browser(pw_inst, path, retry=True):
+                try:
+                    if path and "bin" not in path.lower():
+                        _dbg(cb, f"[WF2] °Å¸Å’Å¸ Launching System Google Chrome: {path}")
+                    elif path:
+                        _dbg(cb, f"[WF2] °Å¸â€œÂ¦ Launching Bundled Chromium: {path}")
 
-            browser = pw.chromium.launch(
-                headless=False,        # Visible – less suspicious for login
-                args=launch_args,
-                executable_path=exe_path,
-                slow_mo=random.randint(30, 80),
-            )
+                    return pw_inst.chromium.launch(
+                        headless=False,        # Visible – less suspicious for login
+                        args=launch_args,
+                        executable_path=path,
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+                        ignore_default_args=["--enable-automation"],
+                        slow_mo=random.randint(30, 80),
+                    )
+                except Exception as e:
+                    _dbg(cb, f"[WF2] Browser launch failed: {e}")
+                    if retry and ("Target page, context or browser has been closed" in str(e) or "FATAL" in str(e)):
+                        # Look for potential profile dir (Workflow 2 might use a temp one or a default)
+                        # Actually, auto_login usually doesn't use a PERSISTENT context unless specified.
+                        # But if it does crash, we should still report it.
+                        _dbg(cb, "[WF2] Fatal crash detected. No persistent profile to reset here, but check system Chromium.")
+                    return None
 
-            context = browser.new_context(
-                user_agent=(
+            # ENHANCED: Use persistent profile shared with Link Grabber
+            from modules.link_grabber.browser_auth import ChromiumAuthManager
+            auth = ChromiumAuthManager()
+
+            # Resolve browser executable (was missing before - bug fix)
+            exe_path = get_chromium_executable_path()
+
+            # Get consistent UA from SessionAuthority
+            try:
+                from modules.shared.session_authority import get_session_authority
+                consistent_ua = get_session_authority().user_agent
+            except Exception:
+                consistent_ua = (
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    f"Chrome/{random.randint(120, 130)}.0.0.0 Safari/537.36"
-                ),
-                viewport={"width": random.choice([1366, 1440]), "height": random.choice([768, 900])},
-                locale="en-US",
+                    "Chrome/133.0.0.0 Safari/537.36"
+                )
+
+            # Reset viewport if needed
+            vw = random.choice([1366, 1440])
+            vh = random.choice([768, 900])
+
+            _dbg(cb, f"[WF2] Using persistent profile: {auth.profile_dir}")
+            _dbg(cb, f"[WF2] Chrome executable: {exe_path or 'Playwright default'}")
+
+            # Write session lock before launching
+            try:
+                from modules.shared.session_authority import get_session_authority
+                get_session_authority().write_session_lock("auto_login")
+            except Exception:
+                pass
+
+            # Use the shared lock from ChromiumAuthManager
+            with auth._launch_lock:
+                persistent_launch_args = {
+                    "user_data_dir": str(auth.profile_dir),
+                    "headless": False,
+                    "ignore_default_args": ["--enable-automation"],
+                    "user_agent": consistent_ua,
+                    "viewport": {"width": vw, "height": vh},
+                    "args": launch_args,
+                }
+                if exe_path:
+                    persistent_launch_args["executable_path"] = exe_path
+                context = pw.chromium.launch_persistent_context(**persistent_launch_args)
+
+            # Minimal stealth: only hide the webdriver flag Playwright sets.
+            # No other browser properties are overridden.
+            context.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });"
             )
-
-            # Mask navigator.webdriver
-            context.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                Object.defineProperty(navigator, 'plugins',   { get: () => [1, 2, 3, 4, 5] });
-                window.chrome = { runtime: {} };
-            """)
-
-            page = context.new_page()
+            
+            # Persistent context comes with an initial page
+            if context.pages:
+                page = context.pages[0]
+            else:
+                page = context.new_page()
             _dbg(cb, f"[WF2] Navigating to login page: {config['url']}")
             page.goto(config["url"], timeout=30000, wait_until="domcontentloaded")
             time.sleep(random.uniform(1.5, 3.0))
@@ -320,7 +366,12 @@ def auto_login_and_get_cookies(
                 _human_type(page, config["user_selector"], username, cb)
             except Exception as e:
                 _dbg(cb, f"[WF2] Username field error: {e}")
-                browser.close()
+                context.close()
+                try:
+                    from modules.shared.session_authority import get_session_authority
+                    get_session_authority().clear_session_lock()
+                except Exception:
+                    pass
                 return None
 
             time.sleep(random.uniform(0.5, 1.2))
@@ -331,7 +382,12 @@ def auto_login_and_get_cookies(
                 _human_type(page, config["pass_selector"], password, cb)
             except Exception as e:
                 _dbg(cb, f"[WF2] Password field error: {e}")
-                browser.close()
+                context.close()
+                try:
+                    from modules.shared.session_authority import get_session_authority
+                    get_session_authority().clear_session_lock()
+                except Exception:
+                    pass
                 return None
 
             time.sleep(random.uniform(0.8, 1.5))
@@ -342,7 +398,12 @@ def auto_login_and_get_cookies(
                 page.locator(config["submit_selector"]).first.click()
             except Exception as e:
                 _dbg(cb, f"[WF2] Submit click error: {e}")
-                browser.close()
+                context.close()
+                try:
+                    from modules.shared.session_authority import get_session_authority
+                    get_session_authority().clear_session_lock()
+                except Exception:
+                    pass
                 return None
 
             time.sleep(random.uniform(3.0, 5.0))
@@ -358,7 +419,12 @@ def auto_login_and_get_cookies(
             login_keywords = ["login", "signin", "accounts/login"]
             if any(kw in current_url.lower() for kw in login_keywords):
                 _dbg(cb, "[WF2] Still on login page – login may have failed (wrong credentials / CAPTCHA)")
-                browser.close()
+                context.close()
+                try:
+                    from modules.shared.session_authority import get_session_authority
+                    get_session_authority().clear_session_lock()
+                except Exception:
+                    pass
                 return None
 
             _dbg(cb, "[WF2] Login appears successful!")
@@ -369,15 +435,36 @@ def auto_login_and_get_cookies(
             pw_cookies = context.cookies()
             _dbg(cb, f"[WF2] Total cookies in session: {len(pw_cookies)}")
 
-            browser.close()
+            context.close()
 
             result = _playwright_cookies_to_netscape(pw_cookies, platform_key, save_to, cb)
             if result:
-                _dbg(cb, f"[WF2] ✓ Cookie file ready: {Path(result).name}")
+                _dbg(cb, f"[WF2] Cookie file ready: {Path(result).name}")
             else:
-                _dbg(cb, "[WF2] ✗ No cookies extracted")
+                _dbg(cb, "[WF2] No cookies extracted")
+
+            # Notify SessionAuthority that login completed.
+            # This handles: session lock cleanup, cache invalidation,
+            # fresh cookie export, and auth metadata persistence.
+            try:
+                from modules.shared.session_authority import get_session_authority
+                get_session_authority().notify_login_complete(platform_key, source="auto_login")
+                _dbg(cb, f"[WF2] SessionAuthority notified of {platform_key} login")
+            except Exception as notify_err:
+                _dbg(cb, f"[WF2] SessionAuthority notify failed: {notify_err}")
+                # Fallback: manual sync
+                try:
+                    auth.extract_cookies_for_platform(platform_key)
+                except Exception:
+                    pass
+
             return result
 
     except Exception as e:
         _dbg(cb, f"[WF2] Auto-login error: {e}")
+        try:
+            from modules.shared.session_authority import get_session_authority
+            get_session_authority().clear_session_lock()
+        except Exception:
+            pass
         return None

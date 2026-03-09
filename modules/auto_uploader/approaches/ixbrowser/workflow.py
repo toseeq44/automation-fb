@@ -362,6 +362,8 @@ class IXBrowserApproach(BaseApproach):
 
         total_successful_uploads = 0
         profile_results = []
+        consecutive_launch_failures = 0
+        MAX_CONSECUTIVE_FAILURES = 3  # Stop after 3 consecutive profile launch failures
 
         try:
             # Loop through all profiles
@@ -422,6 +424,22 @@ class IXBrowserApproach(BaseApproach):
                 })
 
                 total_successful_uploads += profile_upload_count
+
+                # Detect consecutive launch failures (kernel error, selenium missing, etc.)
+                if profile_upload_count == 0:
+                    consecutive_launch_failures += 1
+                    if consecutive_launch_failures >= MAX_CONSECUTIVE_FAILURES:
+                        logger.error("[IXApproach] ═══════════════════════════════════════════")
+                        logger.error("[IXApproach] STOPPING: %d consecutive profile failures!", MAX_CONSECUTIVE_FAILURES)
+                        logger.error("[IXApproach] This indicates a systemic issue:")
+                        logger.error("[IXApproach]   - ixBrowser kernel may be corrupted (repair in ixBrowser settings)")
+                        logger.error("[IXApproach]   - Selenium may not be installed")
+                        logger.error("[IXApproach]   - ixBrowser API may be unreachable")
+                        logger.error("[IXApproach] Fix the issue and restart automation.")
+                        logger.error("[IXApproach] ═══════════════════════════════════════════")
+                        break
+                else:
+                    consecutive_launch_failures = 0  # Reset on success
 
                 # Check if limit reached after this profile
                 post_profile_limit = self._state_manager.check_daily_limit(

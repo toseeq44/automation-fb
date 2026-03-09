@@ -775,7 +775,8 @@ class VideoDownloaderPage(QWidget):
 
         self.start_btn.setEnabled(False)
         self.cancel_btn.setVisible(True)
-        self.progress_bar.setValue(0)
+        self._first_percent_received = False
+        self.progress_bar.setRange(0, 0)  # indeterminate mode
         self.speed_label.setVisible(True)
         self.eta_label.setVisible(True)
 
@@ -804,7 +805,7 @@ class VideoDownloaderPage(QWidget):
             bulk_mode_data=self.bulk_mode_data
         )
         self.downloader_thread.progress.connect(self.log_message)
-        self.downloader_thread.progress_percent.connect(self.progress_bar.setValue)
+        self.downloader_thread.progress_percent.connect(self._on_progress_percent)
         self.downloader_thread.download_speed.connect(lambda s: self.speed_label.setText(f"Speed: {s}"))
         self.downloader_thread.eta.connect(lambda e: self.eta_label.setText(f"ETA: {e}"))
         self.downloader_thread.video_complete.connect(lambda f: self.log_message(f"✅ Saved: {f}"))
@@ -816,7 +817,21 @@ class VideoDownloaderPage(QWidget):
             self.downloader_thread.cancel()
             self.log_message("⚠️ Cancelling download...")
 
+    def _on_progress_percent(self, val):
+        if not self._first_percent_received:
+            self._first_percent_received = True
+            self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(val)
+
     def log_message(self, message):
+        try:
+            from modules.shared.progress_filter import filter_for_gui
+            filtered = filter_for_gui(message)
+            if filtered is None:
+                return
+            message = filtered
+        except ImportError:
+            pass
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.log_text.append(f"[{timestamp}] {message}")
         self.log_text.ensureCursorVisible()
@@ -828,6 +843,9 @@ class VideoDownloaderPage(QWidget):
         self.cancel_btn.setVisible(False)
         self.speed_label.setVisible(False)
         self.eta_label.setVisible(False)
+        # Switch to determinate mode before setting final value
+        if not self._first_percent_received:
+            self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(100 if success else 0)
 
         folder = self.path_input.text().strip()

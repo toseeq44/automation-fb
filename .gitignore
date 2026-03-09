@@ -26,6 +26,12 @@ modules/auto_uploader/data_files/settings.json
 modules/auto_uploader/approaches/ixbrowser/data/bot_state.json
 modules/auto_uploader/approaches/ixbrowser/data/folder_progress.json
 data_files/creator_method_cache.json
+data_files/creator_activity_log.jsonl
+data_files/browser_cookies/
+data_files/browser_profile/
+config/auth_state.json
+memory/
+*.part
 api_config.json
 
 # License data (don't commit user licenses)

@@ -20,7 +20,10 @@ _WATERMARK_TEXT_DEFAULTS = {
     "font_size": 24,
     "font_weight": "bold",
     "font_style": "normal",
+    "render_style": "normal",     # normal|outline_hollow|outline_shadow
     "letter_spacing": 0,
+    "shadow_opacity": 75,         # for outline_shadow
+    "shadow_offset": 2,           # px, for outline_shadow
 }
 
 _WATERMARK_LOGO_DEFAULTS = {
@@ -41,10 +44,13 @@ _DEFAULTS = {
     "prefer_popular_first": False,
     "randomize_links": False,
     "keep_original_after_edit": True,
+    "delete_before_download": False,
+    "uploading_target": 0,
     "watermark_enabled": False,
     "watermark_text": _WATERMARK_TEXT_DEFAULTS.copy(),
     "watermark_logo": _WATERMARK_LOGO_DEFAULTS.copy(),
     "downloaded_ids": [],
+    "downloaded_url_history": [],
     "last_activity": {
         "date": None,
         "result": None,           # "success" | "partial" | "failed"
@@ -71,9 +77,15 @@ class CreatorConfig:
 
     @staticmethod
     def _resolve_activity_log() -> Path:
-        root = Path(__file__).resolve().parents[2]
-        data_dir = root / "data_files"
-        data_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            from modules.config.paths import get_data_dir
+            data_dir = get_data_dir()
+        except ImportError:
+            # Fallback for dev/simple cases
+            root = Path(__file__).resolve().parents[2]
+            data_dir = root / "data_files"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            
         return data_dir / "creator_activity_log.jsonl"
 
     # ── Load / Save ──────────────────────────────────────────────────────────
@@ -90,6 +102,8 @@ class CreatorConfig:
                     merged["last_activity"] = _DEFAULTS["last_activity"].copy()
                 if not isinstance(merged.get("downloaded_ids"), list):
                     merged["downloaded_ids"] = []
+                if not isinstance(merged.get("downloaded_url_history"), list):
+                    merged["downloaded_url_history"] = []
                 # Ensure watermark nested dicts have all keys
                 wm_text = _WATERMARK_TEXT_DEFAULTS.copy()
                 wm_text.update(merged.get("watermark_text") or {})
@@ -123,6 +137,32 @@ class CreatorConfig:
 
     def is_downloaded(self, video_id: str) -> bool:
         return video_id in self.data["downloaded_ids"]
+
+    # ── URL history (capped at 300) ──────────────────────────────────────────
+
+    _URL_HISTORY_CAP = 300
+
+    def add_url_to_history(self, url: str, platform: str = "", creator: str = ""):
+        """Record a successfully-downloaded URL for history fallback."""
+        if not url:
+            return
+        history = self.data.setdefault("downloaded_url_history", [])
+        # Avoid duplicate entries for the same URL
+        if any(h.get("url") == url for h in history):
+            return
+        history.append({
+            "url": url,
+            "platform": platform,
+            "creator": creator,
+            "downloaded_at": datetime.now().isoformat(),
+        })
+        # Cap: keep most recent entries
+        if len(history) > self._URL_HISTORY_CAP:
+            self.data["downloaded_url_history"] = history[-self._URL_HISTORY_CAP:]
+
+    def get_url_history(self) -> list:
+        """Return the downloaded URL history list."""
+        return self.data.get("downloaded_url_history", [])
 
     # ── Activity ─────────────────────────────────────────────────────────────
 
@@ -348,6 +388,14 @@ class CreatorConfig:
     @property
     def keep_original_after_edit(self) -> bool:
         return bool(self.data.get("keep_original_after_edit", True))
+
+    @property
+    def delete_before_download(self) -> bool:
+        return bool(self.data.get("delete_before_download", False))
+
+    @property
+    def uploading_target(self) -> int:
+        return int(self.data.get("uploading_target", 0))
 
     @property
     def last_activity(self) -> dict:

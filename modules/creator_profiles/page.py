@@ -2335,9 +2335,21 @@ class CreatorProfilesPage(QWidget):
 
     def _on_onego(self):
         """Open OneGo start dialog and run download+upload workflow."""
-        # Stub — will be implemented in Commit 4 (onego-dialog)
+        from .onego.start_dialog import OneGoStartDialog
+        dlg = OneGoStartDialog(self)
+        if dlg.exec_() != OneGoStartDialog.Accepted:
+            return
+        result = dlg.get_result()
+        if not result:
+            return
+        # Stub: orchestration will be wired in Commit 8
         from PyQt5.QtWidgets import QMessageBox
-        QMessageBox.information(self, "OneGo", "OneGo feature coming soon.")
+        QMessageBox.information(
+            self, "OneGo",
+            f"Mode: {result['mode']}\nAPI: {result['api_url']}\n"
+            f"Email: {result['email']}\nHint: {result.get('profile_hint', '')}\n\n"
+            "Orchestration not yet connected."
+        )
 
     def _on_run_all(self):
         """Start sequential queue using CreatorQueueManager."""

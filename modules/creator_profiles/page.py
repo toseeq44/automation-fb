@@ -2398,18 +2398,11 @@ class CreatorProfilesPage(QWidget):
                 pass
             del self._onego_dl_done_cb
 
-        # Store report for the report dialog (Commit 9)
+        # Store report and show detailed report dialog
         self._onego_last_report = report
-
-        # Show quick summary
-        total_up = report.get("total_uploaded", 0)
-        total_skip = report.get("total_skipped", 0)
-        total_fail = report.get("total_failed", 0)
-        QMessageBox.information(
-            self, "OneGo Complete",
-            f"Uploaded: {total_up}\nSkipped: {total_skip}\nFailed: {total_fail}\n\n"
-            f"Mode: {report.get('mode', '?')}"
-        )
+        from .onego.report_dialog import OneGoReportDialog
+        dlg = OneGoReportDialog(report, self)
+        dlg.exec_()
 
     def _on_run_all(self):
         """Start sequential queue using CreatorQueueManager."""

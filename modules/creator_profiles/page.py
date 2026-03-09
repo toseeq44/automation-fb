@@ -1904,11 +1904,59 @@ class CreatorProfilesPage(QWidget):
                 border-radius:8px;
             }}
         """)
-        al = QHBoxLayout(action_panel)
-        al.setContentsMargins(12, 8, 12, 8)
-        al.setSpacing(7)
+        action_vbox = QVBoxLayout(action_panel)
+        action_vbox.setContentsMargins(12, 8, 12, 8)
+        action_vbox.setSpacing(5)
 
-        # ── Add Creator (dropdown menu) ───────────────────────────────────
+        # ── Row 1: primary actions (Run All + OneGo) ─────────────────────
+        row1 = QHBoxLayout()
+        row1.setSpacing(7)
+
+        run_all = _abtn("▶  Run All", _GREEN, "#161b22")
+        run_all.clicked.connect(self._on_run_all)
+        row1.addWidget(run_all)
+
+        self.onego_btn = _abtn("▶  OneGo", _CYAN, "#161b22")
+        self.onego_btn.setToolTip("Run download + upload workflow in one click")
+        self.onego_btn.clicked.connect(self._on_onego)
+        row1.addWidget(self.onego_btn)
+
+        self.pause_all_btn = _abtn("⏸  Pause", _WARN, "#161b22")
+        self.pause_all_btn.setVisible(False)
+        self.pause_all_btn.clicked.connect(self._on_pause_all)
+        row1.addWidget(self.pause_all_btn)
+
+        self.resume_all_btn = _abtn("▶  Resume", _GREEN, "#161b22")
+        self.resume_all_btn.setVisible(False)
+        self.resume_all_btn.clicked.connect(self._on_resume_all)
+        row1.addWidget(self.resume_all_btn)
+
+        stop_b = _abtn("⏹  Stop", _RED, "#161b22")
+        stop_b.clicked.connect(self._on_stop_all)
+        row1.addWidget(stop_b)
+
+        self.summary_btn = _abtn("📋 Final Summary", _WARN, "#161b22")
+        self.summary_btn.setVisible(False)
+        self.summary_btn.clicked.connect(self._on_summary_clicked)
+        row1.addWidget(self.summary_btn)
+
+        # ── Queue status label (inline in row 1) ─────────────────────────
+        self.queue_status_lbl = QLabel("")
+        self.queue_status_lbl.setStyleSheet(
+            f"color:{_CYAN}; font-size:11px; font-weight:bold;"
+            " background:transparent; border:none; padding-left:8px;"
+        )
+        self.queue_status_lbl.setVisible(False)
+        row1.addWidget(self.queue_status_lbl)
+
+        row1.addStretch()
+        action_vbox.addLayout(row1)
+
+        # ── Row 2: secondary actions ─────────────────────────────────────
+        row2 = QHBoxLayout()
+        row2.setSpacing(7)
+
+        # Add Creator (dropdown menu)
         self.add_btn = _abtn("+ Add Creator  ▾", _CYAN, "#161b22")
         add_menu = QMenu(self.add_btn)
         add_menu.setStyleSheet(f"""
@@ -1922,69 +1970,48 @@ class CreatorProfilesPage(QWidget):
         add_menu.addAction("➕  Single Creator",         self._on_add_single)
         add_menu.addAction("📋  Bulk Add (Multiple URLs)", self._on_add_bulk)
         self.add_btn.setMenu(add_menu)
-        al.addWidget(self.add_btn)
+        row2.addWidget(self.add_btn)
 
-        # Import / Export
         imp_btn = _abtn("⬆  Import", _CYAN, "#161b22")
         imp_btn.setToolTip("Import creator settings from JSON file")
         imp_btn.clicked.connect(self._on_import)
-        al.addWidget(imp_btn)
+        row2.addWidget(imp_btn)
 
         exp_btn = _abtn("⬇  Export", _CYAN, "#161b22")
         exp_btn.setToolTip("Export all creator settings to JSON file")
         exp_btn.clicked.connect(self._on_export)
-        al.addWidget(exp_btn)
+        row2.addWidget(exp_btn)
 
         all_settings_btn = _abtn("⚙  All Settings", _CYAN, "#161b22")
         all_settings_btn.setToolTip("Open one panel to edit common settings and apply to all creators")
         all_settings_btn.clicked.connect(self._on_all_settings)
-        al.addWidget(all_settings_btn)
+        row2.addWidget(all_settings_btn)
 
-        al.addWidget(_vsep())
+        row2.addWidget(_vsep())
 
-        # Run controls
-        run_all = _abtn("▶  Run All",       _GREEN, "#161b22")
-        self.pause_all_btn = _abtn("⏸  Pause",  _WARN,  "#161b22")
-        self.pause_all_btn.setVisible(False)
-        self.resume_all_btn = _abtn("▶  Resume", _GREEN, "#161b22")
-        self.resume_all_btn.setVisible(False)
-        stop_b  = _abtn("⏹  Stop",          _RED,   "#161b22")
-        self.summary_btn = _abtn("📋 Final Summary", _WARN, "#161b22")
-        self.summary_btn.setVisible(False)
+        clr_b = _abtn("🗑  Clear History", _CYAN, "#161b22")
+        clr_b.clicked.connect(self._on_clear_history)
+        row2.addWidget(clr_b)
+
         self.guard_b = _abtn("🛡  Start Daily Guard", _GREEN, "#161b22")
         self.guard_b.setVisible(False)
-        ref_b   = _abtn("↺  Reset App",     "rgba(255,255,255,0.7)", _BG_CARD,
-                         "rgba(255,255,255,0.12)")
-        ref_b.setVisible(False)
-        clr_b   = _abtn("🗑  Clear History", _CYAN,  "#161b22")
-        sav_b   = _abtn("💾  Save All",      "rgba(255,255,255,0.7)", _BG_CARD,
-                         "rgba(255,255,255,0.12)")
-        sav_b.setVisible(False)
-
-        run_all.clicked.connect(self._on_run_all)
-        self.pause_all_btn.clicked.connect(self._on_pause_all)
-        self.resume_all_btn.clicked.connect(self._on_resume_all)
-        stop_b.clicked.connect(self._on_stop_all)
-        self.summary_btn.clicked.connect(self._on_summary_clicked)
         self.guard_b.clicked.connect(self._on_toggle_daily_guard)
+        row2.addWidget(self.guard_b)
+
+        ref_b = _abtn("↺  Reset App", "rgba(255,255,255,0.7)", _BG_CARD,
+                       "rgba(255,255,255,0.12)")
+        ref_b.setVisible(False)
         ref_b.clicked.connect(self._on_reset_app)
-        clr_b.clicked.connect(self._on_clear_history)
+        row2.addWidget(ref_b)
+
+        sav_b = _abtn("💾  Save All", "rgba(255,255,255,0.7)", _BG_CARD,
+                       "rgba(255,255,255,0.12)")
+        sav_b.setVisible(False)
         sav_b.clicked.connect(self._on_save_all)
+        row2.addWidget(sav_b)
 
-        for b in (run_all, self.pause_all_btn, self.resume_all_btn, stop_b,
-                  self.summary_btn, clr_b):
-            al.addWidget(b)
+        row2.addStretch()
 
-        # ── Queue status label (inline in action bar, left side) ──────────
-        self.queue_status_lbl = QLabel("")
-        self.queue_status_lbl.setStyleSheet(
-            f"color:{_CYAN}; font-size:11px; font-weight:bold;"
-            " background:transparent; border:none; padding-left:8px;"
-        )
-        self.queue_status_lbl.setVisible(False)
-        al.addWidget(self.queue_status_lbl)
-
-        al.addStretch()
         self.root_lbl.setStyleSheet(
             "color:white; font-size:11px; background:transparent; border:none;"
         )
@@ -1998,8 +2025,8 @@ class CreatorProfilesPage(QWidget):
         self.count_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         info_col.addWidget(self.root_lbl)
         info_col.addWidget(self.count_lbl)
-        al.addLayout(info_col)
-        al.addSpacing(10)
+        row2.addLayout(info_col)
+        row2.addSpacing(10)
 
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search Creator")
@@ -2028,8 +2055,9 @@ class CreatorProfilesPage(QWidget):
             """
         )
         self.search_input.textChanged.connect(self._on_search_text_changed)
-        al.addWidget(self.search_input)
+        row2.addWidget(self.search_input)
 
+        action_vbox.addLayout(row2)
         outer.addWidget(action_panel)
         outer.addWidget(_hdiv())
 
@@ -2304,6 +2332,12 @@ class CreatorProfilesPage(QWidget):
                 "Applied",
                 f"Common settings applied to all {updated} creator(s).",
             )
+
+    def _on_onego(self):
+        """Open OneGo start dialog and run download+upload workflow."""
+        # Stub — will be implemented in Commit 4 (onego-dialog)
+        from PyQt5.QtWidgets import QMessageBox
+        QMessageBox.information(self, "OneGo", "OneGo feature coming soon.")
 
     def _on_run_all(self):
         """Start sequential queue using CreatorQueueManager."""

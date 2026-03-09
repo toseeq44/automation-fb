@@ -2336,19 +2336,79 @@ class CreatorProfilesPage(QWidget):
     def _on_onego(self):
         """Open OneGo start dialog and run download+upload workflow."""
         from .onego.start_dialog import OneGoStartDialog
+        from .onego.workflow import OneGoWorker, MODE_DOWNLOAD_UPLOAD
+
         dlg = OneGoStartDialog(self)
         if dlg.exec_() != OneGoStartDialog.Accepted:
             return
         result = dlg.get_result()
         if not result:
             return
-        # Stub: orchestration will be wired in Commit 8
-        from PyQt5.QtWidgets import QMessageBox
+
+        if not self.cards:
+            QMessageBox.information(self, "OneGo", "No creators configured yet.")
+            return
+
+        card_folders = list(self.cards.keys())
+
+        # Download trigger: start the existing queue, signal OneGo when done
+        def download_trigger():
+            self._on_run_all()
+
+        worker = OneGoWorker(
+            mode=result["mode"],
+            api_url=result["api_url"],
+            email=result["email"],
+            password=result["password"],
+            profile_hint=result.get("profile_hint", ""),
+            card_folders=card_folders,
+            links_root=self.root,
+            download_trigger=download_trigger if result["mode"] == MODE_DOWNLOAD_UPLOAD else None,
+            parent=self,
+        )
+
+        # If download+upload mode, connect queue_finished to mark download done
+        if result["mode"] == MODE_DOWNLOAD_UPLOAD:
+            def _on_dl_done():
+                worker.mark_download_done()
+            self._onego_dl_done_cb = _on_dl_done  # prevent GC
+            self._queue_manager.queue_finished.connect(_on_dl_done)
+
+        self._onego_worker = worker
+        worker.progress.connect(self._on_onego_progress)
+        worker.finished_signal.connect(self._on_onego_finished)
+        worker.start()
+        self.onego_btn.setEnabled(False)
+        self.onego_btn.setText("OneGo Running...")
+
+    def _on_onego_progress(self, msg: str):
+        self.queue_status_lbl.setText(msg)
+        self.queue_status_lbl.setVisible(True)
+
+    def _on_onego_finished(self, report: dict):
+        self.onego_btn.setEnabled(True)
+        self.onego_btn.setText("\u25b6  OneGo")
+        self.queue_status_lbl.setVisible(False)
+
+        # Disconnect download-done callback if it was connected
+        if hasattr(self, "_onego_dl_done_cb"):
+            try:
+                self._queue_manager.queue_finished.disconnect(self._onego_dl_done_cb)
+            except Exception:
+                pass
+            del self._onego_dl_done_cb
+
+        # Store report for the report dialog (Commit 9)
+        self._onego_last_report = report
+
+        # Show quick summary
+        total_up = report.get("total_uploaded", 0)
+        total_skip = report.get("total_skipped", 0)
+        total_fail = report.get("total_failed", 0)
         QMessageBox.information(
-            self, "OneGo",
-            f"Mode: {result['mode']}\nAPI: {result['api_url']}\n"
-            f"Email: {result['email']}\nHint: {result.get('profile_hint', '')}\n\n"
-            "Orchestration not yet connected."
+            self, "OneGo Complete",
+            f"Uploaded: {total_up}\nSkipped: {total_skip}\nFailed: {total_fail}\n\n"
+            f"Mode: {report.get('mode', '?')}"
         )
 
     def _on_run_all(self):

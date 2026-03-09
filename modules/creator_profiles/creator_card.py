@@ -456,6 +456,17 @@ class CreatorCard(QFrame):
         controls.addWidget(self.n_spin)
 
         controls.addSpacing(8)
+        controls.addWidget(_lbl("Upload:"))
+        self.upload_spin = QSpinBox()
+        self.upload_spin.setRange(0, 500)
+        self.upload_spin.setFixedWidth(68)
+        self.upload_spin.setFixedHeight(30)
+        self.upload_spin.setToolTip("Upload target per OneGo run (0 = skip)")
+        self.upload_spin.setStyleSheet(_input_ss())
+        self.upload_spin.valueChanged.connect(self._auto_save)
+        controls.addWidget(self.upload_spin)
+
+        controls.addSpacing(8)
         controls.addWidget(_lbl("Editing:"))
         self.mode_cb = QComboBox()
         self.mode_cb.addItems(["None", "Preset", "Split"])
@@ -653,6 +664,7 @@ class CreatorCard(QFrame):
         # Prevent accidental autosave/overwrite while loading values into UI.
         widgets_to_block = [
             self.n_spin,
+            self.upload_spin,
             self.split_sp,
             self.mode_cb,
             self.preset_cb,
@@ -666,6 +678,7 @@ class CreatorCard(QFrame):
             w.blockSignals(True)
         try:
             self.n_spin.setValue(c.n_videos)
+            self.upload_spin.setValue(c.uploading_target)
             self.split_sp.setValue(c.split_duration)
             self.mode_cb.setCurrentIndex(mode_index)
             if c.preset_name and c.preset_name in self.preset_names:
@@ -710,6 +723,7 @@ class CreatorCard(QFrame):
         self.config.data.update(
             {
                 "n_videos": self.n_spin.value(),
+                "uploading_target": self.upload_spin.value(),
                 "editing_mode": mode,
                 "preset_name": self.preset_cb.currentText(),
                 "split_duration": self.split_sp.value(),

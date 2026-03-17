@@ -41,3 +41,4 @@ nul
 # Test temp files
 .test_tmp2/
 zzztest/
+tests/

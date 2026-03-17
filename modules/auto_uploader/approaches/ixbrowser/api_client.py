@@ -75,12 +75,17 @@ class IXBrowserAPI:
     # ------------------------------------------------------------------ #
     # Public helpers                                                     #
     # ------------------------------------------------------------------ #
-    def list_profiles(self, *, use_cache: bool = True) -> List[IXProfileInfo]:
-        """Return all profiles available on the ixBrowser instance."""
-        if use_cache and self._profile_cache:
+    def list_profiles(self, *, limit: int = 9999, use_cache: bool = True) -> List[IXProfileInfo]:
+        """Return all profiles available on the ixBrowser instance.
+        
+        Args:
+            limit: Maximum number of profiles to return (default 9999)
+            use_cache: If True, returns cached profiles if available
+        """
+        if use_cache and self._profile_cache and len(self._profile_cache) >= 1:
             return list(self._profile_cache)
 
-        data = self._request("POST", "/profile-list", json={})
+        data = self._request("POST", "/profile-list", json={"limit": limit})
         profile_payload = self._extract_list(data)
 
         profiles: List[IXProfileInfo] = []
@@ -126,8 +131,14 @@ class IXBrowserAPI:
 
         return None
 
-    def open_profile(self, profile_id: str, **options: Any) -> IXProfileSession:
-        """Open an ixBrowser profile and return session info."""
+    def open_profile(self, profile_id: str, timeout: int = 120, **options: Any) -> IXProfileSession:
+        """Open an ixBrowser profile and return session info.
+        
+        Args:
+            profile_id: ID of the profile to open
+            timeout: Maximum seconds to wait for browser launch (default 120)
+            **options: Additional options for profile-open
+        """
         # IXBrowser API expects profile_id as integer
         try:
             pid = int(profile_id)
@@ -137,7 +148,7 @@ class IXBrowserAPI:
         payload.update(options)
 
         print(f"[IX-API] open_profile sending: profile_id={pid} (type={type(pid).__name__})")
-        data = self._request("POST", "/profile-open", json=payload)
+        data = self._request("POST", "/profile-open", json=payload, timeout=timeout)
 
         # Step-by-step debug: dump full response structure
         print(f"[IX-API] open_profile raw response keys: {list(data.keys())}")

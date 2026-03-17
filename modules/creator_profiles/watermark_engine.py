@@ -204,6 +204,73 @@ def auto_detect_logo(creator_folder: Path) -> Optional[str]:
     return None
 
 
+def _contains_cjk_or_cyrillic(text: str) -> str:
+    """
+    Returns 'cjk' if Chinese/Japanese/Korean characters are found.
+    Returns 'cyrillic' if Russian/Cyrillic characters are found.
+    Returns None otherwise.
+    """
+    for char in text:
+        cp = ord(char)
+        # CJK Unified Ideographs + Hiragana/Katakana + Hangul
+        if (0x4E00 <= cp <= 0x9FFF) or (0x3040 <= cp <= 0x309F) or (0x30A0 <= cp <= 0x30FF) or (0xAC00 <= cp <= 0xD7A3):
+            return 'cjk'
+        # Cyrillic
+        if 0x0400 <= cp <= 0x04FF:
+            return 'cyrillic'
+    return None
+
+def _resolve_windows_font(font_family: str, weight: str = "normal", style: str = "normal", text: str = "") -> Optional[str]:
+    """
+    Look up exact paths for known Unicode-rich fonts on Windows to avoid fontconfig 
+    (which often fails or drops characters on Windows FFmpeg builds).
+    Auto-detects CJK/Cyrillic to force a fallback font that works.
+    """
+    import os
+    font_dir = Path(os.environ.get("WINDIR", "C:\\Windows")) / "Fonts"
+    if not font_dir.exists():
+        return None
+        
+    family = font_family.lower()
+    is_bold = weight == "bold"
+    is_italic = style == "italic"
+
+    # ── Unicode Fallback Injection ──
+    char_type = _contains_cjk_or_cyrillic(text)
+    if char_type == 'cjk':
+        # Force Microsoft YaHei for CJK to prevent boxes
+        family = "microsoft yahei"
+    elif char_type == 'cyrillic' and family not in ["segoe ui", "arial", "verdana", "tahoma", "times new roman"]:
+        # Arial has good Cyrillic support
+        family = "arial"
+    
+    # Common mappings
+    # family -> (regular, bold, italic, bold_italic)
+    mappings = {
+        "segoe ui": ("segoeui.ttf", "segoeuib.ttf", "segoeuii.ttf", "segoeuiz.ttf"),
+        "arial unicode ms": ("ARIALUNI.TTF", "ARIALUNI.TTF", "ARIALUNI.TTF", "ARIALUNI.TTF"), # arialuni only has regular
+        "arial": ("arial.ttf", "arialbd.ttf", "ariali.ttf", "arialbi.ttf"),
+        "verdana": ("verdana.ttf", "verdanab.ttf", "verdanai.ttf", "verdanaz.ttf"),
+        "times new roman": ("times.ttf", "timesbd.ttf", "timesi.ttf", "timesbi.ttf"),
+        "georgia": ("georgia.ttf", "georgiab.ttf", "georgiai.ttf", "georgiaz.ttf"),
+        "trebuchet ms": ("trebuc.ttf", "trebucbd.ttf", "trebucit.ttf", "trebucbi.ttf"),
+        "microsoft yahei": ("msyh.ttc", "msyhbd.ttc", "msyh.ttc", "msyhbd.ttc"),
+    }
+    
+    if family in mappings:
+        names = mappings[family]
+        if is_bold and is_italic: target = names[3]
+        elif is_bold: target = names[1]
+        elif is_italic: target = names[2]
+        else: target = names[0]
+        
+        path = font_dir / target
+        if path.exists():
+            return str(path)
+            
+    return None
+
+
 def apply_watermark(
     input_path: Path,
     output_path: Path,
@@ -295,15 +362,25 @@ def apply_watermark(
         color_str = _hex_to_ffmpeg_color(font_color_hex, opacity)
 
         # Bold/italic: ffmpeg drawtext uses fontfile or font name with style suffix
-        # We pass font name + style hint via 'font' option
-        font_with_style = font_family
-        if font_weight == "bold" and font_style == "italic":
-            font_with_style = f"{font_family}:Bold Italic"
-        elif font_weight == "bold":
-            font_with_style = f"{font_family}:Bold"
-        elif font_style == "italic":
-            font_with_style = f"{font_family}:Italic"
-        font_with_style = _sanitize_text(font_with_style)
+        # We try to resolve the exact .ttf file to bypass fontconfig unicode issues
+        font_file = _resolve_windows_font(font_family, font_weight, font_style)
+        
+        if font_file:
+            # use absolute font path
+            # Escape path: ffmpeg drawtext needs special escaping for Windows paths
+            ff_font_file = font_file.replace("\\", "\\\\").replace(":", "\\:")
+            font_opt = f"fontfile='{ff_font_file}'"
+        else:
+            # fallback to font name + style hint via 'font' option
+            font_with_style = font_family
+            if font_weight == "bold" and font_style == "italic":
+                font_with_style = f"{font_family}:Bold Italic"
+            elif font_weight == "bold":
+                font_with_style = f"{font_family}:Bold"
+            elif font_style == "italic":
+                font_with_style = f"{font_family}:Italic"
+            font_with_style = _sanitize_text(font_with_style)
+            font_opt = f"font='{font_with_style}'"
 
         transparent_fill = _hex_to_ffmpeg_color(font_color_hex, 0)
 
@@ -321,7 +398,7 @@ def apply_watermark(
             y_expr = _escape_filter_expr(y_raw)
             opts = [
                 f"text='{text}'",
-                f"font='{font_with_style}'",
+                font_opt,
                 f"fontsize={font_size}",
                 f"fontcolor={font_color}",
                 f"x='{x_expr}'",
@@ -396,6 +473,7 @@ def apply_watermark(
     # ── Logo watermark filter ──────────────────────────────────────────────
     if logo_enabled and logo_path:
         logo_opacity = int(wm_logo_cfg.get("opacity") or 80)
+        logo_size_pct = max(1, min(100, int(wm_logo_cfg.get("size", 15))))
         alpha = _opacity_to_alpha(logo_opacity)
         position = wm_logo_cfg.get("position") or "TopLeft"
         x_expr, y_expr = _position_expr(position, target="overlay", cycle_sec=media_duration_sec)
@@ -408,10 +486,11 @@ def apply_watermark(
         logo_alpha = f"[logo_a]"
         out_label = "[vlogo]"
 
-        # Scale logo to max 15% of video width, keep aspect ratio
+        # Scale logo to X% of video width, keep aspect ratio
+        scale_ratio = logo_size_pct / 100.0
         filter_parts.append(
             f"[{logo_idx}:v]{last_label}scale2ref="
-            f"w='min(iw\\,main_w*0.15)':h=-1"
+            f"w='min(iw\\,main_w*{scale_ratio:.3f})':h=-1"
             f"{logo_scaled}{base_label}"
         )
         filter_parts.append(

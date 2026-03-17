@@ -432,11 +432,15 @@ class CreatorCard(QFrame):
         v.addWidget(self.progress_bar)
 
         # ── Path + compact flags info ──
-        self.path_lbl = QLabel(str(self.folder))
+        parts = self.folder.parts
+        short_path = str(self.folder) if len(parts) <= 3 else "…/" + "/".join(parts[-3:])
+        self.path_lbl = QLabel(short_path)
+        self.path_lbl.setToolTip(str(self.folder))
         self.path_lbl.setStyleSheet(
             "color:white; font-size:10px; background:transparent; border:none;"
         )
-        self.path_lbl.setWordWrap(True)
+        self.path_lbl.setWordWrap(False)
+        self.path_lbl.setMaximumHeight(18)
         v.addSpacing(2)
         v.addWidget(self.path_lbl)
         v.addWidget(_div())
@@ -449,17 +453,19 @@ class CreatorCard(QFrame):
         controls.addWidget(_lbl("Max:"))
         self.n_spin = QSpinBox()
         self.n_spin.setRange(1, 500)
-        self.n_spin.setFixedWidth(68)
+        self.n_spin.setMinimumWidth(56)
+        self.n_spin.setMaximumWidth(72)
         self.n_spin.setFixedHeight(30)
         self.n_spin.setStyleSheet(_input_ss())
         self.n_spin.valueChanged.connect(self._auto_save)
         controls.addWidget(self.n_spin)
 
-        controls.addSpacing(8)
+        controls.addSpacing(6)
         controls.addWidget(_lbl("Upload:"))
         self.upload_spin = QSpinBox()
         self.upload_spin.setRange(0, 500)
-        self.upload_spin.setFixedWidth(68)
+        self.upload_spin.setMinimumWidth(56)
+        self.upload_spin.setMaximumWidth(72)
         self.upload_spin.setFixedHeight(30)
         self.upload_spin.setToolTip("Upload target per OneGo run (0 = skip)")
         self.upload_spin.setStyleSheet(_input_ss())
@@ -562,6 +568,21 @@ class CreatorCard(QFrame):
         self.del_dl_btn.setMaximumHeight(28)
         self.del_dl_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         bottom_toggles.addWidget(self.del_dl_btn, 1)
+
+        self.yt_type_cb = QComboBox()
+        self.yt_type_cb.addItems(["All", "Shorts", "Long"])
+        self.yt_type_cb.setToolTip("YouTube content type: All / Shorts only / Long videos only")
+        self.yt_type_cb.setMinimumHeight(28)
+        self.yt_type_cb.setMaximumHeight(28)
+        self.yt_type_cb.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.yt_type_cb.setStyleSheet(
+            "QComboBox { background: #161b22; color: #c9d1d9; border: 1px solid #30363d;"
+            " border-radius: 4px; padding: 2px 6px; font-size: 11px; }"
+        )
+        self.yt_type_cb.currentIndexChanged.connect(self._on_yt_type_changed)
+        self.yt_type_cb.setVisible(False)  # shown only for YouTube creators
+        bottom_toggles.addWidget(self.yt_type_cb, 1)
+
         toggles_wrap.addLayout(top_toggles)
         toggles_wrap.addLayout(bottom_toggles)
 
@@ -654,6 +675,10 @@ class CreatorCard(QFrame):
             )
         self.title_lbl.setText(name)
 
+        # Show Shorts/Long dropdown only for YouTube creators
+        is_yt = "youtube" in (creator_url or "").lower() or "youtu.be" in (creator_url or "").lower()
+        self.yt_type_cb.setVisible(is_yt)
+
     def _load_values(self):
         c = self.config
         c.ensure_creator_url()
@@ -689,6 +714,8 @@ class CreatorCard(QFrame):
             self.rand_btn.setChecked(c.randomize_links)
             self.wm_btn.setChecked(c.watermark_enabled)
             self.del_dl_btn.setChecked(c.delete_before_download)
+            _yt_map = {"all": 0, "shorts": 1, "long": 2}
+            self.yt_type_cb.setCurrentIndex(_yt_map.get(c.yt_content_type, 0))
         finally:
             for w in widgets_to_block:
                 w.blockSignals(False)
@@ -733,6 +760,7 @@ class CreatorCard(QFrame):
                 "randomize_links": self.rand_btn.isChecked(),
                 "watermark_enabled": self.wm_btn.isChecked(),
                 "delete_before_download": self.del_dl_btn.isChecked(),
+                "yt_content_type": ["all", "shorts", "long"][self.yt_type_cb.currentIndex()],
             }
         )
         self.config.save()
@@ -751,6 +779,9 @@ class CreatorCard(QFrame):
 
     def _on_toggle_changed(self):
         self._refresh_toggle_styles()
+        self._auto_save()
+
+    def _on_yt_type_changed(self):
         self._auto_save()
 
     def _set_run_button_state(self, running: bool, paused: bool = False):
@@ -807,6 +838,11 @@ class CreatorCard(QFrame):
         self._set_run_button_state(True)
         self.worker = CreatorDownloadWorker(self.folder, url)
         def _filter_card_progress(m):
+            import time
+            now = time.time()
+            if now - getattr(self, '_last_ui_update_time', 0.0) < 0.1:
+                return
+            self._last_ui_update_time = now
             try:
                 from modules.shared.progress_filter import filter_for_gui
                 filtered = filter_for_gui(m)
@@ -858,13 +894,12 @@ class CreatorCard(QFrame):
         self._refresh_header()
         downloaded = int(result.get("downloaded", 0) or 0)
         target = int(result.get("target", 0) or 0)
-        tier = result.get("tier_used") or "N/A"
         if result.get("success"):
-            self._set_state("done", f"Done: {downloaded}/{target or downloaded} | {tier}")
+            self._set_state("done", "Done")
         elif downloaded > 0 and target > 0:
-            self._set_state("partial", f"Partial: {downloaded}/{target} | {tier}")
+            self._set_state("partial", "Partial")
         else:
-            self._set_state("error", f"Failed: {(result.get('error') or 'unknown')[:70]}")
+            self._set_state("error", "Failed")
         self._set_run_button_state(False)
         if self._manual_run_active:
             self._manual_run_active = False
@@ -946,6 +981,12 @@ class CreatorCard(QFrame):
         try:  # [UI-Guard] protect against widget-destroyed race
             if self._state != "running":
                 return
+            import time
+            now = time.time()
+            if pct < 100 and now - getattr(self, '_last_pct_update_time', 0.0) < 0.05:
+                # 20 FPS max for pure progress bar
+                return
+            self._last_pct_update_time = now
             pct = max(0, min(100, pct))
             self.progress_bar.setValue(pct)
             self.progress_bar.setVisible(True)
@@ -959,6 +1000,11 @@ class CreatorCard(QFrame):
         speed = (speed or "").strip()
         if not speed:
             return
+        import time
+        now = time.time()
+        if now - getattr(self, '_last_speed_update_time', 0.0) < 0.2:
+            return
+        self._last_speed_update_time = now
         self._current_speed = speed
         self._refresh_progress_format()
 

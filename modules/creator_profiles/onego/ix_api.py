@@ -17,9 +17,10 @@ log = logging.getLogger(__name__)
 class IXAPIError(RuntimeError):
     """Raised on any IX API communication failure."""
 
-    def __init__(self, message: str, payload: Optional[Dict[str, Any]] = None):
+    def __init__(self, message: str, payload: Optional[Dict[str, Any]] = None, code: Optional[int] = None):
         super().__init__(message)
         self.payload = payload or {}
+        self.code = code
 
 
 @dataclass
@@ -35,13 +36,14 @@ class IXSession:
     profile_id: str
     debugging_address: Optional[str] = None
     webdriver_url: Optional[str] = None
+    webdriver_path: Optional[str] = None  # path to chromedriver executable
     raw: Dict[str, Any] = field(default_factory=dict)
 
 
 class IXBrowserClient:
     """Minimal client for ixBrowser local API (v2)."""
 
-    def __init__(self, base_url: str, *, timeout: int = 20):
+    def __init__(self, base_url: str, *, timeout: int = 120):
         base_url = (base_url or "").strip()
         if not base_url:
             raise IXAPIError("IX API base URL is empty.")
@@ -60,22 +62,81 @@ class IXBrowserClient:
 
     # -- profiles ----------------------------------------------------------
 
-    def list_profiles(self) -> List[IXProfile]:
-        data = self._post("/profile-list", {})
-        items = self._extract_list(data)
-        profiles: List[IXProfile] = []
-        for item in items:
-            pid = item.get("profile_id") or item.get("id")
-            pname = item.get("profile_name") or item.get("name") or ""
-            status = item.get("status") or item.get("profile_status") or ""
-            if pid:
-                profiles.append(IXProfile(
-                    profile_id=str(pid),
-                    profile_name=str(pname),
-                    status=str(status),
-                    raw=item,
-                ))
-        return profiles
+    def list_profiles(self, *, limit: int = 9999) -> List[IXProfile]:
+        """
+        Return IX profiles.
+
+        Uses a large limit and common pagination payload shapes to avoid
+        default server-side short lists.
+        """
+        max_limit = max(1, int(limit or 1))
+        payload_candidates = [
+            {"limit": max_limit},
+            {"page": 1, "limit": max_limit},
+            {"current": 1, "size": max_limit},
+            {},
+        ]
+
+        best_items: List[Dict[str, Any]] = []
+        first_error: Optional[IXAPIError] = None
+
+        for payload in payload_candidates:
+            try:
+                data = self._post("/profile-list", payload)
+            except IXAPIError as exc:
+                if first_error is None:
+                    first_error = exc
+                continue
+
+            items = self._extract_list(data)
+            if len(items) > len(best_items):
+                best_items = items
+
+            # Try page-based continuation when server reports total > first page.
+            total = self._extract_total(data)
+            supports_page = "page" in payload and isinstance(payload.get("page"), int)
+            if supports_page and total and len(items) < min(total, max_limit):
+                seen_ids = {
+                    str(i.get("profile_id") or i.get("id"))
+                    for i in items
+                    if i.get("profile_id") or i.get("id")
+                }
+                page = 2
+                while len(seen_ids) < min(total, max_limit):
+                    paged_payload = dict(payload)
+                    paged_payload["page"] = page
+                    page_data = self._post("/profile-list", paged_payload)
+                    page_items = self._extract_list(page_data)
+                    if not page_items:
+                        break
+
+                    added = False
+                    for item in page_items:
+                        pid = item.get("profile_id") or item.get("id")
+                        if not pid:
+                            continue
+                        spid = str(pid)
+                        if spid in seen_ids:
+                            continue
+                        seen_ids.add(spid)
+                        items.append(item)
+                        added = True
+                        if len(seen_ids) >= max_limit:
+                            break
+                    if not added:
+                        break
+                    page += 1
+
+                if len(items) > len(best_items):
+                    best_items = items
+
+            if len(best_items) >= max_limit:
+                break
+
+        if not best_items and first_error is not None:
+            raise first_error
+
+        return self._build_profiles(best_items[:max_limit])
 
     def find_profile(self, hint: str) -> Optional[IXProfile]:
         hint = (hint or "").strip().lower()
@@ -111,10 +172,21 @@ class IXBrowserClient:
         if debug_addr and str(debug_addr).isdigit():
             debug_addr = f"127.0.0.1:{debug_addr}"
 
+        # webdriver_path: the chromedriver executable for this profile's browser
+        wd_path = (
+            session_data.get("webdriver_path")
+            or session_data.get("driver_path")
+            or session_data.get("chromedriver_path")
+        )
+        # webdriver_url may actually be a local path (IX returns it in 'webdriver')
+        if not wd_path and webdriver_url and not webdriver_url.startswith("http"):
+            wd_path = webdriver_url
+
         return IXSession(
             profile_id=session_data.get("profile_id", str(pid)),
             debugging_address=debug_addr,
             webdriver_url=webdriver_url,
+            webdriver_path=wd_path,
             raw=session_data,
         )
 
@@ -150,12 +222,25 @@ class IXBrowserClient:
         error_obj = data.get("error")
         if isinstance(error_obj, dict):
             code = error_obj.get("code")
+            if code == 2013:
+                raise IXAPIError(
+                    "IX kernel missing — please start ixBrowser first",
+                    data, code=2013,
+                )
             if code not in (0, 200, None):
-                raise IXAPIError(f"IX API error code={code}: {error_obj.get('message', '')}", data)
+                raise IXAPIError(
+                    f"IX API error code={code}: {error_obj.get('message', '')}",
+                    data, code=code,
+                )
         else:
             code = data.get("code")
+            if code == 2013:
+                raise IXAPIError(
+                    "IX kernel missing — please start ixBrowser first",
+                    data, code=2013,
+                )
             if code not in (0, 200, None):
-                raise IXAPIError(data.get("message", "Unknown IX error"), data)
+                raise IXAPIError(data.get("message", "Unknown IX error"), data, code=code)
 
         return data
 
@@ -172,6 +257,42 @@ class IXBrowserClient:
             if isinstance(payload.get(key), list):
                 return payload[key]
         return []
+
+    @staticmethod
+    def _extract_total(payload: Dict[str, Any]) -> Optional[int]:
+        data = payload.get("data")
+        if isinstance(data, dict):
+            total = data.get("total")
+            if isinstance(total, int):
+                return total
+        total = payload.get("total")
+        if isinstance(total, int):
+            return total
+        return None
+
+    @staticmethod
+    def _build_profiles(items: List[Dict[str, Any]]) -> List[IXProfile]:
+        profiles: List[IXProfile] = []
+        seen: set[str] = set()
+        for item in items:
+            pid = item.get("profile_id") or item.get("id")
+            if not pid:
+                continue
+            spid = str(pid)
+            if spid in seen:
+                continue
+            seen.add(spid)
+            pname = item.get("profile_name") or item.get("name") or ""
+            status = item.get("status") or item.get("profile_status") or ""
+            profiles.append(
+                IXProfile(
+                    profile_id=spid,
+                    profile_name=str(pname),
+                    status=str(status),
+                    raw=item,
+                )
+            )
+        return profiles
 
     @staticmethod
     def _extract_data(payload: Dict[str, Any]) -> dict:

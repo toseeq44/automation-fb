@@ -490,12 +490,14 @@ class IXSessionManager:
             return False
 
         try:
-            _log(f"[IX-Login] Navigating to {check['url']}...", progress_cb)
-            self._driver.get(check["url"])
-            time.sleep(4)  # wait for page load + any redirects
-
+            # Removed: explicit navigation to the platform home page (e.g. tiktok.com/)
+            # We skip this to avoid triggering unnecessary captchas.
+            # We will just verify if the current page (wherever it is) shows signs of being logged out,
+            # but since we are skipping the home-page load, we mostly consider it OK and let
+            # the download engine's "Active Retry" handle actual bot blocks later.
+            
+            _log(f"[IX-Login] Bypassing homepage navigation to avoid captchas...", progress_cb)
             current = self._driver.current_url.lower()
-            _log(f"[IX-Login] Current URL: {current}", progress_cb)
 
             for pattern in check["fail_patterns"]:
                 if pattern.lower() in current:
@@ -572,6 +574,19 @@ class IXSessionManager:
         collected = self._scroll_and_collect(
             css_selector, max_videos, platform_key, progress_cb
         )
+
+        # ── Fallback: Hard Refresh if 0 links (common on TikTok/IG direct profile loads)
+        if len(collected) == 0 and platform_key in ['tiktok', 'instagram']:
+            _log(f"[IX-Links] 0 links found on first attempt. Refreshing page...", progress_cb)
+            try:
+                self._driver.refresh()
+                time.sleep(random.uniform(4.0, 6.0))
+                # Try collecting again after refresh
+                collected = self._scroll_and_collect(
+                    css_selector, max_videos, platform_key, progress_cb
+                )
+            except Exception as e:
+                _log(f"[IX-Links] Refresh fallback failed: {e}", progress_cb)
 
         # Deduplicate and assign IDs
         seen_urls = set()
@@ -666,6 +681,38 @@ class IXSessionManager:
         return all_links[:max_videos]
 
     # ── Window management ────────────────────────────────────────────────
+
+    def maximize_browser(self, progress_cb: Optional[Callable] = None):
+        """Maximize IXBrowser parent window + the browser window."""
+        if not _HAS_WIN32:
+            _log("[IX-Window] Win32 not available, cannot maximize", progress_cb)
+            return
+
+        try:
+            # Maximize IXBrowser app window
+            def _find_ix_windows(hwnd, windows):
+                if win32gui.IsWindowVisible(hwnd):
+                    title = win32gui.GetWindowText(hwnd)
+                    if "ixBrowser" in title:
+                        windows.append(hwnd)
+                return True
+
+            windows = []
+            win32gui.EnumWindows(_find_ix_windows, windows)
+            for hwnd in windows:
+                win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
+
+            _log(f"[IX-Window] Maximized {len(windows)} IXBrowser window(s)", progress_cb)
+        except Exception as e:
+            _log(f"[IX-Window] Maximize error: {e}", progress_cb)
+
+        # Also maximize the Chrome browser window via Selenium
+        if self._driver:
+            try:
+                self._driver.maximize_window()
+                _log("[IX-Window] Browser window maximized", progress_cb)
+            except Exception:
+                pass
 
     def minimize_browser(self, progress_cb: Optional[Callable] = None):
         """Minimize IXBrowser parent window + the browser window."""

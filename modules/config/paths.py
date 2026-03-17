@@ -100,13 +100,46 @@ def get_bundled_resource_path(relative_path: str) -> Path:
     return base_path / relative_path
 
 
+def _ytdlp_is_usable(exe_path: str) -> bool:
+    """Quick check: can this yt-dlp exe run --version successfully?"""
+    import subprocess
+    try:
+        r = subprocess.run(
+            [exe_path, "--version"],
+            capture_output=True, text=True, timeout=8,
+            encoding="utf-8", errors="replace",
+        )
+        return r.returncode == 0 and bool((r.stdout or "").strip())
+    except Exception:
+        return False
+
+
+def _ytdlp_version_tuple(exe_path: str):
+    """Return (year, month, day) version tuple, or (0,0,0) on failure."""
+    import subprocess
+    try:
+        r = subprocess.run(
+            [exe_path, "--version"],
+            capture_output=True, text=True, timeout=8,
+            encoding="utf-8", errors="replace",
+        )
+        if r.returncode == 0 and r.stdout:
+            parts = r.stdout.strip().split(".")
+            return tuple(int(p) for p in parts[:3])
+    except Exception:
+        pass
+    return (0, 0, 0)
+
+
 def find_ytdlp_executable() -> str:
     """
     Find yt-dlp executable with enhanced smart fallback logic.
 
     Priority:
         1. Bundled with EXE: OneSoul/_internal/yt-dlp.exe (MOST RELIABLE)
-        2. User's C Drive: C:\yt-dlp\ (USER MANAGED - NEW!)
+           - If bundled exe exists but fails to run, fall through to C drive.
+           - If C drive has a NEWER version, prefer C drive over bundled.
+        2. User's C Drive: C:\\yt-dlp\\ (USER MANAGED)
         3. System PATH: yt-dlp or yt-dlp.exe
         4. Common install locations (Windows)
         5. None (will use Python library API as final fallback)
@@ -115,13 +148,18 @@ def find_ytdlp_executable() -> str:
         str: Path to yt-dlp executable or 'yt-dlp' for system command
         None: If not found (caller should use Python API)
     """
+    bundled_path = None
+
     # Priority 1: Bundled with application (EXE mode)
     if getattr(sys, 'frozen', False):
         bundled_ytdlp = get_bundled_resource_path('yt-dlp.exe')
         if bundled_ytdlp.exists():
-            return str(bundled_ytdlp)
+            if _ytdlp_is_usable(str(bundled_ytdlp)):
+                bundled_path = str(bundled_ytdlp)
+            # If not usable, fall through to C drive
 
-    # Priority 2: User's C Drive locations (NEW - User managed installations)
+    # Priority 2: User's C Drive locations
+    c_drive_path = None
     if sys.platform == 'win32':
         c_drive_locations = [
             Path('C:/yt-dlp/yt-dlp.exe'),          # Primary C drive location
@@ -132,9 +170,23 @@ def find_ytdlp_executable() -> str:
         for location in c_drive_locations:
             try:
                 if location.exists() and location.is_file():
-                    return str(location)
+                    c_drive_path = str(location)
+                    break
             except Exception:
                 continue
+
+    # Decide between bundled and C drive
+    if bundled_path and c_drive_path:
+        # Both exist — prefer the newer version
+        bundled_ver = _ytdlp_version_tuple(bundled_path)
+        cdrive_ver = _ytdlp_version_tuple(c_drive_path)
+        if cdrive_ver > bundled_ver:
+            return c_drive_path
+        return bundled_path
+    if bundled_path:
+        return bundled_path
+    if c_drive_path:
+        return c_drive_path
 
     # Priority 3: System PATH (try command directly)
     import shutil

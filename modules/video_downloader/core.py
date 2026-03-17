@@ -599,7 +599,13 @@ class VideoDownloaderThread(QThread):
         if not self.proxies:
             return None
 
-        return self.proxies[self.current_proxy_index]
+        quarantined = self._quarantined_proxies()
+        for _ in range(len(self.proxies)):
+            proxy = self.proxies[self.current_proxy_index]
+            if proxy not in quarantined:
+                return proxy
+            self.current_proxy_index = (self.current_proxy_index + 1) % len(self.proxies)
+        return None
 
     def _rotate_proxy(self):
         """Switch to next proxy in the pool (circular rotation)"""
@@ -684,6 +690,163 @@ class VideoDownloaderThread(QThread):
         if not self.ffmpeg_path:
             return
         ydl_opts['ffmpeg_location'] = self.ffmpeg_path
+
+    # ------------------------------------------------------------------
+    # Central download verifier
+    # ------------------------------------------------------------------
+    _JUNK_EXTENSIONS = frozenset({'.part', '.tmp', '.ytdl', '.temp', '.downloading'})
+    _VIDEO_EXTENSIONS = frozenset({
+        '.mp4', '.mkv', '.webm', '.avi', '.mov', '.flv', '.wmv', '.m4v',
+    })
+    _AUDIO_EXTENSIONS = frozenset({
+        '.mp3', '.m4a', '.ogg', '.opus', '.wav', '.aac', '.flac',
+    })
+    _IMAGE_EXTENSIONS = frozenset({
+        '.jpg', '.jpeg', '.png', '.gif', '.webp',
+    })
+    _MEDIA_EXTENSIONS = frozenset(
+        _VIDEO_EXTENSIONS.union(_AUDIO_EXTENSIONS).union(_IMAGE_EXTENSIONS)
+    )
+    _MIN_MEDIA_SIZE = 10_000  # 10 KB — anything smaller is almost certainly not a real video
+
+    def _resolve_expected_extensions(self, expected_kind: Optional[str] = None) -> frozenset:
+        """Resolve the allowed output extensions for this run."""
+        kind = expected_kind
+        if kind is None:
+            kind = self.options.get('_expected_media_kind')
+        kind = str(kind or "").strip().lower()
+        if kind == "video":
+            return self._VIDEO_EXTENSIONS
+        if kind == "audio":
+            return self._AUDIO_EXTENSIONS
+        if kind in {"av", "video_audio"}:
+            return frozenset(self._VIDEO_EXTENSIONS.union(self._AUDIO_EXTENSIONS))
+        return self._MEDIA_EXTENSIONS
+
+    def _snapshot_folder(self, folder: str) -> set:
+        """Take a recursive snapshot of all files in folder (path → mtime+size)."""
+        result = set()
+        try:
+            for root, _dirs, files in os.walk(folder):
+                for f in files:
+                    fp = os.path.join(root, f)
+                    try:
+                        st = os.stat(fp)
+                        result.add((fp, st.st_size, st.st_mtime_ns))
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+        return result
+
+    def _verify_download(self, folder: str, before: set, tag: str = "",
+                         expected_kind: Optional[str] = None) -> list:
+        """Compare folder state after download. Return list of new valid media files.
+
+        A file is considered valid if:
+          - it did not exist in *before* snapshot (or grew in size)
+          - extension is a known media type (not .part / .tmp / .ytdl)
+          - size >= _MIN_MEDIA_SIZE
+        """
+        new_files = []
+        expected_extensions = self._resolve_expected_extensions(expected_kind)
+        try:
+            for root, _dirs, files in os.walk(folder):
+                for f in files:
+                    fp = os.path.join(root, f)
+                    ext = os.path.splitext(f)[1].lower()
+                    # Skip junk / incomplete
+                    if ext in self._JUNK_EXTENSIONS:
+                        continue
+                    try:
+                        st = os.stat(fp)
+                    except OSError:
+                        continue
+                    # Must be new or changed
+                    key = (fp, st.st_size, st.st_mtime_ns)
+                    if key in before:
+                        continue
+                    # Must be a real media file
+                    if ext not in expected_extensions:
+                        continue
+                    if st.st_size < self._MIN_MEDIA_SIZE:
+                        continue
+                    new_files.append(fp)
+        except OSError:
+            pass
+
+        if new_files and tag:
+            self.progress.emit(f"   {tag} verified: {Path(new_files[0]).name}")
+        elif tag:
+            self.progress.emit(f"   {tag} no valid media file created")
+        return new_files
+
+    def _quarantined_proxies(self) -> set:
+        """Return the set of proxy URLs quarantined this session."""
+        if not hasattr(self, '_proxy_quarantine'):
+            self._proxy_quarantine = set()
+        return self._proxy_quarantine
+
+    def _quarantine_proxy(self, proxy: str) -> None:
+        """Mark a proxy as dead for the rest of this session."""
+        self._quarantined_proxies().add(proxy)
+        self.progress.emit(f"   [DL-proxy] quarantined dead proxy")
+
+    def _get_healthy_proxy(self) -> Optional[str]:
+        """Get current proxy, skipping quarantined ones. Returns None if all dead."""
+        quarantined = self._quarantined_proxies()
+        if not self.proxies:
+            return None
+        # Try from current index forward
+        for _ in range(len(self.proxies)):
+            proxy = self.proxies[self.current_proxy_index]
+            if proxy not in quarantined:
+                return proxy
+            self.current_proxy_index = (self.current_proxy_index + 1) % len(self.proxies)
+        return None  # All quarantined
+
+    def _download_with_proxy_fallback(self, ydl_opts: dict, url: str,
+                                       output_path: str, tag: str) -> bool:
+        """Try download with proxy, then without. Verify file creation.
+
+        Returns True only when a valid media file is confirmed on disk.
+        """
+        before = self._snapshot_folder(output_path)
+
+        # Attempt 1: with healthy proxy
+        proxy = self._get_healthy_proxy()
+        if proxy:
+            ydl_opts['proxy'] = proxy
+            self.progress.emit(f"   {tag} proxy: {proxy.split('@')[-1][:25]}")
+            try:
+                retcode = self._run_ytdlp(ydl_opts, url)
+                new_files = self._verify_download(output_path, before, tag)
+                if new_files:
+                    return True
+                # No file created — quarantine proxy (dead or silently failing)
+                self._quarantine_proxy(proxy)
+            except Exception:
+                self._quarantine_proxy(proxy)
+
+        # Attempt 2: without proxy
+        ydl_opts.pop('proxy', None)
+        self.progress.emit(f"   {tag} retrying without proxy...")
+        before = self._snapshot_folder(output_path)  # re-snapshot
+        try:
+            self._run_ytdlp(ydl_opts, url)
+            new_files = self._verify_download(output_path, before, tag)
+            if new_files:
+                return True
+        except Exception:
+            pass
+
+        return False
+
+    @staticmethod
+    def _run_ytdlp(ydl_opts: dict, url: str) -> int:
+        """Run yt-dlp and return its exit code (0 = success)."""
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            return ydl.download([url])
 
     def _cleanup_tracking_files(self, folder_path: str):
         """Remove any leftover tracking files (for single mode cleanup)"""
@@ -801,7 +964,7 @@ class VideoDownloaderThread(QThread):
         try:
             from datetime import datetime
             start_time = datetime.now()
-            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] ðŸš€ Method 1: YT-DLP Standard")
+            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] ðŸš€ [DL-1] YT-DLP Standard")
 
             # Smart yt-dlp detection
             ytdlp_cmd = self._get_ytdlp_command()
@@ -818,7 +981,7 @@ class VideoDownloaderThread(QThread):
             current_proxy = self._get_current_proxy()
 
             ydl_opts = {
-                'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
+                'outtmpl': os.path.join(output_path, '%(title).80s.%(ext)s'),
                 'format': format_string,
                 'rm_cachedir': True,
                 'restrictfilenames': True,
@@ -849,19 +1012,16 @@ class VideoDownloaderThread(QThread):
 
             self.progress.emit(f"   ðŸŽ­ UA: {user_agent[:45]}...")
 
-            self.progress.emit(f"   â³ Starting download...")
-            
-            try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([url])
+            self.progress.emit(f"   Starting download...")
+
+            # Use central verified download with proxy fallback
+            if self._download_with_proxy_fallback(ydl_opts, url, output_path, "[DL-1]"):
                 elapsed = (datetime.now() - start_time).total_seconds()
-                self.progress.emit(f"   âœ… SUCCESS in {elapsed:.1f}s")
+                self.progress.emit(f"   SUCCESS in {elapsed:.1f}s")
                 return True
-            except Exception as e:
+            else:
                 elapsed = (datetime.now() - start_time).total_seconds()
-                error_msg = str(e)[:300]
-                self.progress.emit(f"   âŒ FAILED ({elapsed:.1f}s)")
-                self.progress.emit(f"   ðŸ“ Error: {error_msg}")
+                self.progress.emit(f"   FAILED ({elapsed:.1f}s)")
                 return False
         except Exception as e:
             self.progress.emit(f"   âŒ Exception: {str(e)[:100]}")
@@ -882,7 +1042,7 @@ class VideoDownloaderThread(QThread):
 
             from datetime import datetime
             start_time = datetime.now()
-            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] ðŸŽµ TikTok Enhanced (Multi-Strategy)")
+            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] ðŸŽµ [DL-2] TikTok Enhanced (Multi-Strategy)")
 
             # Apply rate limiting
             self._apply_rate_limit('tiktok.com')
@@ -1010,7 +1170,7 @@ class VideoDownloaderThread(QThread):
 
                     cmd = [
                         ytdlp_cmd,  # Use detected command
-                        '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
+                        '-o', os.path.join(output_path, '%(title).80s.%(ext)s'),
                         '-f', fmt,
                         '--no-playlist',
                         '--geo-bypass',
@@ -1103,7 +1263,7 @@ class VideoDownloaderThread(QThread):
         try:
             from datetime import datetime
             start_time = datetime.now()
-            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] ðŸ”„ Method 3: yt-dlp with Cookies")
+            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] ðŸ”„ [DL-3] yt-dlp with Cookies")
 
             # Get user agent and proxy
             user_agent = _get_random_user_agent()
@@ -1111,7 +1271,7 @@ class VideoDownloaderThread(QThread):
 
             format_string = self.format_override or 'best'
             ydl_opts = {
-                'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
+                'outtmpl': os.path.join(output_path, '%(title).80s.%(ext)s'),
                 'format': format_string,
                 'quiet': True,
                 'no_warnings': True,
@@ -1142,12 +1302,15 @@ class VideoDownloaderThread(QThread):
 
             self.progress.emit(f"   ðŸŽ­ UA: {user_agent[:45]}...")
 
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
-
-            elapsed = (datetime.now() - start_time).total_seconds()
-            self.progress.emit(f"   âœ… SUCCESS in {elapsed:.1f}s")
-            return True
+            # Use central verified download with proxy fallback
+            if self._download_with_proxy_fallback(ydl_opts, url, output_path, "[DL-3]"):
+                elapsed = (datetime.now() - start_time).total_seconds()
+                self.progress.emit(f"   SUCCESS in {elapsed:.1f}s")
+                return True
+            else:
+                elapsed = (datetime.now() - start_time).total_seconds()
+                self.progress.emit(f"   FAILED ({elapsed:.1f}s)")
+                return False
 
         except Exception as e:
             elapsed = (datetime.now() - start_time).total_seconds() if 'start_time' in locals() else 0
@@ -1171,7 +1334,7 @@ class VideoDownloaderThread(QThread):
 
             from datetime import datetime
             start_time = datetime.now()
-            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] ðŸ“¸ Instagram Enhanced Method")
+            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] ðŸ“¸ [DL-7] Instagram Enhanced Method")
 
             # IMPROVED: Collect ALL available cookie files to try
             cookie_files_to_try = []
@@ -1233,7 +1396,7 @@ class VideoDownloaderThread(QThread):
                 current_proxy = self._get_current_proxy()
 
                 ydl_opts = {
-                    'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
+                    'outtmpl': os.path.join(output_path, '%(title).80s.%(ext)s'),
                     'cookiefile': current_cookie_file,
                     'format': 'best',
                     'quiet': True,
@@ -1252,16 +1415,14 @@ class VideoDownloaderThread(QThread):
                     self.progress.emit(f"   ðŸŒ  Proxy: {current_proxy.split('@')[-1][:20]}...")
 
                 self.progress.emit(f"   ðŸŽ­ UA: {user_agent[:45]}...")
-                
-                try:
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        ydl.download([url])
+
+                # Use central verified download with proxy fallback
+                if self._download_with_proxy_fallback(ydl_opts, url, output_path, "[DL-7]"):
                     elapsed = (datetime.now() - start_time).total_seconds()
-                    self.progress.emit(f"   âœ… SUCCESS with {Path(current_cookie_file).name} ({elapsed:.1f}s)")
+                    self.progress.emit(f"   [DL-7] success ({elapsed:.1f}s)")
                     return True
-                except Exception as e:
-                    error_snippet = str(e)[:100]
-                    self.progress.emit(f"   â Œ Download failed: {error_snippet}")
+                else:
+                    self.progress.emit(f"   [DL-7] fail: no file with this cookie")
 
             # If all cookie files failed, show helpful error message
             elapsed = (datetime.now() - start_time).total_seconds()
@@ -1311,7 +1472,7 @@ class VideoDownloaderThread(QThread):
 
             from datetime import datetime
             start_time = datetime.now()
-            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] ðŸ“¦ Facebook Enhanced Strategy")
+            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] ðŸ“¦ [DL-8] Facebook Enhanced Strategy")
 
             # Collect candidates
             cookie_files = []
@@ -1346,7 +1507,7 @@ class VideoDownloaderThread(QThread):
                 
                 # Simplified but robust opts
                 ydl_opts = {
-                    'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
+                    'outtmpl': os.path.join(output_path, '%(title).80s.%(ext)s'),
                     'format': self.format_override or 'best',
                     'quiet': True,
                     'no_warnings': True,
@@ -1370,16 +1531,16 @@ class VideoDownloaderThread(QThread):
 
                 if current_proxy:
                     ydl_opts['proxy'] = current_proxy
-                
-                try:
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        ydl.download([url])
+
+                self._apply_ffmpeg_ydl_opts(ydl_opts)
+
+                # Use central verified download with proxy fallback
+                if self._download_with_proxy_fallback(ydl_opts, url, output_path, "[DL-8]"):
                     elapsed = (datetime.now() - start_time).total_seconds()
-                    self.progress.emit(f"   âœ… Facebook Success ({elapsed:.1f}s)")
+                    self.progress.emit(f"   Facebook Success ({elapsed:.1f}s)")
                     return True
-                except Exception as e:
-                    error_snippet = str(e)[:100]
-                    self.progress.emit(f"   âš ï¸  Attempt failed: {error_snippet}")
+                else:
+                    self.progress.emit(f"   [DL-8] Attempt {idx} failed: no verified file")
                     continue
 
             return False
@@ -1398,7 +1559,7 @@ class VideoDownloaderThread(QThread):
                 self.progress.emit("âš ï¸ Instaloader not installed; skipping fallback")
                 return False
 
-            self.progress.emit("ðŸ“¸ Instaloader fallback")
+            self.progress.emit("ðŸ“¸ [DL-10] Instaloader fallback")
             match = re.search(r"instagram\.com/(?:p|reel|tv)/([^/?#&]+)", url, re.IGNORECASE)
             if not match:
                 self.progress.emit("âš ï¸ Could not detect Instagram shortcode for Instaloader")
@@ -1445,7 +1606,7 @@ class VideoDownloaderThread(QThread):
     def _method_gallery_dl(self, url, output_path, cookie_file=None):
         """gallery-dl fallback for Instagram, Twitter, etc."""
         try:
-            self.progress.emit("ðŸ–¼ï¸ gallery-dl fallback")
+            self.progress.emit("ðŸ–¼ï¸ [DL-9] gallery-dl fallback")
             cmd = [
                 'gallery-dl',
                 '--dest', output_path,
@@ -1489,11 +1650,11 @@ class VideoDownloaderThread(QThread):
     def _method6_youtube_dl_fallback(self, url, output_path, cookie_file=None):
         """youtube-dl as final fallback (older but sometimes works)"""
         try:
-            self.progress.emit("ðŸ”„ youtube-dl fallback (legacy)")
+            self.progress.emit("ðŸ”„ [DL-6] youtube-dl fallback (legacy)")
             format_string = self.format_override or 'best'
             cmd = [
                 'youtube-dl',
-                '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
+                '-o', os.path.join(output_path, '%(title).80s.%(ext)s'),
                 '-f', format_string,
                 '--no-warnings',
                 '--retries', str(self.max_retries),
@@ -1542,7 +1703,7 @@ class VideoDownloaderThread(QThread):
         try:
             from datetime import datetime
             start_time = datetime.now()
-            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] YouTube Smart Download")
+            self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] [DL-11] YouTube Smart Download")
 
             user_agent = _get_random_user_agent()
             is_shorts = '/shorts/' in url.lower()
@@ -1603,7 +1764,7 @@ class VideoDownloaderThread(QThread):
                     def error(self, msg): pass
 
                 ydl_opts = {
-                    'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
+                    'outtmpl': os.path.join(output_path, '%(title).80s.%(ext)s'),
                     'quiet': True,
                     'no_warnings': True,
                     'logger': SilentLogger(),
@@ -1625,9 +1786,7 @@ class VideoDownloaderThread(QThread):
                     proxy = self._get_current_proxy()
                     if proxy:
                         ydl_opts['proxy'] = proxy
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([url])
-                return True
+                return self._run_ytdlp(ydl_opts, url) == 0
 
             def _run_strategy(label, use_proxy):
                 nonlocal attempt_count
@@ -1708,7 +1867,7 @@ class VideoDownloaderThread(QThread):
 
     def _method4_alternative_formats(self, url, output_path, cookie_file=None):
         try:
-            self.progress.emit("Method 4: Alternative formats")
+            self.progress.emit("[DL-4] Alternative formats")
 
             # Get UA and proxy once for this method
             user_agent = _get_random_user_agent()
@@ -1739,7 +1898,7 @@ class VideoDownloaderThread(QThread):
                         def error(self, msg): pass
 
                     ydl_opts = {
-                        'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
+                        'outtmpl': os.path.join(output_path, '%(title).80s.%(ext)s'),
                         'format': fmt,
                         'quiet': True, 'no_warnings': True, 'logger': SilentLogger(), 'retries': self.max_retries,
                         'continuedl': True, 'nocheckcertificate': True, 'restrictfilenames': True,
@@ -1749,10 +1908,10 @@ class VideoDownloaderThread(QThread):
                         ydl_opts['proxy'] = current_proxy
                     if cookie_file: ydl_opts['cookiefile'] = cookie_file
                     self._apply_ffmpeg_ydl_opts(ydl_opts)
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        ydl.download([url])
-                    self.progress.emit(f"âœ… Method 4 SUCCESS (format: {fmt})")
-                    return True
+                    # Use central verified download with proxy fallback
+                    if self._download_with_proxy_fallback(ydl_opts, url, output_path, "[DL-4]"):
+                        self.progress.emit(f"Method 4 SUCCESS (format: {fmt})")
+                        return True
                 except Exception:
                     continue
             self.progress.emit("âš ï¸ Method 4 failed")
@@ -1763,7 +1922,7 @@ class VideoDownloaderThread(QThread):
 
     def _method5_force_ipv4(self, url, output_path, cookie_file=None):
         try:
-            self.progress.emit("ðŸ”„ Method 5: Force IPv4 fallback")
+            self.progress.emit("ðŸ”„ [DL-5] Force IPv4 fallback")
 
             # Smart yt-dlp detection
             ytdlp_cmd = self._get_ytdlp_command()
@@ -1778,7 +1937,7 @@ class VideoDownloaderThread(QThread):
             format_string = self.format_override or 'best'
             cmd = [
                 ytdlp_cmd,  # Use detected command
-                '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
+                '-o', os.path.join(output_path, '%(title).80s.%(ext)s'),
                 '-f', format_string,
                 '--force-ipv4', '--no-warnings', '--geo-bypass',
                 '--retries', str(self.max_retries), '--ignore-errors', '--continue',
@@ -2014,17 +2173,50 @@ class VideoDownloaderThread(QThread):
                 except Exception:
                     pass
 
+                # Stable method-name → number mapping for debug logs.
+                _DL_NUM = {
+                    "_method1_batch_file_approach": 1,
+                    "_method2_tiktok_special":      2,
+                    "_method3_optimized_ytdlp":     3,
+                    "_method4_alternative_formats":  4,
+                    "_method5_force_ipv4":           5,
+                    "_method6_youtube_dl_fallback":  6,
+                    "_method_instagram_enhanced":    7,
+                    "_method_facebook_enhanced":     8,
+                    "_method_gallery_dl":            9,
+                    "_method_instaloader":          10,
+                    "_method_youtube_smart":        11,
+                }
+
                 # Try all methods until one succeeds
                 success = False
                 attempted_methods = 0
                 last_dl_error = ""
-                for method in methods:
+                expected_media_kind = str(self.options.get('_expected_media_kind') or "").strip().lower() or None
+                for _m_idx, method in enumerate(methods):
                     if self.cancelled: break
                     attempted_methods += 1
+                    _dl_tag = f"[DL-{_DL_NUM.get(method.__name__, '?')}]"
                     _dl_start = time.time()
+                    method_error = ""
                     try:
-                        if method(url, folder, cookie_file):
+                        method_before = self._snapshot_folder(folder)
+                        method_ok = bool(method(url, folder, cookie_file))
+                        verified_files = self._verify_download(
+                            folder, method_before, expected_kind=expected_media_kind,
+                        )
+                        if verified_files:
                             success = True
+                            try:
+                                verified_path = max(
+                                    verified_files,
+                                    key=lambda fp: os.stat(fp).st_mtime_ns,
+                                )
+                            except OSError:
+                                verified_path = verified_files[0]
+                            verified_name = Path(verified_path).name
+                            state_label = "success" if method_ok else "recovered output"
+                            self.progress.emit(f"{_dl_tag} {state_label}: {verified_name}")
                             try:
                                 from modules.link_grabber.intelligence import get_learning_system
                                 get_learning_system().record_download_performance(
@@ -2033,14 +2225,18 @@ class VideoDownloaderThread(QThread):
                             except Exception:
                                 pass
                             break
+                        if method_ok:
+                            method_error = "reported success but created no verified media"
                         else:
-                            last_dl_error = f"method_returned_false:{method.__name__}"
-                            if attempted_methods < len(methods):
-                                self.progress.emit("Trying next approach...")
+                            method_error = "no verified media created"
                     except Exception as e:
-                        last_dl_error = str(e)[:200]
-                        if attempted_methods < len(methods):
-                            self.progress.emit("Trying next approach...")
+                        method_error = str(e)[:200]
+                    last_dl_error = f"{method.__name__}: {method_error}"
+                    self.progress.emit(f"{_dl_tag} failed: {method_error[:140]}")
+                    if attempted_methods < len(methods):
+                        _next_m = methods[_m_idx + 1]
+                        _next_tag = f"[DL-{_DL_NUM.get(_next_m.__name__, '?')}]"
+                        self.progress.emit(f"{_dl_tag} trying {_next_tag}...")
                     try:
                         from modules.link_grabber.intelligence import get_learning_system
                         get_learning_system().record_download_performance(

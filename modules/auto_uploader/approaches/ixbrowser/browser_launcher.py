@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import time
 import platform
+import requests
 from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
@@ -56,6 +57,63 @@ class BrowserLauncher:
         self.session_info: Optional[Dict[str, Any]] = None
 
         logger.info("[IXLauncher] Browser launcher initialized")
+
+    def _open_profile_extended_timeout(
+        self,
+        profile_id: int,
+        load_extensions: bool = True,
+        cookies_backup: bool = False,
+        startup_args: Optional[list] = None,
+        timeout: int = 120,
+    ) -> Optional[Dict[str, Any]]:
+        """Open IX profile via direct API call with extended timeout.
+
+        The official ixbrowser_local_api uses a hardcoded 20s timeout which
+        is too short for profile-open (kernel load, proxy, extensions).
+        This method makes the same API call but with a configurable timeout.
+        """
+        base_url = self.client.base_url  # e.g. "http://127.0.0.1:53200/api/v2/"
+        url = base_url + "profile-open"
+
+        params = {
+            "profile_id": profile_id,
+            "load_extensions": load_extensions,
+            "load_profile_info_page": False,
+            "cookies_backup": cookies_backup,
+            "args": (startup_args or []) + ["--disable-extension-welcome-page"],
+        }
+
+        logger.info("[IXLauncher] Opening profile via direct API (timeout=%ds)...", timeout)
+
+        try:
+            r = requests.post(url, json=params, timeout=timeout)
+        except requests.exceptions.ReadTimeout:
+            logger.error("[IXLauncher] Profile-open timed out after %ds", timeout)
+            return None
+        except requests.exceptions.ConnectionError as exc:
+            logger.error("[IXLauncher] Connection error: %s", exc)
+            return None
+
+        if r.status_code != 200:
+            logger.error("[IXLauncher] HTTP %d from profile-open", r.status_code)
+            return None
+
+        result = r.json()
+        error = result.get("error", {})
+        code = error.get("code")
+
+        if code != 0:
+            logger.error("[IXLauncher] API error code=%s  message=%s",
+                         code, error.get("message", ""))
+            return None
+
+        data = result.get("data")
+        if not data:
+            logger.error("[IXLauncher] No data in profile-open response")
+            return None
+
+        logger.info("[IXLauncher] ✓ Profile opened (direct API, %ds timeout)", timeout)
+        return data
 
     def _hide_ixbrowser_parent_window(self) -> bool:
         """
@@ -176,19 +234,18 @@ class BrowserLauncher:
             logger.info("[IXLauncher] Launching with default browser settings (no custom args)")
 
         try:
-            # Open profile using official API
-            open_result = self.client.open_profile(
+            # Open profile using direct API call with extended timeout.
+            # The official ixbrowser_local_api library hardcodes timeout=20s
+            # which is too short for profile-open (kernel load, proxy setup, etc).
+            open_result = self._open_profile_extended_timeout(
                 profile_id=profile_id,
                 load_extensions=load_extensions,
-                load_profile_info_page=False,
                 cookies_backup=cookies_backup,
-                startup_args=startup_args
+                startup_args=startup_args,
             )
 
             if open_result is None:
                 logger.error("[IXLauncher] Failed to open profile!")
-                logger.error("[IXLauncher]   Error code: %s", self.client.code)
-                logger.error("[IXLauncher]   Error message: %s", self.client.message)
                 return False
 
             # Store session info

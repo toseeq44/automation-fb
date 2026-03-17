@@ -6,13 +6,82 @@ Opens profiles, attaches Selenium, extracts bookmarks.
 from __future__ import annotations
 
 import logging
+import platform
+import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .ix_api import IXBrowserClient, IXAPIError, IXProfile, IXSession
 
 log = logging.getLogger(__name__)
+
+
+def _bring_profile_visible(driver) -> bool:
+    """Maximize browser and bring to foreground. Best-effort, never crashes."""
+    # 1. Selenium maximize + focus
+    try:
+        driver.maximize_window()
+        driver.switch_to.window(driver.current_window_handle)
+        driver.execute_script("window.focus();")
+        log.info("[OneGo-IX] Selenium maximize/focus applied")
+    except Exception:
+        pass
+
+    title = ""
+    try:
+        title = driver.title or ""
+    except Exception:
+        title = ""
+
+    # 2. Try existing Windows window manager helpers (same behavior family as auto_uploader)
+    if platform.system().lower() == "windows":
+        try:
+            from modules.auto_uploader.approaches.ixbrowser.window_manager import (
+                bring_window_to_front_windows,
+                maximize_window_windows,
+            )
+            if title:
+                maximize_window_windows(title)
+                bring_window_to_front_windows(title, partial_match=True)
+                log.info("[OneGo-IX] Windows helper maximize/foreground applied")
+        except Exception:
+            pass
+
+    # 3. Win32 SetForegroundWindow + SW_MAXIMIZE via ctypes (no subprocess)
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        SW_RESTORE = 9
+        SW_MAXIMIZE = 3
+        if not title:
+            return True  # nothing to match
+
+        def _callback(hwnd, _):
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length <= 0:
+                return True
+            buf = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buf, length + 1)
+            if title[:30].lower() in buf.value.lower():
+                user32.ShowWindow(hwnd, SW_RESTORE)
+                user32.ShowWindow(hwnd, SW_MAXIMIZE)
+                user32.SetForegroundWindow(hwnd)
+                log.info("[OneGo-IX] Win32 foreground set for '%s'", buf.value[:60])
+                return False  # stop enumeration
+            return True
+
+        WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        user32.EnumWindows(WNDENUMPROC(_callback), 0)
+    except Exception:
+        pass  # non-Windows or ctypes unavailable
+
+    return True
+
 
 # JS to extract all bookmarks via chrome.bookmarks API
 _BOOKMARK_SCRIPT = """
@@ -60,24 +129,57 @@ class IXSessionManager:
         self.client = client
 
     def open_and_attach(self, profile: IXProfile) -> Optional[ProfileSession]:
-        """Open profile, attach Selenium driver, return ProfileSession or None on failure."""
-        try:
-            ix_sess = self.client.open_profile(profile.profile_id)
-        except IXAPIError as exc:
-            log.error("[OneGo-IX] Failed to open profile '%s': %s", profile.profile_name, exc)
+        """Open profile, attach Selenium driver, return ProfileSession or None on failure.
+
+        Sets self.last_failure_reason (str) on failure for the caller to inspect.
+        """
+        self.last_failure_reason = None
+        ix_sess: Optional[IXSession] = None
+        for attempt in range(1, 4):
+            try:
+                ix_sess = self.client.open_profile(profile.profile_id)
+                break
+            except IXAPIError as exc:
+                is_kernel_missing = getattr(exc, "code", None) == 2013
+                if is_kernel_missing and attempt < 3:
+                    wait_s = 2 * attempt
+                    log.warning(
+                        "[OneGo-IX] Kernel missing while opening '%s' (attempt %d/3). "
+                        "Waiting %ss and retrying...",
+                        profile.profile_name,
+                        attempt,
+                        wait_s,
+                    )
+                    try:
+                        self.client.close_profile(profile.profile_id)
+                    except Exception:
+                        pass
+                    time.sleep(wait_s)
+                    continue
+
+                log.error("[OneGo-IX] Failed to open profile '%s': %s", profile.profile_name, exc)
+                self.last_failure_reason = (
+                    "kernel_missing" if is_kernel_missing else "profile_open_failed"
+                )
+                return None
+
+        if not ix_sess:
+            self.last_failure_reason = "profile_open_failed"
             return None
 
         debug_addr = ix_sess.debugging_address
         if not debug_addr:
             log.error("[OneGo-IX] No debugging address for profile '%s'", profile.profile_name)
             self.client.close_profile(profile.profile_id)
+            self.last_failure_reason = "profile_open_failed"
             return None
 
-        driver = self._attach_selenium(debug_addr)
+        driver, attach_hint = self._attach_selenium(debug_addr, ix_sess.webdriver_path)
         if not driver:
             log.error("[OneGo-IX] Selenium attach failed for '%s' at %s",
                       profile.profile_name, debug_addr)
             self.client.close_profile(profile.profile_id)
+            self.last_failure_reason = attach_hint or "selenium_attach_failed"
             return None
 
         ps = ProfileSession(profile=profile, ix_session=ix_sess, driver=driver)
@@ -128,17 +230,38 @@ class IXSessionManager:
             pass
 
     @staticmethod
-    def _attach_selenium(debug_address: str):
-        """Attach Selenium to a running Chrome instance via debugging address."""
+    def _attach_selenium(
+        debug_address: str, webdriver_path: str = None
+    ) -> Tuple[Any, Optional[str]]:
+        """Attach Selenium to a running Chrome instance via debugging address.
+
+        Returns (driver, None) on success or (None, failure_hint) on failure.
+        failure_hint is one of: "driver_mismatch", "selenium_attach_failed".
+        """
         try:
             from selenium import webdriver
             from selenium.webdriver.chrome.options import Options
+            from selenium.webdriver.chrome.service import Service
 
             opts = Options()
             opts.add_experimental_option("debuggerAddress", debug_address)
-            driver = webdriver.Chrome(options=opts)
+
+            if webdriver_path:
+                log.info("[OneGo-IX] Using webdriver at: %s", webdriver_path)
+                service = Service(executable_path=webdriver_path)
+                driver = webdriver.Chrome(service=service, options=opts)
+            else:
+                driver = webdriver.Chrome(options=opts)
+
             log.info("[OneGo-IX] Selenium attached to %s", debug_address)
-            return driver
+            return driver, None
         except Exception as exc:
+            msg = str(exc).lower()
+            # Detect ChromeDriver / Chrome version mismatch
+            if "only supports chrome version" in msg or (
+                "chrome version" in msg and "current browser version" in msg
+            ) or "this version of chromedriver" in msg:
+                log.error("[OneGo-IX] Driver/browser version mismatch: %s", exc)
+                return None, "driver_mismatch"
             log.error("[OneGo-IX] Selenium attach error: %s", exc)
-            return None
+            return None, "selenium_attach_failed"

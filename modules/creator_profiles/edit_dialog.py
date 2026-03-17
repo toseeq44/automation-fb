@@ -14,7 +14,9 @@ from PyQt5.QtWidgets import (
 from .config_manager import CreatorConfig
 
 _WM_FONT_PRESETS = [
+    "Segoe UI",
     "Arial",
+    "Arial Unicode MS",
     "Verdana",
     "Times New Roman",
     "Georgia",
@@ -412,6 +414,13 @@ class EditCreatorDialog(QDialog):
         lop_w = QWidget(); lop_w.setStyleSheet("background:transparent; border:none;"); lop_w.setLayout(lop_row)
         wm_form.addRow("  Opacity:", lop_w)
 
+        self.wm_logo_size_sp = QSpinBox()
+        self.wm_logo_size_sp.setRange(1, 100)
+        self.wm_logo_size_sp.setValue(15)
+        self.wm_logo_size_sp.setSuffix(" % of Width")
+        self.wm_logo_size_sp.setFixedWidth(120)
+        wm_form.addRow("  Scale Size:", self.wm_logo_size_sp)
+
         self._set_color_preset_from_hex(self.wm_txt_color_preset_cb, "#FFFFFF")
 
         outer.addLayout(wm_form)
@@ -537,6 +546,7 @@ class EditCreatorDialog(QDialog):
         if logo_pos in pos_list:
             self.wm_logo_pos_cb.setCurrentText(logo_pos)
         self.wm_logo_opacity_sl.setValue(int(wl.get("opacity", 80)))
+        self.wm_logo_size_sp.setValue(int(wl.get("size", 15)))
 
     def _on_mode_change(self):
         m = self.mode_combo.currentIndex()
@@ -603,6 +613,7 @@ class EditCreatorDialog(QDialog):
                 "path":     self.wm_logo_path_edit.text().strip(),
                 "position": self.wm_logo_pos_cb.currentText(),
                 "opacity":  self.wm_logo_opacity_sl.value(),
+                "size":     self.wm_logo_size_sp.value(),
             },
         })
         self.config.save()

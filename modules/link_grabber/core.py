@@ -3950,6 +3950,8 @@ def extract_links_intelligent(
         manual_login_wait_seconds = int(options.get('manual_login_wait_seconds', 90) or 90)
         managed_profile_only = bool(options.get('managed_profile_only', False))
         cookie_browser = options.get('cookie_browser')  # "chrome", "firefox", "edge", or None
+        yt_content_type = options.get('yt_content_type', 'all')  # "all" | "shorts" | "long"
+        print(f"[YT-Tab] options.yt_content_type = {yt_content_type!r}")
         explicit_browser_mode = bool(cookie_browser)
         if managed_profile_only:
             # CreatorProfile-safe mode: avoid touching local user browser profiles.
@@ -4100,12 +4102,25 @@ def extract_links_intelligent(
                     cached_tab = None
 
             _available_tabs = ['videos', 'shorts']
-            _chosen_tab = cached_tab if cached_tab in _available_tabs else 'videos'
+            # Choose primary tab based on content type preference
+            if yt_content_type == 'shorts':
+                _chosen_tab = 'shorts'
+            elif yt_content_type == 'long':
+                _chosen_tab = 'videos'
+            else:
+                # "all" — use channel homepage (no tab suffix) so yt-dlp
+                # returns whatever YouTube surfaces (mix of shorts + long).
+                _chosen_tab = ''
+            _tab_display = _chosen_tab or 'homepage'
+            print(f"[YT-Tab] yt_content_type={yt_content_type!r}, chosen_tab={_chosen_tab!r}")
             if progress_callback:
-                progress_callback("YouTube: Will grab from both /videos and /shorts tabs")
+                progress_callback(f"YouTube: primary tab=/{_tab_display} (content_type={yt_content_type})")
 
             original_url = url
-            url = f"{_profile_base_url}/{_chosen_tab}"
+            if _chosen_tab:
+                url = f"{_profile_base_url}/{_chosen_tab}"
+            # else: keep original profile URL (homepage)
+            print(f"[YT-Tab] URL: {original_url} -> {url}")
             if progress_callback:
                 progress_callback(f"URL normalized: {original_url} -> {url}")
 
@@ -4173,7 +4188,7 @@ def extract_links_intelligent(
             and auth_manager.is_setup_complete()
         ):
             if progress_callback:
-                progress_callback("Layer 1: Chromium browser extraction (saved profile)...")
+                progress_callback("[LG-0] Chromium browser extraction (saved profile)...")
             content_filter_type = {
                 'youtube': 'all_videos',
                 'tiktok': 'all_videos',
@@ -4181,11 +4196,9 @@ def extract_links_intelligent(
                 'twitter': 'video_tweets',
                 'facebook': 'videos_reels',
             }.get(platform_key, 'all')
-            browser_source_url = (
-                _profile_base_url
-                if (platform_key == 'youtube' and url_type == 'profile')
-                else url
-            )
+            # For YouTube profiles, use the tab-specific URL so the browser
+            # navigates to /shorts or /videos when yt_content_type is set.
+            browser_source_url = url
 
             try:
                 browser_entries = auth_manager.grab_links_via_browser(
@@ -4210,10 +4223,10 @@ def extract_links_intelligent(
                     if entries:
                         pre_successful_method = "Chromium Browser (saved profile)"
                         if progress_callback:
-                            progress_callback(f"Chromium browser: {len(entries)} links extracted")
+                            progress_callback(f"[LG-0] Chromium browser: {len(entries)} links extracted")
             except Exception as e:
                 if progress_callback:
-                    progress_callback(f"Chromium browser failed: {str(e)[:100]}")
+                    progress_callback(f"[LG-0] Chromium browser failed: {str(e)[:100]}")
                 try:
                     login_status = auth_manager.get_login_status()
                 except Exception:
@@ -4326,6 +4339,23 @@ def extract_links_intelligent(
 
         # Define all available methods
         # PRIORITY ORDER: Fast API methods first, browser methods as fallback
+        # Stable method-id -> number mapping for debug logs.
+        _LG_NUM = {
+            "ytdlp_primary": 1,
+            "ytdlp_get_url": 2,
+            "ytdlp_dump_json": 3,
+            "ytdlp_with_retry": 4,
+            "gallery_dl": 5,
+            "instagram_graphql": 6,
+            "instaloader": 7,
+            "facebook_json": 8,
+            "instagram_mobile_api": 9,
+            "selenium_cdp_attach": 10,
+            "selenium_profile": 11,
+            "playwright": 12,
+            "selenium_headless": 13,
+        }
+
         all_methods = [
             # â”€â”€ yt-dlp methods (YouTube, TikTok, Facebook â€” NOT Instagram) â”€â”€
             ("Method 0: yt-dlp primary (Dual API + Proxy + UA Rotation)",
@@ -4441,14 +4471,17 @@ def extract_links_intelligent(
                 "playwright",
                 "instagram_graphql",
             }
-            insta_filtered = [
+            # Prioritize Instagram-specific methods but keep ALL as fallback.
+            insta_first = [
                 (name, func, mid) for name, func, mid in available_methods
                 if mid in _INSTAGRAM_METHOD_IDS
             ]
-            if insta_filtered:
-                if progress_callback:
-                    progress_callback("Scanning...")
-                available_methods = insta_filtered
+            insta_rest = [
+                (name, func, mid) for name, func, mid in available_methods
+                if mid not in _INSTAGRAM_METHOD_IDS
+            ]
+            if insta_first:
+                available_methods = insta_first + insta_rest
             # Priority order by method_id
             _insta_order = [
                 "instagram_mobile_api",
@@ -4501,10 +4534,11 @@ def extract_links_intelligent(
         if fb_profile_shape:
             if progress_callback:
                 progress_callback("Facebook profile URL detected; prioritizing browser extraction methods.")
-            _fb_browser_ids = {"selenium_headless", "playwright"}
-            filtered = [(name, func, mid) for name, func, mid in available_methods if mid in _fb_browser_ids]
-            if filtered:
-                available_methods = filtered
+            # Prioritize browser methods but keep ALL methods as fallback.
+            _fb_browser_ids = {"selenium_headless", "playwright", "facebook_json"}
+            browser_first = [(n, f, m) for n, f, m in available_methods if m in _fb_browser_ids]
+            rest = [(n, f, m) for n, f, m in available_methods if m not in _fb_browser_ids]
+            available_methods = browser_first + rest
 
         # Try methods
         successful_method = pre_successful_method
@@ -4521,8 +4555,9 @@ def extract_links_intelligent(
             if max_videos > 0 and len(entries) >= max_videos:
                 break
 
+            _lg_tag = f"[LG-{_LG_NUM.get(method_id, '?')}]"
             if progress_callback:
-                progress_callback("Scanning...")
+                progress_callback(f"{_lg_tag} Scanning...")
 
             start_time = time.time()
             method_entries = []
@@ -4534,7 +4569,7 @@ def extract_links_intelligent(
                 error_msg = str(e)[:200]
                 last_method_error = error_msg
                 if progress_callback:
-                    progress_callback(f"Ã¢Å¡Â Ã¯Â¸Â {method_name} failed: {error_msg[:100]}")
+                    progress_callback(f"Ã¢Å¡Â Ã¯Â¸Â {_lg_tag} failed: {error_msg[:100]}")
 
             time_taken = time.time() - start_time
 
@@ -4573,18 +4608,18 @@ def extract_links_intelligent(
                 successful_method = method_name
                 successful_method_id = method_id
                 if progress_callback:
-                    progress_callback(f"Found {added} links")
+                    progress_callback(f"{_lg_tag} Found {added} links")
 
                 if target_count > 0 and len(entries) >= target_count:
                     if progress_callback:
-                        progress_callback(f"Target reached: {len(entries)}/{target_count} links")
+                        progress_callback(f"{_lg_tag} Target reached: {len(entries)}/{target_count} links")
                     break
 
                 if not exhaustive_mode:
                     break  # Stop on first success
             else:
                 if progress_callback:
-                    progress_callback(f"Ã¢Å¡Â Ã¯Â¸Â {method_name} Ã¢â€ â€™ 0 links")
+                    progress_callback(f"Ã¢Å¡Â Ã¯Â¸Â {_lg_tag} Ã¢â€ â€™ 0 links")
 
                     # If this was the learned "best" method and it failed, inform user we'll try others
                     if method_id == best_method_id and best_method_id:
@@ -4608,11 +4643,12 @@ def extract_links_intelligent(
         _avail_tabs_fb = options.get('_available_tabs', [])
         _base_url_fb   = options.get('_profile_base_url', _profile_base_url)
 
+        # Always try remaining tabs for YouTube profiles so both shorts + long
+        # videos are available for yt_content_type filtering in selection_policy.
         if (
             platform_key == 'youtube'
             and _url_type_fb == 'profile'
             and _avail_tabs_fb
-            and (max_videos <= 0 or len(entries) < max_videos)
         ):
             remaining_tabs = [
                 t for t in _avail_tabs_fb
@@ -4622,8 +4658,6 @@ def extract_links_intelligent(
                 progress_callback(f"YouTube: trying additional tabs {remaining_tabs}")
 
             for alt_tab in remaining_tabs:
-                if max_videos > 0 and len(entries) >= max_videos:
-                    break
                 alt_url = f"{_base_url_fb}/{alt_tab}"
                 if progress_callback:
                     progress_callback(f"Trying tab fallback: '{alt_tab}' -> {alt_url}")
@@ -4651,8 +4685,6 @@ def extract_links_intelligent(
                 ]
 
                 for fb_method_name, fb_method_func in fast_tab_methods:
-                    if max_videos > 0 and len(entries) >= max_videos:
-                        break
                     try:
                         fb_entries = fb_method_func() or []
                     except Exception:
@@ -4660,8 +4692,6 @@ def extract_links_intelligent(
 
                     added = 0
                     for entry in fb_entries:
-                        if max_videos > 0 and len(entries) >= max_videos:
-                            break
                         url_value = entry.get('url')
                         if not url_value:
                             continue

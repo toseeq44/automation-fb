@@ -246,7 +246,11 @@ class DesktopAppLauncher:
         # Wait for API to be ready (initial attempt - 20 seconds with 2 sec interval)
         logger.info("[DesktopLauncher] Initial API check (20 seconds)...")
         if self.wait_for_api(timeout=20, check_interval=2):
-            logger.info("[DesktopLauncher] ✓ ixBrowser launched successfully!")
+            # Give ixBrowser time to fully initialize kernel and internal services.
+            # API port opens fast but profile-open needs the kernel loaded.
+            logger.info("[DesktopLauncher] ✓ API available! Waiting for full warm-up (15s)...")
+            time.sleep(15)
+            logger.info("[DesktopLauncher] ✓ ixBrowser launched and warmed up!")
             return True
 
         # API not available - might need login

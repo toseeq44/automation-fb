@@ -992,40 +992,61 @@ class SessionAuthority:
         self.invalidate_cache()
 
         # 3. Refresh login status and export cookies
-        try:
-            if detected_status is not None:
-                # detected_status comes from has_platform_session() (BROAD).
-                # Seed the SESSION cache (browser-session layer) — NOT the
-                # strict auth cache, which must be populated from
-                # _has_platform_cookies() only.
-                session_status = detected_status
-                self._session_status_cache = dict(session_status)
-                self._session_status_age = time.time()
+        if detected_status is not None:
+            # detected_status comes from has_platform_session() (BROAD).
+            # Seed the SESSION cache (browser-session layer) — NOT the
+            # strict auth cache, which must be populated from
+            # _has_platform_cookies() only.
+            session_status = detected_status
+            self._session_status_cache = dict(session_status)
+            self._session_status_age = time.time()
 
-                # Populate strict auth cache separately so downstream
-                # cookie export decisions use the correct layer.
-                strict_status = self.get_login_status(force_refresh=True)
-            else:
-                strict_status = self.get_login_status(force_refresh=True)
-                session_status = strict_status  # best-effort when no broad data
-
-            # Export cookies for platforms that have strict auth
-            for p, has_auth in strict_status.items():
-                if has_auth:
-                    self.ensure_fresh_cookies(p)
-
-            # Persist metadata for GUI (uses session layer — the broader check)
+            # Persist immediately so auth_state.json is updated even if
+            # the Playwright strict-check below fails or times out.
             self.persist_auth_state(session_status, source)
 
-            strict_list = sorted(k for k, v in strict_status.items() if v)
-            session_list = sorted(k for k, v in session_status.items() if v)
-            logger.info(
-                "[SessionAuthority] Post-login state: "
-                "strict_auth=%s  browser_session=%s",
-                strict_list, session_list,
-            )
-        except Exception as exc:
-            logger.error("[SessionAuthority] Post-login sync failed: %s", exc)
+            # Now attempt the strict auth check (Playwright) — if it
+            # fails, the broad session_status is already persisted above.
+            try:
+                strict_status = self.get_login_status(force_refresh=True)
+
+                for p, has_auth in strict_status.items():
+                    if has_auth:
+                        self.ensure_fresh_cookies(p)
+
+                # Re-persist with refined data if strict check succeeded
+                self.persist_auth_state(session_status, source)
+
+                strict_list = sorted(k for k, v in strict_status.items() if v)
+                session_list = sorted(k for k, v in session_status.items() if v)
+                logger.info(
+                    "[SessionAuthority] Post-login state: "
+                    "strict_auth=%s  browser_session=%s",
+                    strict_list, session_list,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[SessionAuthority] Strict auth check failed (auth state "
+                    "already persisted from browser session): %s", exc,
+                )
+        else:
+            try:
+                strict_status = self.get_login_status(force_refresh=True)
+                session_status = strict_status
+
+                for p, has_auth in strict_status.items():
+                    if has_auth:
+                        self.ensure_fresh_cookies(p)
+
+                self.persist_auth_state(session_status, source)
+
+                strict_list = sorted(k for k, v in strict_status.items() if v)
+                logger.info(
+                    "[SessionAuthority] Post-login state: strict_auth=%s",
+                    strict_list,
+                )
+            except Exception as exc:
+                logger.error("[SessionAuthority] Post-login sync failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------

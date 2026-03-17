@@ -323,6 +323,12 @@ class LinkGrabberPage(QWidget):
         self.cookie_status.setStyleSheet("color: #888; font-size: 11px;")
         cookie_layout.addWidget(self.cookie_status)
 
+        # ── Per-platform cookie validity indicators ──
+        self.cookie_validity_label = QLabel("")
+        self.cookie_validity_label.setStyleSheet("color: #888; font-size: 11px;")
+        cookie_layout.addWidget(self.cookie_validity_label)
+        self._refresh_cookie_validity()
+
         cookie_group.setLayout(cookie_layout)
         layout.addWidget(cookie_group)
 
@@ -1183,20 +1189,33 @@ FIX: Check proxy username/password, verify format
     def _on_browser_login_finished(self, success: bool, platform_status: dict = None):
         self.log_area.append("Browser login finished." if success else "Browser login ended without new session.")
 
-        # Display login results (actual sync already handled by browser_auth.py
-        # via notify_login_complete in open_login_browser).
-        # platform_status is from has_platform_session() (browser session layer).
+        # Display per-platform detection results with clear indicators
         if platform_status:
-            sessions = sorted([k for k, v in platform_status.items() if v])
-            if sessions:
-                self.log_area.append(f" Browser sessions detected: {', '.join(sessions)}")
-            else:
+            detected = []
+            missing = []
+            for p in ["youtube", "tiktok", "instagram", "twitter", "facebook"]:
+                if platform_status.get(p):
+                    detected.append(p.title())
+                else:
+                    missing.append(p.title())
+            if detected:
+                self.log_area.append(
+                    f" Platforms detected ({len(detected)}): {', '.join(detected)}"
+                )
+            if missing:
+                self.log_area.append(
+                    f" Not detected ({len(missing)}): {', '.join(missing)}"
+                )
+            if not detected:
                 self.log_area.append(" No sessions detected. Try Re-login again.")
 
         self.relogin_btn.setEnabled(bool(self.auth_manager))
-        self._refresh_auth_status_indicators()
+        # Use platform_status directly for immediate indicator update,
+        # in case auth_state.json write is still in progress.
+        self._refresh_auth_status_indicators(live_status=platform_status)
+        self._refresh_cookie_validity()
 
-    def _refresh_auth_status_indicators(self):
+    def _refresh_auth_status_indicators(self, live_status: dict = None):
         if not hasattr(self, "platform_status_label"):
             return
         if not self.auth_manager:
@@ -1206,10 +1225,12 @@ FIX: Check proxy username/password, verify format
                 self.relogin_btn.setEnabled(False)
             return
 
-        # IMPORTANT: do not launch Playwright from GUI init path.
-        # Read last known auth status from shared auth_state cache.
-        # This shows the BROWSER SESSION layer (broad indicators).
-        status = self._read_cached_platform_status()
+        # Use live_status from login callback when available for immediate
+        # feedback; fall back to reading persisted auth_state.json.
+        if live_status:
+            status = {k: bool(v) for k, v in live_status.items()}
+        else:
+            status = self._read_cached_platform_status()
 
         # Check cooldown state (lightweight file read, no Playwright)
         cooldowns = {}
@@ -1258,6 +1279,34 @@ FIX: Check proxy username/password, verify format
         except Exception:
             pass
         return status
+
+    def _refresh_cookie_validity(self):
+        """Check per-platform cookie files and display validity status."""
+        try:
+            from modules.video_downloader.core import _validate_cookie_file
+        except ImportError:
+            return
+
+        order = ["youtube", "tiktok", "instagram", "twitter", "facebook"]
+        parts = []
+        for platform in order:
+            cookie_file = self.cookies_dir / f"{platform}.txt"
+            if not cookie_file.exists():
+                parts.append(f"\u274c {platform.title()}")
+                continue
+            result = _validate_cookie_file(str(cookie_file))
+            if not result.get("valid"):
+                parts.append(f"\u274c {platform.title()}")
+            elif result.get("expired_cookies", 0) > 0:
+                parts.append(f"\u26a0 {platform.title()}")
+            elif not result.get("fresh", True):
+                age = result.get("age_days", 0)
+                parts.append(f"\u26a0 {platform.title()} ({age}d)")
+            else:
+                parts.append(f"\u2705 {platform.title()}")
+
+        if hasattr(self, "cookie_validity_label"):
+            self.cookie_validity_label.setText("Cookies: " + "  ".join(parts))
 
     def on_progress_log(self, msg):
         try:
@@ -1455,6 +1504,7 @@ FIX: Check proxy username/password, verify format
         else:
             self.cookie_status.setText("No known platforms detected")
             self.cookie_status.setStyleSheet("color: #E74C3C; font-size: 11px;")
+        self._refresh_cookie_validity()
 
     def save_cookies(self):
         """Save cookies as master chrome_cookies.txt file with comprehensive validation"""
@@ -1571,6 +1621,7 @@ FIX: Check proxy username/password, verify format
             success_msg += f"\n These cookies will be used automatically for ALL link extraction operations."
 
             QMessageBox.information(self, " Cookies Saved Successfully", success_msg)
+            self._refresh_cookie_validity()
 
         except Exception as e:
             # Save failed
@@ -1614,5 +1665,6 @@ FIX: Check proxy username/password, verify format
         self.cookie_status.setText("No cookies loaded - Using browser cookies or public access")
         self.cookie_status.setStyleSheet("color: #888; font-size: 11px;")
         self.log_area.append(" Cookie text area cleared")
+        self._refresh_cookie_validity()
 
 

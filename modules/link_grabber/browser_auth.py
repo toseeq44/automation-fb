@@ -109,9 +109,6 @@ class ChromiumAuthManager:
         }
 
         self._active_contexts: Dict[int, object] = {}
-        
-        # STABILITY: Programmatically clear outdated ChromeDriver that conflicts with Chrome 145
-        self._cleanup_outdated_driver()
 
         # Cooldown state: prevent re-opening login for platforms that hit
         # challenges / rate-limits.  Persisted to JSON so it survives restarts.
@@ -215,15 +212,6 @@ class ChromiumAuthManager:
             except Exception:
                 pass
         return active
-
-    def _cleanup_outdated_driver(self):
-        try:
-            old_driver_path = Path.home() / "AppData/Roaming/ixBrowser-Resources/chrome/142-0502/chromedriver.exe"
-            if old_driver_path.exists():
-                logging.info(f"Cleanup: Removing outdated ChromeDriver (v142) to force sync with Chrome 145...")
-                old_driver_path.unlink(missing_ok=True)
-        except Exception:
-            pass
 
     # Lock/junk file names that do NOT indicate a real Chromium profile.
     # Must stay consistent with SessionAuthority._PROFILE_JUNK_NAMES.
@@ -596,22 +584,26 @@ class ChromiumAuthManager:
             for platform, ok in final_status.items():
                 callback(platform, "ok" if ok else "missing")
 
-        if any(final_status.values()):
-            try:
-                from ..shared.session_authority import get_session_authority
-                get_session_authority().notify_login_complete(
-                    "all", source="relogin",
-                    detected_status=final_status,
-                )
-            except Exception:
-                logging.exception(
-                    "notify_login_complete failed; falling back to manual sync"
-                )
+        # Always notify SessionAuthority so auth_state.json reflects
+        # the real login status — including full logout (all False).
+        try:
+            from ..shared.session_authority import get_session_authority
+            sa = get_session_authority()
+            sa.notify_login_complete(
+                "all", source="relogin",
+                detected_status=final_status,
+            )
+        except Exception:
+            logging.exception(
+                "notify_login_complete failed; falling back to manual sync"
+            )
+            if any(final_status.values()):
                 try:
                     self.extract_cookies_for_all_platforms()
                 except Exception:
                     pass
-        else:
+
+        if not any(final_status.values()):
             self._clear_session_lock_safe()
 
     def _probe_challenge_after_relogin(
@@ -1024,14 +1016,14 @@ class ChromiumAuthManager:
                 else:
                     logging.info("[ChromiumAuthManager] Using Bundled Chromium: %s", exe_path)
             elif exe_path and headless:
-                # Keep headless launches stable by avoiding system Chrome override.
-                # Playwright will use its bundled Chromium.
+                # System Chrome + headless crashes with Browser.getWindowForTarget
+                # on some Windows builds, so use Playwright bundled Chromium.
+                # BUT keep the same User-Agent as the headed login session so
+                # Instagram doesn't detect a browser switch and force-logout.
                 logging.info(
-                    "[ChromiumAuthManager] Headless launch: using Playwright bundled Chromium "
-                    "(system Chrome override disabled)"
+                    "[ChromiumAuthManager] Headless launch: Playwright bundled Chromium "
+                    "with consistent UA to preserve session"
                 )
-                # Avoid UA major-version mismatch with bundled Chromium.
-                launch_args.pop("user_agent", None)
             else:
                 logging.warning("[ChromiumAuthManager] No browser found, using Playwright default.")
 

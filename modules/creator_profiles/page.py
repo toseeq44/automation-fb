@@ -70,7 +70,12 @@ _WM_COLOR_PRESETS = [
 
 def _abtn(text: str, fg: str, bg: str, border: str = None) -> QPushButton:
     """Action bar button — matches app button style."""
-    bc = border or f"rgba({','.join(str(int(fg.lstrip('#')[i:i+2],16)) for i in (0,2,4))},0.45)"
+    if border:
+        bc = border
+    elif fg.startswith("#") and len(fg.lstrip("#")) == 6:
+        bc = f"rgba({','.join(str(int(fg.lstrip('#')[i:i+2],16)) for i in (0,2,4))},0.45)"
+    else:
+        bc = fg  # already rgba/named — use as-is
     b = QPushButton(text)
     b.setStyleSheet(
         f"QPushButton {{"
@@ -384,6 +389,11 @@ class AddCreatorDialog(QDialog):
         self.delete_before_dl_check.setChecked(False)
         form.addRow("Cleanup:", self.delete_before_dl_check)
 
+        self.yt_type_combo = QComboBox()
+        self.yt_type_combo.addItems(["All", "Shorts", "Long"])
+        self.yt_type_combo.setToolTip("YouTube only: filter by content type")
+        form.addRow("YT Content:", self.yt_type_combo)
+
         self._on_mode_change()
         v.addLayout(form)
 
@@ -650,6 +660,7 @@ class AddCreatorDialog(QDialog):
             "randomize_links": self.rand_check.isChecked(),
             "keep_original_after_edit": self.keep_original_check.isChecked(),
             "delete_before_download": self.delete_before_dl_check.isChecked(),
+            "yt_content_type": ["all", "shorts", "long"][self.yt_type_combo.currentIndex()],
             "watermark_enabled": self.wm_enable_btn.isChecked(),
             "watermark_text": {
                 "enabled":        self.wm_txt_enable_btn.isChecked(),
@@ -933,6 +944,10 @@ class BulkAddDialog(QDialog):
         settings_form.addRow("Randomize:", self.rand_check)
         settings_form.addRow("Original File:", self.keep_original_check)
         settings_form.addRow("Cleanup:", self.delete_before_dl_check)
+        self.yt_type_combo = QComboBox()
+        self.yt_type_combo.addItems(["All", "Shorts", "Long"])
+        self.yt_type_combo.setToolTip("YouTube only: filter by content type")
+        settings_form.addRow("YT Content:", self.yt_type_combo)
         v.addLayout(settings_form)
         self._on_mode_change()
 
@@ -1287,6 +1302,7 @@ class BulkAddDialog(QDialog):
             "randomize_links": self.rand_check.isChecked(),
             "keep_original_after_edit": self.keep_original_check.isChecked(),
             "delete_before_download": self.delete_before_dl_check.isChecked(),
+            "yt_content_type": ["all", "shorts", "long"][self.yt_type_combo.currentIndex()],
             "watermark_enabled": self.wm_enable_btn.isChecked(),
             "watermark_text": {
                 "enabled":        self.wm_txt_enable_btn.isChecked(),
@@ -1481,6 +1497,11 @@ class AllSettingsDialog(QDialog):
 
         self.rand_check = QCheckBox("Randomize links")
         settings_form.addRow("Randomize:", self.rand_check)
+
+        self.yt_type_combo = QComboBox()
+        self.yt_type_combo.addItems(["All", "Shorts", "Long"])
+        self.yt_type_combo.setToolTip("YouTube only: filter by content type")
+        settings_form.addRow("YT Content:", self.yt_type_combo)
 
         content.addLayout(settings_form)
         content.addWidget(_hdiv())
@@ -1705,6 +1726,8 @@ class AllSettingsDialog(QDialog):
         self.dup_check.setChecked(c.duplication_control)
         self.pop_check.setChecked(c.popular_fallback)
         self.rand_check.setChecked(c.randomize_links)
+        _yt_map = {"all": 0, "shorts": 1, "long": 2}
+        self.yt_type_combo.setCurrentIndex(_yt_map.get(c.yt_content_type, 0))
 
         self.wm_enable_check.setChecked(c.watermark_enabled)
         wt = c.watermark_text
@@ -1740,6 +1763,7 @@ class AllSettingsDialog(QDialog):
             "popular_fallback": self.pop_check.isChecked(),
             "prefer_popular_first": False,
             "randomize_links": self.rand_check.isChecked(),
+            "yt_content_type": ["all", "shorts", "long"][self.yt_type_combo.currentIndex()],
             "watermark_enabled": self.wm_enable_check.isChecked(),
             "watermark_text": {
                 "enabled":        self.wm_txt_enable_check.isChecked(),

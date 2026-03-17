@@ -61,6 +61,19 @@ class OneGoReportDialog(QDialog):
         summary = self._build_summary()
         vbox.addWidget(summary)
 
+        # Session-level error banner (bootstrap failure)
+        session_error = self._report.get("session_error")
+        if session_error:
+            err_lbl = QLabel(
+                f"<div style='padding:8px; background:{_BG_CARD}; border:1px solid {_RED};"
+                f" border-radius:6px;'>"
+                f"<b style='color:{_RED};'>Session Error:</b> "
+                f"<span style='color:rgba(255,255,255,0.8);'>{session_error}</span></div>"
+            )
+            err_lbl.setTextFormat(Qt.RichText)
+            err_lbl.setWordWrap(True)
+            vbox.addWidget(err_lbl)
+
         # Profile details table
         profiles = self._report.get("profiles", [])
         if profiles:
@@ -117,7 +130,29 @@ class OneGoReportDialog(QDialog):
         name = prof.get("profile_name", "?")
         pages: List[dict] = prof.get("pages", [])
         total_uploaded = prof.get("total_uploaded", 0)
+        profile_status = prof.get("status")
+        profile_reason = prof.get("reason")
 
+        # Profile-level failure/skip — no page table
+        if profile_status and not pages:
+            color = _status_color(profile_status)
+            html = (
+                f"<div style='padding:8px; margin-top:6px; background:{_BG_CARD}; border-radius:6px;'>"
+                f"<b style='color:{_CYAN};'>{name}</b>"
+                f" &mdash; <span style='color:{color};'>{profile_status}</span>"
+            )
+            if profile_reason:
+                html += (
+                    f" <span style='color:rgba(255,255,255,0.5); font-size:11px;'>"
+                    f"({profile_reason})</span>"
+                )
+            html += "</div>"
+            lbl = QLabel(html)
+            lbl.setTextFormat(Qt.RichText)
+            lbl.setWordWrap(True)
+            return lbl
+
+        # Normal case — page table
         rows_html = ""
         for pg in pages:
             pg_name = pg.get("page_name", "?")

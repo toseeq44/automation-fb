@@ -107,6 +107,7 @@ def select_videos(
     random_enabled: bool,
     already_downloaded: FrozenSet[str],
     platform: str = "",
+    yt_content_type: str = "all",
 ) -> Tuple[List[dict], List[dict]]:
     """Select videos according to user preferences.
 
@@ -171,6 +172,19 @@ def select_videos(
     if dropped_dupes:
         debug.append({"action": "drop_duplicate_url_after_normalize", "count": dropped_dupes})
 
+    # YouTube content type filter (shorts / long / all)
+    if platform_hint == "youtube" and yt_content_type in ("shorts", "long"):
+        before_yt = len(pool)
+        preferred = [e for e in pool if _is_yt_short(e["url"]) == (yt_content_type == "shorts")]
+        if preferred:
+            pool = preferred
+            dropped_yt = before_yt - len(pool)
+            if dropped_yt:
+                debug.append({"action": "yt_content_filter", "type": yt_content_type, "dropped": dropped_yt})
+        else:
+            # Fallback: preferred type yielded 0, keep all (don't starve pipeline)
+            debug.append({"action": "yt_content_filter_fallback", "type": yt_content_type, "reason": "no_matches"})
+
     # Remove already-downloaded if skip enabled
     if skip_downloaded:
         before = len(pool)
@@ -183,19 +197,19 @@ def select_videos(
         debug.append({"action": "pool_empty_after_filter"})
         return [], debug
 
-    if not skip_downloaded:
-        # Mode D: skip=false — same engine, just no duplicate filtering
-        # Pick newest entries (respects pinned exclusion for latest path)
-        selected = _select_mode_a(pool, n_videos, debug)
-    elif popular_enabled and random_enabled:
-        # Mode C: skip + popular + random
-        selected = _select_mode_c(pool, n_videos, platform, debug)
-    elif popular_enabled:
-        # Mode B: skip + popular
-        selected = _select_mode_b(pool, n_videos, platform, debug)
-    else:
-        # Mode A: skip only (newest non-pinned)
-        selected = _select_mode_a(pool, n_videos, debug)
+    # 8-way dispatch based on (skip, popular, random) combination
+    _dispatch = {
+        (False, False, False): _mode_noskip_latest,
+        (False, True,  False): _mode_noskip_popular,
+        (False, False, True):  _mode_noskip_random,
+        (False, True,  True):  _mode_noskip_popular_random,
+        (True,  False, False): _mode_skip_latest,
+        (True,  True,  False): _mode_skip_popular,
+        (True,  False, True):  _mode_skip_random,
+        (True,  True,  True):  _mode_skip_popular_random,
+    }
+    mode_fn = _dispatch[(skip_downloaded, popular_enabled, random_enabled)]
+    selected = mode_fn(pool, n_videos, debug)
 
     logger.info(
         "[SelectionDecision] mode=%s n_requested=%d n_selected=%d platform=%s",
@@ -277,18 +291,31 @@ def _canonical_video_url(url: str, platform_hint: str = "") -> str:
                 if reel_id:
                     return f"https://www.facebook.com/reel/{reel_id}"
             if "/videos/" in path:
-                # Require numeric video ID segment
+                # Facebook video URLs come in two forms:
+                #   /<user>/videos/<numeric_id>
+                #   /<user>/videos/<title-slug>/<numeric_id>
+                # Accept if ANY segment after "videos" is numeric.
                 try:
                     idx = parts.index("videos")
-                    if idx + 1 < len(parts) and parts[idx + 1].isdigit():
-                        return f"https://www.facebook.com/{'/'.join(parts)}"
+                    after_videos = parts[idx + 1:]
+                    numeric_ids = [p for p in after_videos if p.isdigit()]
+                    if numeric_ids:
+                        vid_id = numeric_ids[-1]  # last numeric segment is the ID
+                        user = parts[0] if idx > 0 else ""
+                        if user:
+                            return f"https://www.facebook.com/{user}/videos/{vid_id}"
+                        return f"https://www.facebook.com/videos/{vid_id}"
                     return ""
-                except ValueError:
+                except (ValueError, IndexError):
                     return ""
-            if path.startswith("/watch/"):
+            if path.startswith("/watch/") or path == "/watch":
                 v = (q.get("v") or [""])[0].strip()
                 if v and v.isdigit():
                     return f"https://www.facebook.com/watch/?v={v}"
+                # Also accept /watch/{numeric_id} path format
+                watch_seg = path[len("/watch/"):].strip("/")
+                if watch_seg and watch_seg.isdigit():
+                    return f"https://www.facebook.com/watch/?v={watch_seg}"
                 return ""
             if path.startswith("/share/v/"):
                 share_id = path[len("/share/v/"):].strip("/")
@@ -354,6 +381,11 @@ def _canonical_video_url(url: str, platform_hint: str = "") -> str:
         return ""
 
 
+def _is_yt_short(url: str) -> bool:
+    """Return True if the URL is a YouTube Shorts link."""
+    return "/shorts/" in (url or "").lower()
+
+
 def _is_supported_video_url(url: str, platform_hint: str = "") -> bool:
     """Return True only for actual video/post URLs, not tab/navigation URLs."""
     try:
@@ -363,147 +395,200 @@ def _is_supported_video_url(url: str, platform_hint: str = "") -> bool:
 
 
 def _mode_label(skip: bool, popular: bool, rand: bool) -> str:
-    if not skip:
-        return "D_no_skip"
-    if popular and rand:
-        return "C_skip_popular_random"
+    parts = []
+    parts.append("skip" if skip else "noskip")
     if popular:
-        return "B_skip_popular"
-    return "A_skip_latest"
+        parts.append("popular")
+    if rand:
+        parts.append("random")
+    if not popular and not rand:
+        parts.append("latest")
+    return "_".join(parts)
 
 
 # ---------------------------------------------------------------------------
-# Mode A: newest non-pinned unseen
+# Shared helpers for mode functions
 # ---------------------------------------------------------------------------
 
-def _select_mode_a(
+def _split_pinned(pool: List[dict]) -> Tuple[List[dict], List[dict]]:
+    """Split pool into (non_pinned, pinned) preserving order."""
+    non_pinned = [e for e in pool if not e.get("is_pinned")]
+    pinned = [e for e in pool if e.get("is_pinned")]
+    return non_pinned, pinned
+
+
+def _fill_from_pinned(
+    selected: List[dict], pinned: List[dict], n: int, debug: List[dict],
+) -> List[dict]:
+    """Exhaustion fallback: if non-pinned didn't fill N, add pinned entries."""
+    if len(selected) >= n or not pinned:
+        return selected
+    selected_urls = {e["url"] for e in selected}
+    for e in pinned:
+        if len(selected) >= n:
+            break
+        if e["url"] not in selected_urls:
+            e = dict(e)
+            e["_selection_reason"] = "pinned_fallback"
+            selected.append(e)
+    if any(e.get("_selection_reason") == "pinned_fallback" for e in selected):
+        debug.append({"action": "pinned_fallback_used",
+                       "count": sum(1 for e in selected if e.get("_selection_reason") == "pinned_fallback")})
+    return selected
+
+
+# ---------------------------------------------------------------------------
+# Skip OFF modes (1-4): no download filtering, select from ALL entries
+# ---------------------------------------------------------------------------
+
+def _mode_noskip_latest(
     pool: List[dict], n: int, debug: List[dict],
 ) -> List[dict]:
-    """Choose newest non-pinned entries.
-
-    Pinned entries are intentionally excluded from latest-mode output.
-    """
-    non_pinned = [e for e in pool if not e.get("is_pinned")]
-    # Sort by recency desc
+    """Mode 1 (skip=OFF, popular=OFF, random=OFF): Newest N entries."""
+    non_pinned, pinned = _split_pinned(pool)
     non_pinned.sort(key=_recency_key, reverse=True)
-
     selected = non_pinned[:n]
     for s in selected:
         s["_selection_reason"] = "latest_non_pinned"
+    selected = _fill_from_pinned(selected, pinned, n, debug)
+    debug.append({"action": "mode_noskip_latest", "selected": len(selected)})
+    return selected[:n]
 
-    if len(selected) < n:
-        debug.append({
-            "action": "mode_a_shortfall_non_pinned_only",
-            "have": len(selected),
-            "need": n,
-        })
 
+def _mode_noskip_popular(
+    pool: List[dict], n: int, debug: List[dict],
+) -> List[dict]:
+    """Mode 2 (skip=OFF, popular=ON, random=OFF): Most popular N entries."""
+    non_pinned, pinned = _split_pinned(pool)
+    non_pinned.sort(key=_popularity_key)
+    selected = non_pinned[:n]
+    for s in selected:
+        s["_selection_reason"] = "popular"
+    selected = _fill_from_pinned(selected, pinned, n, debug)
+    debug.append({"action": "mode_noskip_popular", "selected": len(selected)})
+    return selected[:n]
+
+
+def _mode_noskip_random(
+    pool: List[dict], n: int, debug: List[dict],
+) -> List[dict]:
+    """Mode 3 (skip=OFF, popular=OFF, random=ON): Random N entries."""
+    non_pinned, pinned = _split_pinned(pool)
+    pick = min(n, len(non_pinned))
+    selected = random.sample(non_pinned, pick) if pick else []
+    for s in selected:
+        s["_selection_reason"] = "random"
+    selected = _fill_from_pinned(selected, pinned, n, debug)
+    debug.append({"action": "mode_noskip_random", "selected": len(selected)})
+    return selected[:n]
+
+
+def _mode_noskip_popular_random(
+    pool: List[dict], n: int, debug: List[dict],
+) -> List[dict]:
+    """Mode 4 (skip=OFF, popular=ON, random=ON): Random wide sample, rank by popularity, top N."""
+    non_pinned, pinned = _split_pinned(pool)
+    sample_size = min(len(non_pinned), max(n * 3, 20))
+    sample = random.sample(non_pinned, sample_size) if sample_size else []
+    sample.sort(key=_popularity_key)
+    selected = sample[:n]
+    for s in selected:
+        s["_selection_reason"] = "popular_random"
+    selected = _fill_from_pinned(selected, pinned, n, debug)
+    debug.append({"action": "mode_noskip_popular_random", "sample_size": sample_size, "selected": len(selected)})
     return selected[:n]
 
 
 # ---------------------------------------------------------------------------
-# Mode B: skip + popular
+# Skip ON modes (5-8): already-downloaded removed from pool before entry
 # ---------------------------------------------------------------------------
 
-def _select_mode_b(
-    pool: List[dict], n: int, platform: str, debug: List[dict],
-) -> List[dict]:
-    """Mode B: latest non-pinned first, then fill from popularity.
-
-    TikTok/YouTube: pick latest non-pinned unseen, fill remainder from popularity.
-    Instagram/Facebook: build pool from latest 50, rank by popularity, pick top N.
-    """
-    if platform in ("instagram", "facebook"):
-        return _select_mode_b_ig_fb(pool, n, debug)
-    return _select_mode_b_tiktok_yt(pool, n, debug)
-
-
-def _select_mode_b_tiktok_yt(
+def _mode_skip_latest(
     pool: List[dict], n: int, debug: List[dict],
 ) -> List[dict]:
-    non_pinned = [e for e in pool if not e.get("is_pinned")]
-    non_pinned.sort(key=_recency_key, reverse=True)
+    """Mode 5 (skip=ON, popular=OFF, random=OFF): Hierarchical date-walk.
 
-    selected = non_pinned[:n]
-    for s in selected:
-        s["_selection_reason"] = "latest_non_pinned"
+    Groups unseen videos by date, walks newest→oldest, picks from each group.
+    Entries without dates go to a fallback group processed last.
+    Exhaustion fallback: pinned entries fill remainder.
+    """
+    non_pinned, pinned = _split_pinned(pool)
 
-    if len(selected) < n:
-        # Fill from popularity-ranked remainder
-        selected_urls = {s["url"] for s in selected}
-        remainder = [e for e in pool if e["url"] not in selected_urls]
-        remainder.sort(key=_popularity_key)
-        for e in remainder:
+    # Group by date
+    date_groups: Dict[str, List[dict]] = {}
+    for e in non_pinned:
+        date_key = (e.get("posted_at") or "")[:8] or "00000000"
+        date_groups.setdefault(date_key, []).append(e)
+
+    # Sort dates descending (newest first), no-date group last
+    sorted_dates = sorted(
+        (d for d in date_groups if d != "00000000"),
+        reverse=True,
+    )
+    if "00000000" in date_groups:
+        sorted_dates.append("00000000")
+
+    selected: List[dict] = []
+    for date_key in sorted_dates:
+        if len(selected) >= n:
+            break
+        group = date_groups[date_key]
+        # Within each date group, sort by recency (sub-day granularity if available)
+        group.sort(key=_recency_key, reverse=True)
+        for e in group:
             if len(selected) >= n:
                 break
-            e["_selection_reason"] = "popularity_fill"
+            e["_selection_reason"] = f"date_walk_{date_key}"
             selected.append(e)
-        debug.append({
-            "action": "mode_b_popularity_fill",
-            "filled": len(selected) - len([s for s in selected if s.get("_selection_reason") == "latest_non_pinned"]),
-        })
 
-    return selected[:n]
-
-
-def _select_mode_b_ig_fb(
-    pool: List[dict], n: int, debug: List[dict],
-) -> List[dict]:
-    # Build pool from latest 50 entries (sorted by recency)
-    sorted_pool = sorted(pool, key=_recency_key, reverse=True)[:50]
-
-    # Rank by popularity
-    sorted_pool.sort(key=_popularity_key)
-    selected = sorted_pool[:n]
-    for s in selected:
-        s["_selection_reason"] = "ig_fb_popularity_top"
-
+    selected = _fill_from_pinned(selected, pinned, n, debug)
     debug.append({
-        "action": "mode_b_ig_fb",
-        "pool_size": len(sorted_pool),
+        "action": "mode_skip_latest",
+        "date_groups": len(date_groups),
         "selected": len(selected),
     })
     return selected[:n]
 
 
-# ---------------------------------------------------------------------------
-# Mode C: skip + popular + random
-# ---------------------------------------------------------------------------
-
-def _select_mode_c(
-    pool: List[dict], n: int, platform: str, debug: List[dict],
+def _mode_skip_popular(
+    pool: List[dict], n: int, debug: List[dict],
 ) -> List[dict]:
-    """Mode C: latest non-pinned first, then random sample from broad pool,
-    popularity-rank the sample, return top N.
-    """
-    # 1. Start with latest non-pinned unseen
-    non_pinned = [e for e in pool if not e.get("is_pinned")]
-    non_pinned.sort(key=_recency_key, reverse=True)
-    latest_picks = non_pinned[:max(1, n // 2)]
-    for s in latest_picks:
-        s["_selection_reason"] = "latest_anchor"
+    """Mode 6 (skip=ON, popular=ON, random=OFF): Most popular N from unseen."""
+    non_pinned, pinned = _split_pinned(pool)
+    non_pinned.sort(key=_popularity_key)
+    selected = non_pinned[:n]
+    for s in selected:
+        s["_selection_reason"] = "popular_unseen"
+    selected = _fill_from_pinned(selected, pinned, n, debug)
+    debug.append({"action": "mode_skip_popular", "selected": len(selected)})
+    return selected[:n]
 
-    # 2. Build broad pool (latest 100, pinned allowed)
-    broad = sorted(pool, key=_recency_key, reverse=True)[:100]
-    already_selected = {e["url"] for e in latest_picks}
-    remaining = [e for e in broad if e["url"] not in already_selected]
 
-    # 3. Random sample from remaining
-    sample_size = min(len(remaining), max(n * 3, 20))
-    sample = random.sample(remaining, min(sample_size, len(remaining)))
+def _mode_skip_random(
+    pool: List[dict], n: int, debug: List[dict],
+) -> List[dict]:
+    """Mode 7 (skip=ON, popular=OFF, random=ON): Random N from unseen."""
+    non_pinned, pinned = _split_pinned(pool)
+    pick = min(n, len(non_pinned))
+    selected = random.sample(non_pinned, pick) if pick else []
+    for s in selected:
+        s["_selection_reason"] = "random_unseen"
+    selected = _fill_from_pinned(selected, pinned, n, debug)
+    debug.append({"action": "mode_skip_random", "selected": len(selected)})
+    return selected[:n]
 
-    # 4. Popularity-rank the sample
+
+def _mode_skip_popular_random(
+    pool: List[dict], n: int, debug: List[dict],
+) -> List[dict]:
+    """Mode 8 (skip=ON, popular=ON, random=ON): Random sample from unseen, rank by popularity, top N."""
+    non_pinned, pinned = _split_pinned(pool)
+    sample_size = min(len(non_pinned), max(n * 3, 20))
+    sample = random.sample(non_pinned, sample_size) if sample_size else []
     sample.sort(key=_popularity_key)
-    needed = n - len(latest_picks)
-    fill = sample[:needed]
-    for s in fill:
-        s["_selection_reason"] = "random_popularity"
-
-    selected = latest_picks + fill
-    debug.append({
-        "action": "mode_c",
-        "latest_anchor": len(latest_picks),
-        "random_fill": len(fill),
-        "broad_pool": len(broad),
-    })
+    selected = sample[:n]
+    for s in selected:
+        s["_selection_reason"] = "popular_random_unseen"
+    selected = _fill_from_pinned(selected, pinned, n, debug)
+    debug.append({"action": "mode_skip_popular_random", "sample_size": sample_size, "selected": len(selected)})
     return selected[:n]

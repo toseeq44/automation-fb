@@ -31,6 +31,7 @@ _WATERMARK_LOGO_DEFAULTS = {
     "path": "",                   # empty = auto-detect logo.* in creator folder
     "position": "TopLeft",
     "opacity": 80,
+    "size": 15,                   # % of video width (scale)
 }
 
 _DEFAULTS = {
@@ -45,6 +46,7 @@ _DEFAULTS = {
     "randomize_links": False,
     "keep_original_after_edit": True,
     "delete_before_download": False,
+    "yt_content_type": "all",         # "all" | "shorts" | "long"  (YouTube only)
     "uploading_target": 0,
     "watermark_enabled": False,
     "watermark_text": _WATERMARK_TEXT_DEFAULTS.copy(),
@@ -392,6 +394,11 @@ class CreatorConfig:
     @property
     def delete_before_download(self) -> bool:
         return bool(self.data.get("delete_before_download", False))
+
+    @property
+    def yt_content_type(self) -> str:
+        val = self.data.get("yt_content_type", "all")
+        return val if val in ("all", "shorts", "long") else "all"
 
     @property
     def uploading_target(self) -> int:

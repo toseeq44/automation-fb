@@ -172,6 +172,7 @@ class OneGoStartDialog(QDialog):
 
     def _prefill(self):
         saved = _load_ix_prefill()
+        self._original = dict(saved)  # track originals for dirty-check
         if saved.get("api_url"):
             self.api_url_input.setText(saved["api_url"])
         if saved.get("email"):
@@ -190,15 +191,33 @@ class OneGoStartDialog(QDialog):
         if not api_url:
             api_url = "http://127.0.0.1:53200"
 
-        # Persist credentials
-        _save_ix_credentials(api_url, email, password, profile_hint)
+        # Only persist if user actually changed a field
+        orig = getattr(self, "_original", {})
+        orig_api = orig.get("api_url") or "http://127.0.0.1:53200"
+        orig_email = orig.get("email") or ""
+        orig_pw = orig.get("password") or ""
+        orig_hint = orig.get("profile_hint") or ""
+
+        changed = (
+            api_url != orig_api
+            or email != orig_email
+            or password != orig_pw
+            or profile_hint != orig_hint
+        )
+        if changed:
+            # If password blank/unchanged, keep the stored password
+            save_pw = password if password and password != orig_pw else orig_pw
+            _save_ix_credentials(api_url, email, save_pw, profile_hint)
+
+        # Pass effective password to workflow (typed or stored)
+        effective_pw = password if password else orig_pw
 
         mode = self.mode_cb.currentData()
         self._result_data = {
             "mode": mode,
             "api_url": api_url,
             "email": email,
-            "password": password,
+            "password": effective_pw,
             "profile_hint": profile_hint,
         }
         self.accept()

@@ -175,6 +175,7 @@ class IXBrowserApproach(BaseApproach):
         self._network_monitor = NetworkMonitor(check_interval=10)
         self._folder_queue: Optional[FolderQueueManager] = None
         self._profile_manager: Optional[ProfileManager] = None
+        self._last_profile_launch_success: bool = False
 
         logger.info("[IXApproach] ✓ Phase 2 robustness components initialized")
 
@@ -425,8 +426,10 @@ class IXBrowserApproach(BaseApproach):
 
                 total_successful_uploads += profile_upload_count
 
-                # Detect consecutive launch failures (kernel error, selenium missing, etc.)
-                if profile_upload_count == 0:
+                # Detect consecutive launch failures (kernel error, selenium missing, API issues).
+                # Do NOT treat "0 uploads" as a launch failure because profiles can legitimately
+                # have no data/bookmarks to upload.
+                if not self._last_profile_launch_success:
                     consecutive_launch_failures += 1
                     if consecutive_launch_failures >= MAX_CONSECUTIVE_FAILURES:
                         logger.error("[IXApproach] ═══════════════════════════════════════════")
@@ -439,7 +442,7 @@ class IXBrowserApproach(BaseApproach):
                         logger.error("[IXApproach] ═══════════════════════════════════════════")
                         break
                 else:
-                    consecutive_launch_failures = 0  # Reset on success
+                    consecutive_launch_failures = 0  # Reset when launch was healthy
 
                 # Check if limit reached after this profile
                 post_profile_limit = self._state_manager.check_daily_limit(
@@ -545,6 +548,12 @@ class IXBrowserApproach(BaseApproach):
             Number of successful uploads for this profile
         """
         upload_count = 0
+        self._last_profile_launch_success = False
+
+        # Defaults to avoid unbound variables when folder checks fail/skip early.
+        facebook_bookmarks = []
+        matched = []
+        profile_name_clean = profile_name.strip()
 
         try:
             # Create browser launcher
@@ -568,6 +577,7 @@ class IXBrowserApproach(BaseApproach):
                 return 0
 
             logger.info("[IXApproach] ✓ Profile opened and Selenium attached!")
+            self._last_profile_launch_success = True
 
             # IMPORTANT: Bring browser window to FRONT (always visible) - OS-LEVEL
             bring_browser_to_front(driver)

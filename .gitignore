@@ -37,3 +37,7 @@ api_config.json
 # License data (don't commit user licenses)
 modules/license/.license
 nul
+
+# Test temp files
+.test_tmp2/
+zzztest/

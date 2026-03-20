@@ -1,8 +1,8 @@
 # Development Configuration
-# Set to True during development to skip license checks
-# Set to False for production
+# Note: production runtime enforces license checks in main.py.
+# Keep DEV_MODE False to avoid accidental local bypass assumptions.
 
-DEV_MODE = False  # Change to True only for local debugging
+DEV_MODE = False
 
 # Development settings
 DEV_CONFIG = {

@@ -1298,9 +1298,24 @@ class MetadataBulkProcessingDialog(QDialog):
             )
 
         if reply == QMessageBox.Yes:
-            # Create destination folders if needed
-            self.mapping_manager.create_destination_folders(self.current_mapping)
+            # Show Stealth Mode Selector
+            from modules.metadata_remover.metadata_stealth_mode_dialog import MetadataStealthModeDialog
 
-            # Emit signal and close
-            self.start_processing.emit(config)
-            self.accept()
+            stealth_dialog = MetadataStealthModeDialog(config['total_count'], self)
+            if stealth_dialog.exec_() == QDialog.Accepted:
+                selected_mode = stealth_dialog.get_selected_mode()
+                logger.info(f"User selected stealth mode: {selected_mode.value}")
+
+                # Add stealth mode to config
+                config['stealth_mode'] = selected_mode.value
+
+                # Create destination folders if needed
+                self.mapping_manager.create_destination_folders(self.current_mapping)
+
+                # Emit signal and close
+                self.start_processing.emit(config)
+                self.accept()
+            else:
+                logger.info("User cancelled stealth mode selection")
+                # User cancelled, stay on current dialog
+                return

@@ -210,6 +210,18 @@ class PlatformPresets:
         description="Facebook News Feed"
     )
 
+    FACEBOOK_REELS = VideoSpec(
+        name="Facebook Reels",
+        platform="Facebook",
+        aspect_ratio="9:16",
+        width=1080,
+        height=1920,
+        max_duration=90,
+        fps=30,
+        bitrate='5000k',
+        description="Facebook Reels (vertical)"
+    )
+
     FACEBOOK_STORY = VideoSpec(
         name="Facebook Story",
         platform="Facebook",
@@ -495,6 +507,7 @@ class PresetApplicator:
             },
             'facebook': {
                 'feed': PlatformPresets.FACEBOOK_FEED,
+                'reels': PlatformPresets.FACEBOOK_REELS,
                 'story': PlatformPresets.FACEBOOK_STORY,
                 'square': PlatformPresets.FACEBOOK_SQUARE,
                 'standard': PlatformPresets.FACEBOOK_FEED
@@ -553,7 +566,7 @@ def convert_for_all_platforms(input_video: str, output_dir: str,
     from modules.video_editor.core import VideoEditor
 
     if platforms is None:
-        platforms = ['tiktok', 'instagram_reels', 'youtube_shorts', 'facebook']
+        platforms = ['tiktok', 'instagram_reels', 'youtube_shorts', 'facebook_reels']
 
     os.makedirs(output_dir, exist_ok=True)
 

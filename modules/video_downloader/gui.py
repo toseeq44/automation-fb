@@ -3,7 +3,7 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTextEdit, QPushButton,
     QProgressBar, QComboBox, QCheckBox, QFileDialog, QMessageBox,
     QListWidget, QGroupBox, QLineEdit, QMenu, QListWidgetItem, QDialog,
-    QDialogButtonBox, QSpinBox
+    QDialogButtonBox, QSpinBox, QScrollArea
 )
 from PyQt5.QtGui import QClipboard, QDragEnterEvent, QDropEvent
 from PyQt5.QtCore import Qt, QUrl
@@ -29,16 +29,53 @@ class VideoDownloaderPage(QWidget):
         self.init_ui()
 
     def init_ui(self):
+        # Main layout for the widget
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        # Scrollable area
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QScrollArea.NoFrame)
+
+        # Content widget inside scroll area
+        content_widget = QWidget()
         layout = QVBoxLayout()
         layout.setAlignment(Qt.AlignTop)
         layout.setSpacing(15)
         layout.setContentsMargins(15, 15, 15, 15)
+        content_widget.setLayout(layout)
 
         self.setStyleSheet("""
             QWidget {
                 background-color: #23272A;
                 color: #F5F6F5;
                 font-family: Arial, sans-serif;
+            }
+            QScrollArea {
+                border: none;
+                background-color: #23272A;
+            }
+            QScrollBar:vertical {
+                background-color: #2C2F33;
+                width: 12px;
+                border-radius: 6px;
+                margin: 2px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #4B5057;
+                border-radius: 6px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #1ABC9C;
+            }
+            QScrollBar::handle:vertical:pressed {
+                background-color: #16A085;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
             }
         """)
 
@@ -60,7 +97,8 @@ class VideoDownloaderPage(QWidget):
             }
             QTextEdit:focus { border: 2px solid #1ABC9C; }
         """)
-        self.url_input.setMinimumHeight(100)
+        self.url_input.setMinimumHeight(80)
+        self.url_input.setMaximumHeight(120)
         layout.addWidget(self.url_input)
 
         # Separator
@@ -94,7 +132,8 @@ class VideoDownloaderPage(QWidget):
             }
             QTextEdit:focus { border: 2px solid #E67E22; }
         """)
-        self.link_text.setMinimumHeight(120)
+        self.link_text.setMinimumHeight(100)
+        self.link_text.setMaximumHeight(150)
         layout.addWidget(self.link_text)
 
         settings_group = QGroupBox("Download Settings")
@@ -299,15 +338,39 @@ class VideoDownloaderPage(QWidget):
         info_layout.addStretch()
         layout.addLayout(info_layout)
 
+        # Output console controls (Maximize button)
+        console_controls = QHBoxLayout()
+        console_label = QLabel("📋 Download Console:")
+        console_label.setStyleSheet("color: #1ABC9C; font-size: 14px; font-weight: bold;")
+        console_controls.addWidget(console_label)
+        console_controls.addStretch()
+
+        maximize_btn = QPushButton("🔍 Maximize Output")
+        maximize_btn.setStyleSheet("""
+            QPushButton { background-color: #3498DB; color: #F5F6F5; border: none;
+                         padding: 6px 12px; border-radius: 4px; font-size: 12px; font-weight: bold; }
+            QPushButton:hover { background-color: #2980B9; }
+            QPushButton:pressed { background-color: #1F618D; }
+        """)
+        maximize_btn.clicked.connect(self.show_maximized_output)
+        console_controls.addWidget(maximize_btn)
+
+        layout.addLayout(console_controls)
+
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setStyleSheet("""
             QTextEdit { background-color: #2C2F33; color: #F5F6F5; border: 2px solid #4B5057;
                         border-radius: 8px; padding: 10px; font-size: 14px; }
         """)
+        self.log_text.setMinimumHeight(150)
         layout.addWidget(self.log_text)
 
-        self.setLayout(layout)
+        # Set scroll area content and add to main layout
+        scroll_area.setWidget(content_widget)
+        main_layout.addWidget(scroll_area)
+
+        self.setLayout(main_layout)
 
         self.back_btn.clicked.connect(self.back_callback if self.back_callback else lambda: None)
         self.start_btn.clicked.connect(self.start_download)
@@ -712,7 +775,8 @@ class VideoDownloaderPage(QWidget):
 
         self.start_btn.setEnabled(False)
         self.cancel_btn.setVisible(True)
-        self.progress_bar.setValue(0)
+        self._first_percent_received = False
+        self.progress_bar.setRange(0, 0)  # indeterminate mode
         self.speed_label.setVisible(True)
         self.eta_label.setVisible(True)
 
@@ -741,7 +805,7 @@ class VideoDownloaderPage(QWidget):
             bulk_mode_data=self.bulk_mode_data
         )
         self.downloader_thread.progress.connect(self.log_message)
-        self.downloader_thread.progress_percent.connect(self.progress_bar.setValue)
+        self.downloader_thread.progress_percent.connect(self._on_progress_percent)
         self.downloader_thread.download_speed.connect(lambda s: self.speed_label.setText(f"Speed: {s}"))
         self.downloader_thread.eta.connect(lambda e: self.eta_label.setText(f"ETA: {e}"))
         self.downloader_thread.video_complete.connect(lambda f: self.log_message(f"✅ Saved: {f}"))
@@ -753,7 +817,21 @@ class VideoDownloaderPage(QWidget):
             self.downloader_thread.cancel()
             self.log_message("⚠️ Cancelling download...")
 
+    def _on_progress_percent(self, val):
+        if not self._first_percent_received:
+            self._first_percent_received = True
+            self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(val)
+
     def log_message(self, message):
+        try:
+            from modules.shared.progress_filter import filter_for_gui
+            filtered = filter_for_gui(message)
+            if filtered is None:
+                return
+            message = filtered
+        except ImportError:
+            pass
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.log_text.append(f"[{timestamp}] {message}")
         self.log_text.ensureCursorVisible()
@@ -765,6 +843,9 @@ class VideoDownloaderPage(QWidget):
         self.cancel_btn.setVisible(False)
         self.speed_label.setVisible(False)
         self.eta_label.setVisible(False)
+        # Switch to determinate mode before setting final value
+        if not self._first_percent_received:
+            self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(100 if success else 0)
 
         folder = self.path_input.text().strip()
@@ -893,4 +974,99 @@ class VideoDownloaderPage(QWidget):
                 "Error",
                 f"Failed to move videos:\n{str(e)}"
             )
-            self.log_message(f"❌ Error moving videos: {str(e)}")
+
+    def show_maximized_output(self):
+        """Show download console in maximized window with close button"""
+        # Create maximized dialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle("📋 Download Console - Full Output")
+        dialog.setWindowFlags(Qt.Window | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint)
+
+        # Set dialog size to 90% of screen
+        from PyQt5.QtWidgets import QApplication
+        screen = QApplication.desktop().screenGeometry()
+        dialog.resize(int(screen.width() * 0.9), int(screen.height() * 0.9))
+
+        # Center dialog on screen
+        dialog.move((screen.width() - dialog.width()) // 2,
+                    (screen.height() - dialog.height()) // 2)
+
+        # Dark theme
+        dialog.setStyleSheet("""
+            QDialog {
+                background-color: #23272A;
+                color: #F5F6F5;
+            }
+        """)
+
+        # Layout
+        layout = QVBoxLayout()
+        layout.setContentsMargins(15, 15, 15, 15)
+        layout.setSpacing(10)
+
+        # Title
+        title = QLabel("📋 Download Console Output")
+        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #1ABC9C; margin-bottom: 10px;")
+        layout.addWidget(title)
+
+        # Full output text
+        output_text = QTextEdit()
+        output_text.setReadOnly(True)
+        output_text.setPlainText(self.log_text.toPlainText())  # Copy current log
+        output_text.setStyleSheet("""
+            QTextEdit {
+                background-color: #2C2F33;
+                color: #F5F6F5;
+                border: 2px solid #4B5057;
+                border-radius: 8px;
+                padding: 15px;
+                font-size: 14px;
+                font-family: 'Consolas', 'Courier New', monospace;
+            }
+        """)
+        layout.addWidget(output_text)
+
+        # Button bar
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+
+        # Copy All button
+        copy_btn = QPushButton("📋 Copy All")
+        copy_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3498DB;
+                color: #F5F6F5;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 6px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #2980B9; }
+            QPushButton:pressed { background-color: #1F618D; }
+        """)
+        copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(output_text.toPlainText()))
+        button_layout.addWidget(copy_btn)
+
+        # Close button
+        close_btn = QPushButton("✖️ Close")
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #E74C3C;
+                color: #F5F6F5;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 6px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #C0392B; }
+            QPushButton:pressed { background-color: #A93226; }
+        """)
+        close_btn.clicked.connect(dialog.close)
+        button_layout.addWidget(close_btn)
+
+        layout.addLayout(button_layout)
+
+        dialog.setLayout(layout)
+        dialog.exec_()  # Show as modal dialog

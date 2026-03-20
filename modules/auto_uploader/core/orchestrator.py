@@ -32,6 +32,8 @@ BROWSER_ALIASES = {
     "ixbrowser": "ix",
     "incogniton": "ix",
     "incognitonbrowser": "ix",
+    "nstbrowser": "nstbrowser",
+    "nst": "nstbrowser",
     "chrome": "chrome",
 }
 
@@ -77,8 +79,11 @@ class UploadOrchestrator:
             return False
 
         # Step 2: Build work items
-        if automation_mode == "ix":
-            logging.info("Step 3/5: Preparing ixBrowser workspace at %s...", paths.ix_data_root)
+        if automation_mode in ("ix", "nstbrowser"):
+            if automation_mode == "ix":
+                logging.info("Step 3/5: Preparing ixBrowser workspace at %s...", paths.ix_data_root)
+            else:
+                logging.info("Step 3/5: Preparing NSTbrowser workspace...")
         else:
             logging.info("Step 3/5: Scanning shortcuts folder for accounts...")
             logging.info("→ Scanning: %s", paths.shortcuts_root)
@@ -91,6 +96,9 @@ class UploadOrchestrator:
             if automation_mode == "ix":
                 logging.error("Reason: IX approach is missing credentials.")
                 logging.error("Open the Approaches dialog and provide the IX email/password.")
+            elif automation_mode == "nstbrowser":
+                logging.error("Reason: NSTbrowser approach is missing credentials.")
+                logging.error("Open the Approaches dialog and provide the NSTbrowser API key/email/password.")
             else:
                 logging.error("Reason: No folders with login_data.txt found in shortcuts folder")
                 logging.error("Location checked: %s", paths.shortcuts_root)
@@ -257,6 +265,8 @@ class UploadOrchestrator:
         """Scan shortcut folders and prepare account work items."""
         if automation_mode == "ix":
             return self._build_ix_work_items(paths)
+        elif automation_mode == "nstbrowser":
+            return self._build_nstbrowser_work_items(paths)
 
         work_items: List[AccountWorkItem] = []
 
@@ -391,6 +401,75 @@ class UploadOrchestrator:
                     "shortcuts_root": str(paths.shortcuts_root),
                 },
                 automation_mode="ix",
+                metadata=metadata,
+            )
+        ]
+
+    def _build_nstbrowser_work_items(self, paths: AutomationPaths) -> List[AccountWorkItem]:
+        """Prepare NSTbrowser-specific work items (no legacy login_data parsing)."""
+        nst_creds = self.settings.get_credentials("nstbrowser") or {}
+        secure = self.credentials.load_credentials("approach:nstbrowser") or {}
+
+        # Get credentials
+        api_key = nst_creds.get("api_key", "").strip()
+        email = (nst_creds.get("email") or secure.get("email") or "").strip()
+        password = secure.get("password") or nst_creds.get("password", "")
+
+        # Check required credentials
+        if not api_key:
+            logging.error("NSTbrowser approach requires an API key configured in the Approaches dialog.")
+            return []
+
+        if not email:
+            logging.error("NSTbrowser approach requires an email configured in the Approaches dialog.")
+            return []
+
+        # Use email as account identifier
+        account_label = self._slugify_account_name(email)
+        account_root = paths.ix_data_root / f"nstbrowser_{account_label}"
+        creators_root = account_root / "creators"
+        shortcuts_root = account_root / "shortcuts"
+        creators_root.mkdir(parents=True, exist_ok=True)
+        shortcuts_root.mkdir(parents=True, exist_ok=True)
+
+        login_entries = (
+            CreatorLogin(
+                profile_name=email,
+                email=email,
+                password=password or "",
+            ),
+        )
+
+        metadata = {
+            "nstbrowser_account_root": account_root,
+            "api_key": api_key,
+            "login_metadata": {
+                "email": email,
+                "api_key": api_key[:8] + "..." if len(api_key) > 8 else api_key,
+            },
+        }
+
+        logging.info(
+            "NSTbrowser approach configured for account '%s' (workspace: %s)",
+            email,
+            account_root,
+        )
+
+        return [
+            AccountWorkItem(
+                account_name=email,
+                browser_type="nstbrowser",
+                login_entries=login_entries,
+                login_data_path=account_root / "nstbrowser_account.json",
+                creators_root=creators_root,
+                shortcuts_root=shortcuts_root,
+                browser_config={
+                    "nstbrowser_account_root": str(account_root),
+                    "browser_name": "nstbrowser",
+                    "api_key": api_key,
+                    "shortcuts_root": str(paths.shortcuts_root),
+                },
+                automation_mode="nstbrowser",
                 metadata=metadata,
             )
         ]

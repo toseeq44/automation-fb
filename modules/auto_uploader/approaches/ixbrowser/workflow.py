@@ -175,6 +175,7 @@ class IXBrowserApproach(BaseApproach):
         self._network_monitor = NetworkMonitor(check_interval=10)
         self._folder_queue: Optional[FolderQueueManager] = None
         self._profile_manager: Optional[ProfileManager] = None
+        self._last_profile_launch_success: bool = False
 
         logger.info("[IXApproach] ✓ Phase 2 robustness components initialized")
 
@@ -362,6 +363,8 @@ class IXBrowserApproach(BaseApproach):
 
         total_successful_uploads = 0
         profile_results = []
+        consecutive_launch_failures = 0
+        MAX_CONSECUTIVE_FAILURES = 3  # Stop after 3 consecutive profile launch failures
 
         try:
             # Loop through all profiles
@@ -422,6 +425,24 @@ class IXBrowserApproach(BaseApproach):
                 })
 
                 total_successful_uploads += profile_upload_count
+
+                # Detect consecutive launch failures (kernel error, selenium missing, API issues).
+                # Do NOT treat "0 uploads" as a launch failure because profiles can legitimately
+                # have no data/bookmarks to upload.
+                if not self._last_profile_launch_success:
+                    consecutive_launch_failures += 1
+                    if consecutive_launch_failures >= MAX_CONSECUTIVE_FAILURES:
+                        logger.error("[IXApproach] ═══════════════════════════════════════════")
+                        logger.error("[IXApproach] STOPPING: %d consecutive profile failures!", MAX_CONSECUTIVE_FAILURES)
+                        logger.error("[IXApproach] This indicates a systemic issue:")
+                        logger.error("[IXApproach]   - ixBrowser kernel may be corrupted (repair in ixBrowser settings)")
+                        logger.error("[IXApproach]   - Selenium may not be installed")
+                        logger.error("[IXApproach]   - ixBrowser API may be unreachable")
+                        logger.error("[IXApproach] Fix the issue and restart automation.")
+                        logger.error("[IXApproach] ═══════════════════════════════════════════")
+                        break
+                else:
+                    consecutive_launch_failures = 0  # Reset when launch was healthy
 
                 # Check if limit reached after this profile
                 post_profile_limit = self._state_manager.check_daily_limit(
@@ -527,6 +548,12 @@ class IXBrowserApproach(BaseApproach):
             Number of successful uploads for this profile
         """
         upload_count = 0
+        self._last_profile_launch_success = False
+
+        # Defaults to avoid unbound variables when folder checks fail/skip early.
+        facebook_bookmarks = []
+        matched = []
+        profile_name_clean = profile_name.strip()
 
         try:
             # Create browser launcher
@@ -550,6 +577,7 @@ class IXBrowserApproach(BaseApproach):
                 return 0
 
             logger.info("[IXApproach] ✓ Profile opened and Selenium attached!")
+            self._last_profile_launch_success = True
 
             # IMPORTANT: Bring browser window to FRONT (always visible) - OS-LEVEL
             bring_browser_to_front(driver)
@@ -598,10 +626,18 @@ class IXBrowserApproach(BaseApproach):
             logger.info("[IXApproach] ═══════════════════════════════════════════")
 
             try:
+                # CRITICAL: Strip whitespace from profile name to avoid path issues
+                # Windows paths don't work with trailing spaces
+                profile_name_clean = profile_name.strip()
+                if profile_name != profile_name_clean:
+                    logger.warning("[IXApproach] ⚠ Profile name has trailing spaces - auto-cleaned")
+                    logger.warning("[IXApproach]   Original: '%s'", profile_name)
+                    logger.warning("[IXApproach]   Cleaned:  '%s'", profile_name_clean)
+
                 # 1. Get Desktop path
                 desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
                 creators_base = os.path.join(desktop_path, "creators data")
-                profile_folder = os.path.join(creators_base, profile_name)
+                profile_folder = os.path.join(creators_base, profile_name_clean)
 
                 logger.info("[IXApproach] Checking folders...")
                 logger.info("[IXApproach]   Desktop: %s", desktop_path)
@@ -619,9 +655,9 @@ class IXBrowserApproach(BaseApproach):
                     logger.warning("[IXApproach] ═══════════════════════════════════════════")
                     logger.warning("[IXApproach] Profile Folder Not Found - SKIPPING")
                     logger.warning("[IXApproach] ═══════════════════════════════════════════")
-                    logger.warning("[IXApproach] Profile: %s", profile_name)
+                    logger.warning("[IXApproach] Profile: %s", profile_name_clean)
                     logger.warning("[IXApproach] Expected path: %s", profile_folder)
-                    logger.warning("[IXApproach] Please create: Desktop/creators data/%s/", profile_name)
+                    logger.warning("[IXApproach] Please create: Desktop/creators data/%s/", profile_name_clean)
                     logger.warning("[IXApproach] Skipping to next profile...")
                     logger.warning("[IXApproach] ═══════════════════════════════════════════")
 
@@ -696,7 +732,7 @@ class IXBrowserApproach(BaseApproach):
                     logger.info("[IXApproach] ═══════════════════════════════════════════")
                     logger.info("[IXApproach] Bookmark-Folder Comparison Result")
                     logger.info("[IXApproach] ═══════════════════════════════════════════")
-                    logger.info("[IXApproach] Profile: %s", profile_name)
+                    logger.info("[IXApproach] Profile: %s", profile_name_clean)
                     logger.info("[IXApproach] Creator Folder: %s", profile_folder)
                     logger.info("[IXApproach] ")
                     logger.info("[IXApproach] Total bookmarks: %d", len(all_bookmarks))
@@ -756,7 +792,13 @@ class IXBrowserApproach(BaseApproach):
                     logger.info("[IXApproach] Folder Detection")
                     logger.info("[IXApproach] ═══════════════════════════════════════════")
                     logger.info("[IXApproach] Total creator folders detected: %d", total_folders)
-                    logger.info("[IXApproach] Upload mode: UNLIMITED")
+                    if user_type.lower() == "pro":
+                        logger.info("[IXApproach] Upload mode: UNLIMITED (Pro user)")
+                    else:
+                        logger.info(
+                            "[IXApproach] Upload mode: LIMITED (basic, %d bookmarks/day)",
+                            daily_limit,
+                        )
                     logger.info("[IXApproach] Bot will process all videos in all folders")
                     logger.info("[IXApproach] Resume functionality: ENABLED")
                     logger.info("[IXApproach] ═══════════════════════════════════════════")
@@ -857,26 +899,32 @@ class IXBrowserApproach(BaseApproach):
 
                             folder_name = os.path.basename(current_folder)
 
-                            # Check if this folder has a matching bookmark
+                            # Match bookmarks for video and image workflows (case-insensitive)
                             matching_bookmark = None
+                            image_bookmark = None
+                            folder_name_normalized = folder_name.strip().lower()
+                            image_bookmark_normalized = f"{folder_name_normalized}_imag"
+
                             for bookmark in facebook_bookmarks:
-                                if bookmark['title'] == folder_name:
+                                bookmark_title_normalized = bookmark['title'].strip().lower()
+                                if matching_bookmark is None and bookmark_title_normalized == folder_name_normalized:
                                     matching_bookmark = bookmark
+                                    logger.info("[IXApproach] MATCHED: Folder '%s' -> Bookmark '%s'", folder_name, bookmark['title'])
+                                if image_bookmark is None and bookmark_title_normalized == image_bookmark_normalized:
+                                    image_bookmark = bookmark
+                                    logger.info("[IXApproach] MATCHED: Folder '%s' -> Image Bookmark '%s'", folder_name, bookmark['title'])
+                                if matching_bookmark and image_bookmark:
                                     break
 
-                            if not matching_bookmark:
-                                logger.info("[IXApproach] Folder '%s' has no bookmark, skipping", folder_name)
-                                self._folder_queue.move_to_next_folder()
-                                continue
-
-                            # Get videos in folder (excludes 'uploaded videos' subfolder)
+                            # Get media in folder
                             videos = self._folder_queue.get_videos_in_folder(current_folder)
+                            images = self._folder_queue.get_images_in_folder(current_folder)
 
-                            if not videos:
-                                logger.info("[IXApproach] ───────────────────────────────────────────────")
+                            if not videos and not images:
+                                logger.info("[IXApproach] ----------------------------------------")
                                 logger.info("[IXApproach] Folder: %s", folder_name)
-                                logger.info("[IXApproach] Status: No videos remaining (all uploaded or empty)")
-                                logger.info("[IXApproach] ───────────────────────────────────────────────")
+                                logger.info("[IXApproach] Status: No media remaining (all uploaded or empty)")
+                                logger.info("[IXApproach] ----------------------------------------")
 
                                 # Mark folder complete and move to next
                                 self._folder_queue.mark_current_folder_complete()
@@ -885,21 +933,60 @@ class IXBrowserApproach(BaseApproach):
                                 # Track empty folders
                                 folders_checked_in_cycle += 1
 
-                                # Check if we've gone through ALL folders without finding videos
+                                # Check if we've gone through ALL folders without finding media
                                 if folders_checked_in_cycle >= total_folders:
-                                    logger.info("[IXApproach] ═══════════════════════════════════════════")
-                                    logger.info("[IXApproach] Profile Complete - No Videos Found")
-                                    logger.info("[IXApproach] ═══════════════════════════════════════════")
+                                    logger.info("[IXApproach] ----------------------------------------")
+                                    logger.info("[IXApproach] Profile Complete - No Media Found")
+                                    logger.info("[IXApproach] ----------------------------------------")
                                     logger.info("[IXApproach] Checked all %d folders", total_folders)
-                                    logger.info("[IXApproach] No videos remaining in any folder")
+                                    logger.info("[IXApproach] No media remaining in any folder")
                                     logger.info("[IXApproach] This profile is complete!")
-                                    logger.info("[IXApproach] ═══════════════════════════════════════════")
+                                    logger.info("[IXApproach] ----------------------------------------")
                                     break  # Exit upload loop - profile complete
 
                                 continue
 
-                            # Reset counter - we found videos!
+                            # Reset counter - we found media!
                             folders_checked_in_cycle = 0
+
+                            # Process images first if present
+                            if images:
+                                if not image_bookmark:
+                                    logger.warning("[IXApproach] SKIPPED: Folder '%s' - No matching image bookmark found", folder_name)
+                                    logger.debug("Available bookmarks: %s", [b['title'] for b in facebook_bookmarks[:5]])
+                                    self._folder_queue.move_to_next_folder()
+                                    continue
+
+                                logger.info("[IXApproach] Starting image uploads for: %s", folder_name)
+                                images_ok = upload_helper.upload_images_for_folder(image_bookmark, current_folder)
+                                if not images_ok:
+                                    logger.warning("[IXApproach] Image upload failed, skipping folder for now")
+                                    self._folder_queue.move_to_next_folder()
+                                    continue
+
+                                images = self._folder_queue.get_images_in_folder(current_folder)
+                                if images:
+                                    logger.warning("[IXApproach] Images still remain after processing, skipping videos")
+                                    self._folder_queue.move_to_next_folder()
+                                    continue
+
+                            # Refresh videos after image processing
+                            videos = self._folder_queue.get_videos_in_folder(current_folder)
+                            if not videos:
+                                logger.info("[IXApproach] ----------------------------------------")
+                                logger.info("[IXApproach] Folder: %s", folder_name)
+                                logger.info("[IXApproach] Status: No videos remaining after images")
+                                logger.info("[IXApproach] ----------------------------------------")
+
+                                self._folder_queue.mark_current_folder_complete()
+                                self._folder_queue.move_to_next_folder()
+                                continue
+
+                            if not matching_bookmark:
+                                logger.warning("[IXApproach] SKIPPED: Folder '%s' - No matching video bookmark found", folder_name)
+                                logger.debug("Available bookmarks: %s", [b['title'] for b in facebook_bookmarks[:5]])
+                                self._folder_queue.move_to_next_folder()
+                                continue
 
                             # Check daily limit BEFORE uploading (for basic users)
                             if user_type.lower() == 'basic':
@@ -978,7 +1065,7 @@ class IXBrowserApproach(BaseApproach):
 
                         # Display upload summary for this profile
                         logger.info("[IXApproach] ═══════════════════════════════════════════")
-                        logger.info("[IXApproach] Profile Upload Summary: %s", profile_name)
+                        logger.info("[IXApproach] Profile Upload Summary: %s", profile_name_clean)
                         logger.info("[IXApproach] ═══════════════════════════════════════════")
                         logger.info("[IXApproach] Total uploads attempted: %d", len(upload_results))
                         logger.info("[IXApproach] Successful: %d", successful)
@@ -1004,7 +1091,7 @@ class IXBrowserApproach(BaseApproach):
         finally:
             # IMPORTANT: Close profile after processing
             logger.info("[IXApproach] ═══════════════════════════════════════════")
-            logger.info("[IXApproach] Closing Profile: %s", profile_name)
+            logger.info("[IXApproach] Closing Profile: %s", profile_name_clean if 'profile_name_clean' in locals() else profile_name)
             logger.info("[IXApproach] ═══════════════════════════════════════════")
 
             try:

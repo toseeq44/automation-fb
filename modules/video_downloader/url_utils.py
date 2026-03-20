@@ -68,12 +68,12 @@ def quality_to_format(quality: Optional[str]) -> Optional[str]:
     if not quality:
         return None
     lookup = {
-        "mobile": "bestvideo[height<=480][ext=mp4]+bestaudio/best[height<=480]",
-        "low": "bestvideo[height<=480][ext=mp4]+bestaudio/best[height<=480]",
-        "medium": "bestvideo[height<=720][ext=mp4]+bestaudio/best[height<=720]",
-        "hd": "bestvideo[height<=1080][ext=mp4]+bestaudio/best[height<=1080]",
-        "4k": "bestvideo[height<=2160][ext=mp4]+bestaudio/best[height<=2160]",
-        "best": "bestvideo+bestaudio/best",
+        "mobile": "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=480]+bestaudio/best[height<=480]",
+        "low": "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=480]+bestaudio/best[height<=480]",
+        "medium": "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]",
+        "hd": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]",
+        "4k": "bestvideo[height<=2160][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=2160]+bestaudio/best[height<=2160]",
+        "best": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
     }
     return lookup.get(str(quality).strip().lower())
 

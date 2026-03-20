@@ -12,6 +12,7 @@ This module provides intelligent detection for:
 """
 
 import logging
+import sys
 import time
 from pathlib import Path
 from typing import Optional, Dict, Tuple, Any
@@ -24,6 +25,14 @@ try:
 except ImportError:
     CV2_AVAILABLE = False
     logging.warning("OpenCV or pyautogui not available. Screen detection will not work.")
+
+
+def get_default_images_dir() -> Path:
+    """Get helper_images directory - works for both dev and frozen EXE."""
+    if getattr(sys, 'frozen', False):
+        return Path(sys._MEIPASS) / "modules" / "auto_uploader" / "helper_images"
+    else:
+        return Path(__file__).resolve().parent.parent / "helper_images"
 
 
 class ScreenDetector:
@@ -40,11 +49,12 @@ class ScreenDetector:
         if not CV2_AVAILABLE:
             raise ImportError("OpenCV and pyautogui are required for screen detection")
 
-        self.images_dir = images_dir or Path(__file__).parent.parent / "helper_images"
+        self.images_dir = images_dir or get_default_images_dir()
         self.confidence = confidence
 
-        # Ensure images directory exists
-        self.images_dir.mkdir(parents=True, exist_ok=True)
+        # Ensure images directory exists (only in dev mode, not when frozen)
+        if not getattr(sys, 'frozen', False):
+            self.images_dir.mkdir(parents=True, exist_ok=True)
 
         logging.debug("ScreenDetector initialized with images_dir: %s", self.images_dir)
 

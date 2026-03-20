@@ -1,4 +1,4 @@
-"""
+﻿"""
 Logging System for OneSoul
 Provides comprehensive logging for debugging and monitoring
 """
@@ -28,6 +28,7 @@ class ContentFlowLogger:
 
         self.logger = logging.getLogger(name)
         self.logger.setLevel(logging.DEBUG)
+        self.logger.propagate = False  # Avoid duplicate console output via root logger
 
         # Prevent duplicate handlers
         if self.logger.handlers:
@@ -51,11 +52,16 @@ class ContentFlowLogger:
         file_handler.setFormatter(detailed_formatter)
         self.logger.addHandler(file_handler)
 
-        # Console Handler
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(logging.INFO)
-        console_handler.setFormatter(simple_formatter)
-        self.logger.addHandler(console_handler)
+        # Console Handler (guard against missing/ASCII-only stdout)
+        if sys.stdout:
+            try:
+                sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+            except Exception:
+                pass
+            console_handler = logging.StreamHandler(sys.stdout)
+            console_handler.setLevel(logging.INFO)
+            console_handler.setFormatter(simple_formatter)
+            self.logger.addHandler(console_handler)
 
         # Error File Handler - Separate file for errors only
         error_file = self.log_dir / f"errors_{datetime.now().strftime('%Y%m%d')}.log"
@@ -220,3 +226,5 @@ if __name__ == '__main__':
 
     print(f"\nLog files location: {logger.log_dir}")
     print("Check log files for detailed output")
+
+

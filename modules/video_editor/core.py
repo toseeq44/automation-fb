@@ -10,21 +10,43 @@ from typing import Optional, Tuple, List, Dict, Any
 from datetime import datetime
 
 try:
-    # MoviePy 2.x imports
+    # Try MoviePy 2.x imports first
     from moviepy import (
         VideoFileClip, AudioFileClip, ImageClip, TextClip,
         CompositeVideoClip, CompositeAudioClip, concatenate_videoclips,
         concatenate_audioclips
     )
-    from moviepy import vfx, afx
+    try:
+        # MoviePy 2.x: effects are in separate modules
+        from moviepy.video import fx as vfx
+        from moviepy.audio import fx as afx
+    except ImportError:
+        # MoviePy 1.x: effects are in editor modules
+        from moviepy.video import fx as vfx
+        from moviepy.audio import fx as afx
     MOVIEPY_AVAILABLE = True
 except ImportError:
     MOVIEPY_AVAILABLE = False
+    vfx = None
+    afx = None
     print("WARNING: MoviePy not installed. Install with: pip install moviepy")
 
 from modules.logging.logger import get_logger
 
 logger = get_logger(__name__)
+
+# AR Engine import (lazy load to avoid dependency issues)
+AR_ENGINE_AVAILABLE = False
+try:
+    from modules.video_editor.ar_engine import AREngine, MEDIAPIPE_AVAILABLE
+    import cv2
+    import numpy as np
+    AR_ENGINE_AVAILABLE = MEDIAPIPE_AVAILABLE  # Only available if MediaPipe loaded correctly
+    if not AR_ENGINE_AVAILABLE:
+        logger.warning("MediaPipe not compatible. AR features disabled.")
+except (ImportError, AttributeError, ModuleNotFoundError) as e:
+    AREngine = None
+    logger.warning(f"AR Engine not available: {e}")
 
 
 class VideoProject:
@@ -99,6 +121,15 @@ class VideoEditor:
         self.project = VideoProject()
         self.temp_files = []  # Track temporary files for cleanup
 
+        # Initialize AR engine (lazy load)
+        self.ar_engine = None
+        if AR_ENGINE_AVAILABLE:
+            try:
+                self.ar_engine = AREngine()
+                logger.info("AR Engine initialized successfully")
+            except Exception as e:
+                logger.warning(f"Failed to initialize AR Engine: {e}")
+
         if not MOVIEPY_AVAILABLE:
             raise ImportError("MoviePy is not installed. Install with: pip install moviepy")
 
@@ -151,7 +182,7 @@ class VideoEditor:
         if start_time < 0 or end_time > self.video.duration or start_time >= end_time:
             raise ValueError(f"Invalid time range: {start_time}s - {end_time}s (Duration: {self.video.duration}s)")
 
-        self.video = self.video.subclip(start_time, end_time)
+        self.video = self.video.subclipped(start_time, end_time)
         self.project.add_to_history({
             'operation': 'trim',
             'params': {'start': start_time, 'end': end_time}
@@ -217,7 +248,8 @@ class VideoEditor:
         if x1 < 0 or y1 < 0 or x2 > w or y2 > h or x1 >= x2 or y1 >= y2:
             raise ValueError(f"Invalid crop coordinates: ({x1},{y1}) to ({x2},{y2})")
 
-        self.video = self.video.fx(vfx.crop, x1=x1, y1=y1, x2=x2, y2=y2)
+        # MoviePy 2.x: Use cropped() instead of fx(vfx.crop)
+        self.video = self.video.cropped(x1=x1, y1=y1, x2=x2, y2=y2)
         self.project.add_to_history({
             'operation': 'crop',
             'params': {'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2, 'preset': preset}
@@ -235,7 +267,8 @@ class VideoEditor:
         if not self.video:
             raise ValueError("No video loaded")
 
-        self.video = self.video.fx(vfx.rotate, angle)
+        # MoviePy 2.x: Use rotated() instead of fx(vfx.rotate)
+        self.video = self.video.rotated(angle)
         self.project.add_to_history({
             'operation': 'rotate',
             'params': {'angle': angle}
@@ -248,7 +281,8 @@ class VideoEditor:
         if not self.video:
             raise ValueError("No video loaded")
 
-        self.video = self.video.fx(vfx.mirror_x)
+        # MoviePy 2.x: Use with_effects([vfx.MirrorX()])
+        self.video = self.video.with_effects([vfx.MirrorX()])
         self.project.add_to_history({
             'operation': 'flip_horizontal',
             'params': {}
@@ -261,7 +295,8 @@ class VideoEditor:
         if not self.video:
             raise ValueError("No video loaded")
 
-        self.video = self.video.fx(vfx.mirror_y)
+        # MoviePy 2.x: Use with_effects([vfx.MirrorY()])
+        self.video = self.video.with_effects([vfx.MirrorY()])
         self.project.add_to_history({
             'operation': 'flip_vertical',
             'params': {}
@@ -281,18 +316,19 @@ class VideoEditor:
         if not self.video:
             raise ValueError("No video loaded")
 
+        # MoviePy 2.x: Use resized() instead of fx(vfx.resize)
         if scale:
-            self.video = self.video.fx(vfx.resize, scale)
+            self.video = self.video.resized(scale)
             logger.info(f"Video resized by scale: {scale}")
         elif width or height:
             if width and height:
-                self.video = self.video.fx(vfx.resize, newsize=(width, height))
+                self.video = self.video.resized(newsize=(width, height))
                 logger.info(f"Video resized: {width}x{height}")
             elif width:
-                self.video = self.video.fx(vfx.resize, width=width)
+                self.video = self.video.resized(width=width)
                 logger.info(f"Video resized: width={width}")
             elif height:
-                self.video = self.video.fx(vfx.resize, height=height)
+                self.video = self.video.resized(height=height)
                 logger.info(f"Video resized: height={height}")
         else:
             raise ValueError("Must specify width, height, or scale")
@@ -316,7 +352,8 @@ class VideoEditor:
         if factor <= 0:
             raise ValueError("Speed factor must be positive")
 
-        self.video = self.video.speedx(factor)
+        # MoviePy 2.x: Use with_speed_scaled() instead of speedx()
+        self.video = self.video.with_speed_scaled(factor=factor)
         self.project.add_to_history({
             'operation': 'speed',
             'params': {'factor': factor}
@@ -367,12 +404,12 @@ class VideoEditor:
                 size=self.video.size if method == 'caption' else None
             )
 
-            # Set position and duration
-            txt_clip = txt_clip.set_position(position).set_duration(duration)
+            # Set position and duration - MoviePy 2.x
+            txt_clip = txt_clip.with_position(position).with_duration(duration)
 
             # Set start time if specified
             if start_time > 0:
-                txt_clip = txt_clip.set_start(start_time)
+                txt_clip = txt_clip.with_start(start_time)
 
             # Compose with video
             self.video = CompositeVideoClip([self.video, txt_clip])
@@ -414,16 +451,16 @@ class VideoEditor:
 
             # Trim or loop audio to match video duration
             if audio.duration > self.video.duration:
-                audio = audio.subclip(0, self.video.duration)
+                audio = audio.subclipped(0, self.video.duration)
             elif audio.duration < self.video.duration:
                 # Loop audio if shorter
                 repeats = int(self.video.duration / audio.duration) + 1
-                audio = concatenate_audioclips([audio] * repeats).subclip(0, self.video.duration)
+                audio = concatenate_audioclips([audio] * repeats).subclipped(0, self.video.duration)
 
             if start_time > 0:
-                audio = audio.set_start(start_time)
+                audio = audio.with_start(start_time)
 
-            self.video = self.video.set_audio(audio)
+            self.video = self.video.with_audio(audio)
 
             self.project.add_to_history({
                 'operation': 'replace_audio',
@@ -455,15 +492,16 @@ class VideoEditor:
         try:
             new_audio = AudioFileClip(audio_path)
 
-            # Adjust volume
-            new_audio = new_audio.fx(afx.volumex, volume)
+            # Adjust volume - MoviePy 2.x: Use with_effects() or audio_normalize()
+            # Simple volume multiplication doesn't need effects framework
+            new_audio = new_audio.with_effects([afx.MultiplyVolume(volume)])
 
             # Match duration
             if new_audio.duration > self.video.duration:
-                new_audio = new_audio.subclip(0, self.video.duration)
+                new_audio = new_audio.subclipped(0, self.video.duration)
 
             if start_time > 0:
-                new_audio = new_audio.set_start(start_time)
+                new_audio = new_audio.with_start(start_time)
 
             # Mix with existing audio
             if self.video.audio:
@@ -471,7 +509,7 @@ class VideoEditor:
             else:
                 mixed_audio = new_audio
 
-            self.video = self.video.set_audio(mixed_audio)
+            self.video = self.video.with_audio(mixed_audio)
 
             self.project.add_to_history({
                 'operation': 'mix_audio',
@@ -499,8 +537,9 @@ class VideoEditor:
             logger.warning("Video has no audio to adjust")
             return self
 
-        adjusted_audio = self.video.audio.fx(afx.volumex, volume)
-        self.video = self.video.set_audio(adjusted_audio)
+        # MoviePy 2.x: Use with_effects() for audio effects
+        adjusted_audio = self.video.audio.with_effects([afx.MultiplyVolume(volume)])
+        self.video = self.video.with_audio(adjusted_audio)
 
         self.project.add_to_history({
             'operation': 'adjust_volume',
@@ -544,16 +583,16 @@ class VideoEditor:
             raise FileNotFoundError(f"Watermark image not found: {image_path}")
 
         try:
-            # Load watermark
-            watermark = ImageClip(image_path).set_duration(self.video.duration)
+            # Load watermark - MoviePy 2.x
+            watermark = ImageClip(image_path).with_duration(self.video.duration)
 
             # Resize if specified
             if size:
-                watermark = watermark.resize(newsize=size)
+                watermark = watermark.resized(newsize=size)
 
-            # Set opacity
+            # Set opacity - MoviePy 2.x
             if opacity < 1.0:
-                watermark = watermark.set_opacity(opacity)
+                watermark = watermark.with_opacity(opacity)
 
             # Calculate position with margin
             w, h = self.video.size
@@ -580,7 +619,8 @@ class VideoEditor:
             else:
                 y = int(y_pos)
 
-            watermark = watermark.set_position((x, y))
+            # Position watermark - MoviePy 2.x
+            watermark = watermark.with_position((x, y))
 
             # Compose with video
             self.video = CompositeVideoClip([self.video, watermark])
@@ -607,11 +647,12 @@ class VideoEditor:
         if not self.video:
             raise ValueError("No video loaded")
 
-        self.video = self.video.fx(vfx.fadein, duration)
+        # MoviePy 2.x: Use with_effects() for fade effects
+        self.video = self.video.with_effects([vfx.FadeIn(duration)])
 
         # Fade in audio too if present
         if self.video.audio:
-            self.video = self.video.set_audio(self.video.audio.fx(afx.audio_fadein, duration))
+            self.video = self.video.with_audio(self.video.audio.with_effects([afx.AudioFadeIn(duration)]))
 
         self.project.add_to_history({
             'operation': 'fade_in',
@@ -625,11 +666,12 @@ class VideoEditor:
         if not self.video:
             raise ValueError("No video loaded")
 
-        self.video = self.video.fx(vfx.fadeout, duration)
+        # MoviePy 2.x: Use with_effects() for fade effects
+        self.video = self.video.with_effects([vfx.FadeOut(duration)])
 
         # Fade out audio too if present
         if self.video.audio:
-            self.video = self.video.set_audio(self.video.audio.fx(afx.audio_fadeout, duration))
+            self.video = self.video.with_audio(self.video.audio.with_effects([afx.AudioFadeOut(duration)]))
 
         self.project.add_to_history({
             'operation': 'fade_out',
@@ -661,6 +703,212 @@ class VideoEditor:
             'params': {'filter_name': filter_name, 'kwargs': kwargs}
         })
         logger.info(f"Filter applied: {filter_name}")
+        return self
+
+    # ==================== DUAL VIDEO MERGE ====================
+
+    def dual_video_merge(self, secondary_video_path: str,
+                        primary_position: str = 'right',
+                        zoom_factor: float = 1.1,
+                        primary_width_ratio: float = 0.6,
+                        divider_width: int = 2,
+                        divider_color: str = 'black',
+                        audio_source: str = 'primary'):
+        """
+        Merge two videos side-by-side with intelligent length matching
+
+        Features:
+        - 110% zoom on both videos (default)
+        - 60-40 split ratio (configurable)
+        - Intelligent length matching (loop/trim secondary to match primary)
+        - Seamless divider line
+        - Audio from primary only (default)
+
+        Args:
+            secondary_video_path: Path to secondary video file
+            primary_position: 'left' or 'right' - where to place primary video
+            zoom_factor: Zoom factor for both videos (1.1 = 110%)
+            primary_width_ratio: Width ratio for primary video (0.6 = 60%)
+            divider_width: Width of divider line in pixels
+            divider_color: Color of divider line
+            audio_source: 'primary', 'secondary', or 'both'
+        """
+        if not self.video:
+            raise ValueError("No video loaded")
+
+        if not os.path.exists(secondary_video_path):
+            raise ValueError(f"Secondary video not found: {secondary_video_path}")
+
+        try:
+            logger.info(f"🎬 Starting Dual Video Merge...")
+            logger.info(f"   Primary position: {primary_position}")
+            logger.info(f"   Zoom factor: {zoom_factor}")
+            logger.info(f"   Split ratio: {primary_width_ratio:.0%}/{(1-primary_width_ratio):.0%}")
+
+            # Load secondary video
+            secondary = VideoFileClip(secondary_video_path)
+            primary = self.video
+
+            primary_duration = primary.duration
+            secondary_duration = secondary.duration
+
+            logger.info(f"   Primary duration: {primary_duration:.2f}s")
+            logger.info(f"   Secondary duration: {secondary_duration:.2f}s")
+
+            # ========== INTELLIGENT LENGTH MATCHING ==========
+
+            if secondary_duration < primary_duration:
+                # Secondary is shorter - loop it to match primary
+                logger.info(f"   Secondary is shorter - looping to match primary")
+
+                # Calculate how many times to loop
+                num_loops = int(primary_duration / secondary_duration) + 1
+                logger.info(f"   Looping secondary {num_loops} times")
+
+                # Create looped secondary
+                looped_clips = [secondary] * num_loops
+                secondary_looped = concatenate_videoclips(looped_clips)
+
+                # Trim to exact primary duration
+                secondary = secondary_looped.subclipped(0, primary_duration)
+                logger.info(f"   Secondary trimmed to {primary_duration:.2f}s")
+
+            elif secondary_duration > primary_duration:
+                # Secondary is longer - trim it
+                logger.info(f"   Secondary is longer - trimming to match primary")
+                secondary = secondary.subclipped(0, primary_duration)
+                logger.info(f"   Secondary trimmed to {primary_duration:.2f}s")
+
+            else:
+                logger.info(f"   Both videos have same duration - no adjustment needed")
+
+            # ========== APPLY ZOOM TO BOTH VIDEOS ==========
+
+            if zoom_factor != 1.0:
+                logger.info(f"   Applying {zoom_factor:.0%} zoom to both videos")
+
+                # Zoom and center crop to maintain original size - MoviePy 2.x
+                primary = primary.resized(zoom_factor)
+                secondary = secondary.resized(zoom_factor)
+
+                # Get original size for crop
+                target_w, target_h = self.video.size
+
+                # Center crop back to original size - MoviePy 2.x: use cropped()
+                primary_w, primary_h = primary.size
+                crop_x = (primary_w - target_w) // 2
+                crop_y = (primary_h - target_h) // 2
+                primary = primary.cropped(x1=crop_x, y1=crop_y,
+                                         x2=crop_x + target_w, y2=crop_y + target_h)
+
+                secondary_w, secondary_h = secondary.size
+                crop_x = (secondary_w - target_w) // 2
+                crop_y = (secondary_h - target_h) // 2
+                secondary = secondary.cropped(x1=crop_x, y1=crop_y,
+                                             x2=crop_x + target_w, y2=crop_y + target_h)
+
+            # ========== CALCULATE DIMENSIONS ==========
+
+            # Get video dimensions
+            video_width, video_height = primary.size
+
+            # Calculate split widths
+            primary_width = int(video_width * primary_width_ratio)
+            secondary_width = int(video_width * (1 - primary_width_ratio))
+
+            # Total width includes divider
+            total_width = primary_width + secondary_width + divider_width
+
+            logger.info(f"   Output dimensions: {total_width}x{video_height}")
+            logger.info(f"   Primary: {primary_width}px, Secondary: {secondary_width}px, Divider: {divider_width}px")
+
+            # ========== RESIZE VIDEOS TO FIT SPLIT ==========
+            # MoviePy 2.x: Use resized() instead of fx(vfx.resize)
+
+            primary = primary.resized(width=primary_width)
+            secondary = secondary.resized(width=secondary_width)
+
+            # Ensure both have same height
+            if primary.size[1] != secondary.size[1]:
+                target_height = min(primary.size[1], secondary.size[1])
+                primary = primary.resized(height=target_height)
+                secondary = secondary.resized(height=target_height)
+                video_height = target_height
+
+            # ========== CREATE SEAMLESS BLEND ==========
+            # Instead of visible divider, we'll overlap videos slightly
+            # This is handled in the composite section below
+            # No separate divider clip needed for seamless look
+            # (Positioning is done in composite section below)
+
+            # ========== AUDIO HANDLING ==========
+
+            if audio_source == 'secondary':
+                # Use secondary audio only
+                primary = primary.without_audio()
+                # Keep secondary's audio (already trimmed to match primary duration)
+                # Don't remove it
+            elif audio_source == 'both':
+                # Mix both audios (not removing any)
+                # Both keep their audio
+                pass
+            else:
+                # Default: audio_source == 'primary'
+                # Remove audio from secondary
+                secondary = secondary.without_audio()
+
+            # ========== COMPOSITE FINAL VIDEO ==========
+
+            # For seamless blend, don't use divider - instead overlap videos slightly
+            # This creates a natural blend without visible line
+            if divider_width > 0:
+                # Overlap by divider_width instead of creating a separator
+                # This makes videos blend seamlessly
+                if primary_position == 'left':
+                    primary = primary.with_position((0, 0))
+                    secondary = secondary.with_position((primary_width - divider_width, 0))
+                else:  # primary on right
+                    secondary = secondary.with_position((0, 0))
+                    primary = primary.with_position((secondary_width - divider_width, 0))
+
+                # Total width is reduced by overlap
+                final_width = primary_width + secondary_width - divider_width
+                clips = [secondary, primary] if primary_position == 'right' else [primary, secondary]
+                logger.info(f"   Videos overlapped by {divider_width}px for seamless blend")
+            else:
+                # No overlap - direct side-by-side
+                if primary_position == 'left':
+                    primary = primary.with_position((0, 0))
+                    secondary = secondary.with_position((primary_width, 0))
+                else:
+                    secondary = secondary.with_position((0, 0))
+                    primary = primary.with_position((secondary_width, 0))
+
+                final_width = primary_width + secondary_width
+                clips = [secondary, primary] if primary_position == 'right' else [primary, secondary]
+
+            self.video = CompositeVideoClip(clips, size=(final_width, video_height))
+
+            # Add to project history
+            self.project.add_to_history({
+                'operation': 'dual_video_merge',
+                'params': {
+                    'secondary_video_path': secondary_video_path,
+                    'primary_position': primary_position,
+                    'zoom_factor': zoom_factor,
+                    'primary_width_ratio': primary_width_ratio,
+                    'divider_width': divider_width,
+                    'divider_color': divider_color,
+                    'audio_source': audio_source
+                }
+            })
+
+            logger.info(f"✅ Dual video merge completed successfully")
+
+        except Exception as e:
+            logger.error(f"Failed to merge dual video: {e}", exc_info=True)
+            raise
+
         return self
 
     # ==================== EXPORT ====================
@@ -776,11 +1024,170 @@ class VideoEditor:
         img.save(output_path)
         logger.info(f"Frame saved: {output_path} at {time}s")
 
+    # ==================== AR EFFECTS (NEW) ====================
+
+    def _apply_ar_effect_to_video(self, ar_function, **kwargs):
+        """
+        Helper method to apply AR effect frame-by-frame to video
+
+        Args:
+            ar_function: AR Engine function to apply
+            **kwargs: Arguments to pass to AR function
+        """
+        if not self.video:
+            raise ValueError("No video loaded")
+
+        if not self.ar_engine:
+            raise ValueError("AR Engine not available. Install mediapipe and opencv-python")
+
+        def apply_to_frame(get_frame, t):
+            """Apply AR effect to a single frame"""
+            frame = get_frame(t)
+            # MoviePy frames are RGB; AR engine expects BGR (OpenCV).
+            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            processed_bgr = ar_function(frame_bgr, **kwargs)
+            if processed_bgr is None:
+                return frame
+            return cv2.cvtColor(processed_bgr, cv2.COLOR_BGR2RGB)
+
+        # Apply to video
+        self.video = self.video.transform(apply_to_frame)
+        logger.info(f"AR effect applied: {ar_function.__name__}")
+
+    def face_beautify(self, intensity: float = 0.5):
+        """
+        Apply AI-powered face beautification (skin smoothing)
+
+        Args:
+            intensity: Beautification intensity (0.0 - 1.0)
+        """
+        if not self.ar_engine:
+            raise ValueError("❌ AR Engine not available. Install MediaPipe: pip install mediapipe protobuf")
+
+        logger.info(f"Applying face beautification (intensity={intensity})")
+        self._apply_ar_effect_to_video(self.ar_engine.apply_face_beautification, intensity=intensity)
+        self.project.add_to_history({'operation': 'face_beautify', 'intensity': intensity})
+
+    def eye_enhancement(self, intensity: float = 0.3):
+        """
+        Enhance eyes (sharpen and brighten)
+
+        Args:
+            intensity: Enhancement intensity (0.0 - 1.0)
+        """
+        if not self.ar_engine:
+            raise ValueError("❌ AR Engine not available. Install MediaPipe: pip install mediapipe protobuf")
+
+        logger.info(f"Applying eye enhancement (intensity={intensity})")
+        self._apply_ar_effect_to_video(self.ar_engine.apply_eye_enhancement, intensity=intensity)
+        self.project.add_to_history({'operation': 'eye_enhancement', 'intensity': intensity})
+
+    def teeth_whitening(self, intensity: float = 0.3):
+        """
+        Whiten teeth automatically
+
+        Args:
+            intensity: Whitening intensity (0.0 - 1.0)
+        """
+        if not self.ar_engine:
+            raise ValueError("❌ AR Engine not available. Install MediaPipe: pip install mediapipe protobuf")
+
+        logger.info(f"Applying teeth whitening (intensity={intensity})")
+        self._apply_ar_effect_to_video(self.ar_engine.apply_teeth_whitening, intensity=intensity)
+        self.project.add_to_history({'operation': 'teeth_whitening', 'intensity': intensity})
+
+    def lip_color(self, intensity: float = 0.5, color: str = 'red'):
+        """
+        Apply color to lips (red, pink, coral, nude, berry)
+
+        Args:
+            intensity: Color intensity (0.0 - 1.0)
+            color: Lip color ('red', 'pink', 'coral', 'nude', 'berry')
+        """
+        if not self.ar_engine:
+            raise ValueError("❌ AR Engine not available. Install MediaPipe: pip install mediapipe protobuf")
+
+        logger.info(f"Applying lip color (intensity={intensity}, color={color})")
+        self._apply_ar_effect_to_video(self.ar_engine.apply_lip_color, intensity=intensity, color=color)
+        self.project.add_to_history({'operation': 'lip_color', 'intensity': intensity, 'color': color})
+
+    def auto_crop_face(self, aspect_ratio: str = '9:16', margin: float = 0.3):
+        """
+        Automatically crop video to keep face centered (perfect for TikTok/Reels)
+
+        Args:
+            aspect_ratio: Target aspect ratio ('9:16', '16:9', '1:1', '4:5')
+            margin: Margin around face (0.0 - 1.0)
+        """
+        if not self.video:
+            raise ValueError("No video loaded")
+
+        if not self.ar_engine:
+            raise ValueError("AR Engine not available. Install mediapipe and opencv-python")
+
+        logger.info(f"Auto cropping to face (aspect_ratio={aspect_ratio}, margin={margin})")
+
+        # Parse aspect ratio
+        ratio_map = {
+            '9:16': (9, 16),
+            '16:9': (16, 9),
+            '1:1': (1, 1),
+            '4:5': (4, 5)
+        }
+        aspect_tuple = ratio_map.get(aspect_ratio, (9, 16))
+
+        def crop_to_face(get_frame, t):
+            """Crop frame to keep face centered"""
+            frame = get_frame(t)
+            cropped = self.ar_engine.auto_crop_to_face(frame, aspect_ratio=aspect_tuple, margin=margin)
+            return cropped if cropped is not None else frame
+
+        self.video = self.video.transform(crop_to_face)
+        logger.info(f"Auto crop to face completed")
+        self.project.add_to_history({'operation': 'auto_crop_face', 'aspect_ratio': aspect_ratio, 'margin': margin})
+
+    def blur_background(self, blur_strength: int = 15):
+        """
+        Blur background while keeping face sharp (portrait mode effect)
+
+        Args:
+            blur_strength: Blur strength (1-51, higher = more blur)
+        """
+        if not self.ar_engine:
+            raise ValueError("❌ AR Engine not available. Install MediaPipe: pip install mediapipe protobuf")
+
+        logger.info(f"Applying background blur (strength={blur_strength})")
+        self._apply_ar_effect_to_video(self.ar_engine.blur_background, blur_strength=blur_strength)
+        self.project.add_to_history({'operation': 'blur_background', 'blur_strength': blur_strength})
+
+    def show_face_landmarks(self, show_full_mesh: bool = False):
+        """
+        Draw face landmarks on video (for debugging/visualization)
+
+        Args:
+            show_full_mesh: If True, show all 468 landmarks; if False, show key points only
+        """
+        if not self.ar_engine:
+            raise ValueError("❌ AR Engine not available. Install MediaPipe: pip install mediapipe protobuf")
+
+        logger.info(f"Drawing face landmarks (full_mesh={show_full_mesh})")
+        self._apply_ar_effect_to_video(self.ar_engine.draw_face_landmarks, show_mesh=show_full_mesh)
+        self.project.add_to_history({'operation': 'show_face_landmarks', 'show_full_mesh': show_full_mesh})
+
+    # ==================== END AR EFFECTS ====================
+
     def cleanup(self):
         """Clean up resources and temporary files"""
         if self.video:
             try:
                 self.video.close()
+            except:
+                pass
+
+        # Clean up AR engine
+        if self.ar_engine:
+            try:
+                self.ar_engine.cleanup()
             except:
                 pass
 

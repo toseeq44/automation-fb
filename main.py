@@ -15,15 +15,8 @@ else:
 
 from modules.logging import get_logger
 from modules.config import get_config
-from modules.license import LicenseManager
+from modules.license import LicenseManager, sync_all_plans
 from modules.ui import LicenseActivationDialog
-
-# Import development mode settings
-try:
-    from dev_config import DEV_MODE, DEV_CONFIG
-except ImportError:
-    DEV_MODE = False
-    DEV_CONFIG = {}
 
 
 import os
@@ -121,50 +114,55 @@ def main():
     server_url = config.get('license.server_url', 'http://localhost:5000')
     license_manager = LicenseManager(server_url=server_url)
 
-    # 🔧 DEVELOPMENT MODE CHECK
-    if DEV_MODE:
-        logger.warning("⚠️  DEVELOPMENT MODE ENABLED - License checks bypassed!", "App")
-        logger.warning("⚠️  Set DEV_MODE = False in dev_config.py for production", "App")
-        is_valid = True
-        message = "Development Mode - License checks skipped"
-        license_info = DEV_CONFIG.get('mock_license_info', {})
-    else:
-        logger.info(f"License server: {server_url}", "License")
-        # Check license on startup
-        is_valid, message, license_info = license_manager.validate_license()
+    logger.info(f"License server: {server_url}", "License")
+    # Production enforcement: always validate license on startup.
+    is_valid, message, license_info = license_manager.validate_license()
 
     if not is_valid:
         logger.warning(f"License validation failed: {message}", "License")
 
-        # Check if no license exists at all
+        # Show activation dialog for both no license and expired license
         if not license_info:
-            # Show activation dialog
             logger.info("No license found. Showing activation dialog.", "License")
-
-            activation_dialog = LicenseActivationDialog(license_manager)
-            result = activation_dialog.exec_()
-
-            if result != activation_dialog.Accepted:
-                # User cancelled activation
-                logger.info("User cancelled activation. Exiting.", "License")
-                QMessageBox.warning(
-                    None,
-                    "License Required",
-                    "OneSoul requires a valid license to run.\n\n"
-                    "Please activate a license or purchase one to continue."
-                )
-                sys.exit(0)
+            dialog_message = "No active license found. Please activate a license to continue."
         else:
             # License exists but invalid (expired or offline too long)
             logger.warning("License invalid or expired", "License")
+            dialog_message = f"License Issue: {message}"
             QMessageBox.warning(
                 None,
-                "License Issue",
+                "License Expired",
                 f"{message}\n\n"
-                "Please check your license or renew your subscription.\n"
-                "Some features may be limited."
+                "Your license has expired or is invalid.\n"
+                "Please activate a valid license to continue."
             )
-            # Allow app to run in demo mode
+
+        # Show activation dialog
+        activation_dialog = LicenseActivationDialog(license_manager)
+        result = activation_dialog.exec_()
+
+        if result != activation_dialog.Accepted:
+            # User cancelled activation
+            logger.info("User cancelled license activation. Exiting.", "License")
+            QMessageBox.warning(
+                None,
+                "License Required",
+                "OneSoul requires a valid license to run.\n\n"
+                "The application will now close."
+            )
+            sys.exit(0)
+        else:
+            # License activated successfully, validate again
+            is_valid, message, license_info = license_manager.validate_license()
+            if not is_valid:
+                logger.error("License activation succeeded but validation failed.", "License")
+                QMessageBox.critical(
+                    None,
+                    "Activation Error",
+                    "License activation completed but validation failed.\n"
+                    "Please restart the application."
+                )
+                sys.exit(0)
     else:
         logger.info(f"License validated successfully: {message}", "License")
         days_remaining = license_info.get('days_remaining', 0) if license_info else 0
@@ -178,6 +176,10 @@ def main():
                 f"Your license will expire in {days_remaining} day(s).\n\n"
                 "Please renew your subscription to continue using OneSoul."
             )
+
+    # Sync user plan across all modules
+    logger.info("Syncing user plan across modules...", "App")
+    sync_all_plans(license_manager)
 
     # Launch main window
     logger.info("Launching main window", "App")

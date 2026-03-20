@@ -305,9 +305,58 @@ class FolderMappingDialog(QDialog):
         separator.setFrameShape(QFrame.HLine)
         content_layout.addWidget(separator)
 
+        # Search and View Controls (NEW FEATURE)
+        controls_container = QWidget()
+        controls_layout = QHBoxLayout(controls_container)
+        controls_layout.setContentsMargins(0, 10, 0, 10)
+        controls_layout.setSpacing(10)
+
+        # Search bar
+        search_label = QLabel("🔍 Search:")
+        search_label.setStyleSheet("color: #00d4ff; font-weight: bold; font-size: 13px;")
+        controls_layout.addWidget(search_label)
+
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Search by source folder, destination folder, or any text...")
+        self.search_input.setStyleSheet("""
+            QLineEdit {
+                background-color: #1e1e2e;
+                color: #ffffff;
+                border: 2px solid #3a3a4a;
+                border-radius: 6px;
+                padding: 8px 12px;
+                font-size: 13px;
+            }
+            QLineEdit:focus {
+                border: 2px solid #00d4ff;
+            }
+        """)
+        self.search_input.textChanged.connect(self.filter_table)
+        controls_layout.addWidget(self.search_input, 1)  # Stretch
+
+        # Clear search button
+        self.clear_search_btn = QPushButton("✖ Clear")
+        self.clear_search_btn.setObjectName("actionBtn")
+        self.clear_search_btn.setToolTip("Clear search filter")
+        self.clear_search_btn.setMaximumWidth(100)
+        self.clear_search_btn.clicked.connect(lambda: self.search_input.clear())
+        controls_layout.addWidget(self.clear_search_btn)
+
+        # Maximize/Minimize toggle button
+        self.table_expanded = False  # Track state
+        self.toggle_view_btn = QPushButton("⬆ Maximize Table")
+        self.toggle_view_btn.setObjectName("actionBtn")
+        self.toggle_view_btn.setToolTip("Expand table for better visibility")
+        self.toggle_view_btn.setMaximumWidth(150)
+        self.toggle_view_btn.clicked.connect(self.toggle_table_size)
+        controls_layout.addWidget(self.toggle_view_btn)
+
+        content_layout.addWidget(controls_container)
+
         # Mappings table
         self.create_mappings_table()
-        self.mappings_table.setMinimumHeight(200)  # Ensure table has minimum height
+        self.mappings_table.setMinimumHeight(200)  # Default minimum height
+        self.mappings_table.setMaximumHeight(300)  # Default maximum height (collapsed state)
         content_layout.addWidget(self.mappings_table)
 
         # Control buttons in a more organized layout
@@ -729,6 +778,54 @@ class FolderMappingDialog(QDialog):
         self.moved_label.setText(
             f"<b>Videos Moved:</b> <span style='color: #ffd700; font-size: 16px;'>{stats['total_videos_moved']}</span>"
         )
+
+    def filter_table(self):
+        """Filter table based on search text (NEW FEATURE)"""
+        search_text = self.search_input.text().lower().strip()
+
+        # If search is empty, show all rows
+        if not search_text:
+            for row in range(self.mappings_table.rowCount()):
+                self.mappings_table.setRowHidden(row, False)
+            return
+
+        # Filter rows based on search text
+        visible_count = 0
+        for row in range(self.mappings_table.rowCount()):
+            # Get text from all columns
+            row_text = ""
+            for col in range(1, self.mappings_table.columnCount()):  # Skip checkbox column
+                item = self.mappings_table.item(row, col)
+                if item:
+                    row_text += item.text().lower() + " "
+
+            # Show row if search text found, otherwise hide
+            if search_text in row_text:
+                self.mappings_table.setRowHidden(row, False)
+                visible_count += 1
+            else:
+                self.mappings_table.setRowHidden(row, True)
+
+        # Optional: Show count of filtered results in search placeholder
+        if search_text:
+            self.search_input.setToolTip(f"Showing {visible_count} of {self.mappings_table.rowCount()} mappings")
+
+    def toggle_table_size(self):
+        """Toggle table between normal and maximized view (NEW FEATURE)"""
+        if self.table_expanded:
+            # Collapse to normal size
+            self.mappings_table.setMaximumHeight(300)
+            self.mappings_table.setMinimumHeight(200)
+            self.toggle_view_btn.setText("⬆ Maximize Table")
+            self.toggle_view_btn.setToolTip("Expand table for better visibility")
+            self.table_expanded = False
+        else:
+            # Expand to large size
+            self.mappings_table.setMaximumHeight(600)  # Much larger
+            self.mappings_table.setMinimumHeight(500)
+            self.toggle_view_btn.setText("⬇ Minimize Table")
+            self.toggle_view_btn.setToolTip("Collapse table to normal size")
+            self.table_expanded = True
 
     def accept(self):
         """Save and close dialog"""

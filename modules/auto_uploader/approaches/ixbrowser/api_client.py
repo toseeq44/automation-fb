@@ -58,7 +58,7 @@ class IXBrowserAPI:
 
         lower_url = base_url.lower().rstrip("/")
         if not lower_url.endswith("/api/v2") and not lower_url.endswith("/v2"):
-            base_url = f"{base_url.rstrip('/')}/v2"
+            base_url = f"{base_url.rstrip('/')}/api/v2"
 
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key.strip() if api_key else ""
@@ -75,12 +75,17 @@ class IXBrowserAPI:
     # ------------------------------------------------------------------ #
     # Public helpers                                                     #
     # ------------------------------------------------------------------ #
-    def list_profiles(self, *, use_cache: bool = True) -> List[IXProfileInfo]:
-        """Return all profiles available on the ixBrowser instance."""
-        if use_cache and self._profile_cache:
+    def list_profiles(self, *, limit: int = 9999, use_cache: bool = True) -> List[IXProfileInfo]:
+        """Return all profiles available on the ixBrowser instance.
+        
+        Args:
+            limit: Maximum number of profiles to return (default 9999)
+            use_cache: If True, returns cached profiles if available
+        """
+        if use_cache and self._profile_cache and len(self._profile_cache) >= 1:
             return list(self._profile_cache)
 
-        data = self._request("POST", "/profile-list", json={})
+        data = self._request("POST", "/profile-list", json={"limit": limit})
         profile_payload = self._extract_list(data)
 
         profiles: List[IXProfileInfo] = []
@@ -126,19 +131,71 @@ class IXBrowserAPI:
 
         return None
 
-    def open_profile(self, profile_id: str, **options: Any) -> IXProfileSession:
-        """Open an ixBrowser profile and return session info."""
-        payload: Dict[str, Any] = {"profile_id": profile_id}
+    def open_profile(self, profile_id: str, timeout: int = 120, **options: Any) -> IXProfileSession:
+        """Open an ixBrowser profile and return session info.
+        
+        Args:
+            profile_id: ID of the profile to open
+            timeout: Maximum seconds to wait for browser launch (default 120)
+            **options: Additional options for profile-open
+        """
+        # IXBrowser API expects profile_id as integer
+        try:
+            pid = int(profile_id)
+        except (ValueError, TypeError):
+            pid = profile_id
+        payload: Dict[str, Any] = {"profile_id": pid}
         payload.update(options)
 
-        data = self._request("POST", "/profile-open", json=payload)
-        session_payload = self._extract_data(data)
+        print(f"[IX-API] open_profile sending: profile_id={pid} (type={type(pid).__name__})")
+        data = self._request("POST", "/profile-open", json=payload, timeout=timeout)
 
-        webdriver_url = session_payload.get("webdriver") or session_payload.get("webdriver_url")
-        debugging_address = session_payload.get("debugging_address") or session_payload.get("debuggingAddress")
+        # Step-by-step debug: dump full response structure
+        print(f"[IX-API] open_profile raw response keys: {list(data.keys())}")
+        raw_error = data.get("error")
+        raw_data = data.get("data")
+        print(f"[IX-API] error field: {raw_error}")
+        print(f"[IX-API] data field type: {type(raw_data).__name__}, value: {raw_data}")
+
+        if isinstance(raw_data, dict):
+            print(f"[IX-API] data keys: {list(raw_data.keys())}")
+            inner = raw_data.get("data")
+            if isinstance(inner, dict):
+                print(f"[IX-API] data.data keys: {list(inner.keys())}")
+                for k in ("webdriver", "webdriver_url", "debugging_address", "debuggingAddress",
+                           "debug_port", "debugPort", "ws"):
+                    if k in inner:
+                        print(f"[IX-API]   {k} = {inner[k]}")
+            else:
+                for k in ("webdriver", "webdriver_url", "debugging_address", "debuggingAddress",
+                           "debug_port", "debugPort", "ws"):
+                    if k in raw_data:
+                        print(f"[IX-API]   {k} = {raw_data[k]}")
+
+        session_payload = self._extract_data(data)
+        print(f"[IX-API] extracted session keys: {list(session_payload.keys())}")
+
+        webdriver_url = (
+            session_payload.get("webdriver")
+            or session_payload.get("webdriver_url")
+            or session_payload.get("webdriver_path")
+        )
+        debugging_address = (
+            session_payload.get("debugging_address")
+            or session_payload.get("debuggingAddress")
+            or session_payload.get("debug_port")
+            or session_payload.get("debugPort")
+        )
+
+        # If debug_port is just a port number, prepend 127.0.0.1:
+        if debugging_address and str(debugging_address).isdigit():
+            debugging_address = f"127.0.0.1:{debugging_address}"
+
+        print(f"[IX-API] RESULT: webdriver_url = {webdriver_url}")
+        print(f"[IX-API] RESULT: debugging_address = {debugging_address}")
 
         return IXProfileSession(
-            profile_id=session_payload.get("profile_id", profile_id),
+            profile_id=session_payload.get("profile_id", str(pid)),
             webdriver_url=webdriver_url,
             debugging_address=debugging_address,
             raw=session_payload,
@@ -146,7 +203,11 @@ class IXBrowserAPI:
 
     def close_profile(self, profile_id: str) -> bool:
         """Close a running ixBrowser profile."""
-        payload = {"profile_id": profile_id}
+        try:
+            pid = int(profile_id)
+        except (ValueError, TypeError):
+            pid = profile_id
+        payload = {"profile_id": pid}
         data = self._request("POST", "/profile-close", json=payload)
         session_payload = self._extract_data(data)
         logger.debug("ixBrowser profile '%s' closed: %s", profile_id, session_payload)
@@ -174,9 +235,22 @@ class IXBrowserAPI:
                 payload,
             )
 
-        code = payload.get("code")
-        if code not in (0, 200, None):
-            raise IXBrowserAPIError(payload.get("message", "Unknown ixBrowser API error"), payload)
+        # IXBrowser v2 response format: {"error": {"code": 0, "message": "ok"}, "data": ...}
+        # Also handle legacy format: {"code": 0, "message": "ok", "data": ...}
+        error_obj = payload.get("error")
+        if isinstance(error_obj, dict):
+            code = error_obj.get("code")
+            msg = error_obj.get("message", "")
+            if code not in (0, 200, None):
+                raise IXBrowserAPIError(
+                    f"ixBrowser API error (code={code}): {msg}", payload
+                )
+        else:
+            code = payload.get("code")
+            if code not in (0, 200, None):
+                raise IXBrowserAPIError(
+                    payload.get("message", "Unknown ixBrowser API error"), payload
+                )
 
         return payload
 
@@ -186,6 +260,9 @@ class IXBrowserAPI:
         if isinstance(data, list):
             return data
         if isinstance(data, dict):
+            # IXBrowser v2 returns {"data": {"total": N, "data": [...]}}
+            if "data" in data and isinstance(data["data"], list):
+                return data["data"]
             if "list" in data and isinstance(data["list"], list):
                 return data["list"]
             if "profiles" in data and isinstance(data["profiles"], list):
@@ -200,6 +277,10 @@ class IXBrowserAPI:
     def _extract_data(payload: Dict[str, Any]) -> Dict[str, Any]:
         data = payload.get("data")
         if isinstance(data, dict):
+            # IXBrowser v2 may nest: {"data": {"data": {actual_session_data}}}
+            inner = data.get("data")
+            if isinstance(inner, dict):
+                return inner
             return data
         return payload
 

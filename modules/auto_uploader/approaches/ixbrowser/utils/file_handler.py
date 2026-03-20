@@ -90,6 +90,51 @@ class FileHandler:
             logger.error("[FileHandler]   Video: %s", video_file)
             return None
 
+    def move_video_to_failed(self, video_file: str, creator_folder: str, reason: str = "") -> Optional[str]:
+        """
+        Move a video to the 'failed uploads' subfolder.
+
+        Args:
+            video_file: Full path to video file
+            creator_folder: Path to creator folder
+            reason: Optional reason for failure (for logging)
+
+        Returns:
+            New file path if successful, None otherwise
+        """
+        try:
+            if not os.path.exists(video_file):
+                logger.error("[FileHandler] Failed video not found: %s", video_file)
+                return None
+
+            failed_folder = Path(creator_folder) / "failed uploads"
+            failed_folder.mkdir(parents=True, exist_ok=True)
+
+            if reason:
+                logger.warning("[FileHandler] Moving failed upload (reason: %s)", reason)
+            else:
+                logger.warning("[FileHandler] Moving failed upload")
+
+            video_filename = os.path.basename(video_file)
+            destination = failed_folder / video_filename
+
+            if destination.exists():
+                import time
+                name, ext = os.path.splitext(video_filename)
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                video_filename = f"{name}_{timestamp}{ext}"
+                destination = failed_folder / video_filename
+
+            shutil.move(video_file, str(destination))
+
+            logger.warning("[FileHandler] Failed upload moved to: %s", destination)
+            return str(destination)
+
+        except Exception as e:
+            logger.error("[FileHandler] Failed to move failed upload: %s", str(e))
+            logger.error("[FileHandler]   Video: %s", video_file)
+            return None
+
     def delete_failed_video(self, video_file: str, reason: str = "failed after 3 retries") -> bool:
         """
         Delete a failed video file.

@@ -182,6 +182,14 @@ def auto_register_approaches() -> None:
     except ImportError as e:
         logging.warning(f"IXBrowserApproach not available: {e}")
 
+    # Register nstbrowser approach
+    try:
+        from .nstbrowser.workflow import NSTBrowserApproach
+        ApproachFactory.register_approach('nst', NSTBrowserApproach)
+        ApproachFactory.register_approach('nstbrowser', NSTBrowserApproach)
+    except ImportError as e:
+        logging.warning(f"NSTBrowserApproach not available: {e}")
+
     # Future approaches can be added here
     # try:
     #     from .gologin.workflow import GoLoginApproach

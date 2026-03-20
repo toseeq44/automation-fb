@@ -1,0 +1,36 @@
+# Title Generator Module - Dependencies
+# Enhanced multilingual title generation with audio, visual, and text analysis
+
+# Core AI Libraries
+openai-whisper>=20231117    # Audio transcription and language detection
+transformers>=4.35.0        # CLIP visual analysis
+torch>=2.0.0                # PyTorch for transformers
+groq>=0.4.0                 # Groq API for AI refinement
+
+# Computer Vision
+opencv-python>=4.8.0        # Video processing and scene detection
+pillow>=10.0.0              # Image processing
+pytesseract>=0.3.10         # OCR text extraction
+
+# Data Processing
+numpy>=1.24.0               # Array operations
+scikit-learn>=1.3.0         # K-means clustering for color analysis
+scipy>=1.11.0               # Scientific computing
+
+# Video Processing
+moviepy>=2.0.0              # Video manipulation and frame extraction
+
+# Utilities
+python-dotenv>=1.0.0        # Environment variables (optional)
+
+# Note: Install Tesseract OCR separately:
+# Ubuntu/Debian: sudo apt-get install tesseract-ocr
+# MacOS: brew install tesseract
+# Windows: Download from https://github.com/UB-Mannheim/tesseract/wiki
+
+# Installation command:
+# pip install -r requirements.txt
+
+# Optional: For GPU acceleration
+# torch with CUDA support for faster CLIP processing
+# Install from: https://pytorch.org/get-started/locally/

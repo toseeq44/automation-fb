@@ -1,4 +1,7 @@
-yt-dlp>=2024.3.10
+yt-dlp>=2026.3.17
+yt-dlp-ejs>=0.8.0
+curl_cffi>=0.7.0
+pyinstaller
 PyQt5>=5.15.9
 PyQtWebEngine>=5.15.0  # For animated OneSoul Flow logo (optional)
 requests>=2.31.0
@@ -17,14 +20,31 @@ scipy>=1.10.0
 imageio>=2.31.0
 imageio-ffmpeg>=0.4.9
 
+# Title Generator AI Models (NEW - for local vision analysis)
+ultralytics>=8.0.0          # YOLO object detection (6MB model)
+transformers>=4.30.0        # BLIP image captioning
+torch>=2.0.0                # Required for transformers
+demucs>=4.0.0               # Source separation for split-edit background music removal
+pytesseract>=0.3.10         # OCR text extraction
+
 pyperclip>=1.8.2
 
-# Browser Automation Dependencies (NEW - for intelligent automation)
+# Browser Automation Dependencies
+selenium>=4.15.0           # WebDriver for ixBrowser/auto uploader
 opencv-python>=4.8.0       # Image recognition for UI detection
 pyautogui>=0.9.54         # Mouse and keyboard automation
 pygetwindow>=0.0.9        # Window management (cross-platform)
 psutil>=5.9.0             # Process management
+pywin32>=306;sys_platform=="win32"  # Windows COM API (win32gui, win32con)
 
+# AR Face Effects Dependencies
+mediapipe>=0.10.0         # Google's AR framework - 468 face landmarks tracking
+protobuf>=3.20.0          # Required by MediaPipe
+
+# Misc dependencies used by moviepy/other packages
+decorator>=5.0.0
+tqdm>=4.0.0
+proglog>=0.1.10
 
 Flask
 Flask-Limiter

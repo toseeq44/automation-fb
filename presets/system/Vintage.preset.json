@@ -1,0 +1,44 @@
+{
+  "schema_version": "2.0",
+  "name": "Vintage",
+  "description": "Retro/vintage film look",
+  "created_at": "2025-12-26T21:52:01.287293",
+  "modified_at": "2025-12-26T21:52:01.287296",
+  "operations": [
+    {
+      "operation": "apply_filter",
+      "params": {
+        "filter_name": "vintage"
+      }
+    },
+    {
+      "operation": "apply_filter",
+      "params": {
+        "filter_name": "vignette",
+        "intensity": 0.5
+      }
+    }
+  ],
+  "thumbnail": null,
+  "tags": [
+    "vintage",
+    "retro",
+    "artistic"
+  ],
+  "author": "System",
+  "category": "Artistic",
+  "preset_version": "1.0",
+  "compatibility": [
+    "1.0"
+  ],
+  "export_settings": {
+    "quality": "high",
+    "format": "mp4",
+    "resolution": null,
+    "fps": null,
+    "codec_video": "libx264",
+    "codec_audio": "aac",
+    "bitrate_video": null,
+    "bitrate_audio": "192k"
+  }
+}

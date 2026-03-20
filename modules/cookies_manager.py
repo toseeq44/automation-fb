@@ -50,7 +50,7 @@ class CookiesManager:
     
     def get_browser_cookies(self, domain: str) -> Dict:
         """Extract cookies from browser for specific domain"""
-        # Manual cookie extraction - user needs to provide cookies
+        # Manual cookie extraction - user needs to provide cookies 
         # This is a placeholder for manual cookie input
         return {}
     

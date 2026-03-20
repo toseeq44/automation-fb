@@ -16,12 +16,39 @@ dist/
 instance/
 *.db
 
+# Large binary files (keep locally, don't push to git)
+cloudflared.exe
+ffmpeg/
+demucs_models/
+third_party/deno_runtime/
+third_party/node_runtime/
+*.dll
+
 # User settings and runtime data (don't commit)
 modules/auto_uploader/data_files/settings.json
 modules/auto_uploader/approaches/ixbrowser/data/bot_state.json
 modules/auto_uploader/approaches/ixbrowser/data/folder_progress.json
 data_files/creator_method_cache.json
+data_files/creator_activity_log.jsonl
+data_files/browser_cookies/
+data_files/browser_profile/
+config/auth_state.json
+memory/
+*.part
 api_config.json
 
 # License data (don't commit user licenses)
 modules/license/.license
+nul
+
+# Test temp files
+.test_tmp2/
+zzztest/
+tests_runtime_tmp/
+.onego_test_tmp/
+.pytest_cache/
+.pytest_tmp/
+codex_pytest_tmp/
+tmp_onego_verify/
+tmp_onego_verify2/
+tests/

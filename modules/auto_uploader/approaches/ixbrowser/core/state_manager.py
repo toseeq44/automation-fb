@@ -378,6 +378,44 @@ class StateManager:
         self.save_uploaded_videos(videos_data)
         logger.info("[StateManager] ✓ Recorded uploaded video: %s", os.path.basename(video_file))
 
+    def mark_video_failed(
+        self,
+        video_file: str,
+        bookmark: str,
+        reason: str = "",
+        moved_to: Optional[str] = None,
+    ) -> None:
+        """
+        Add video to failed upload history.
+
+        Args:
+            video_file: Original video file path
+            bookmark: Bookmark name
+            reason: Failure reason
+            moved_to: New location after moving (failed uploads folder)
+        """
+        videos_data = self.load_uploaded_videos()
+
+        if 'failed_videos' not in videos_data:
+            videos_data['failed_videos'] = []
+
+        record = {
+            "file_path": video_file,
+            "failed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "bookmark": bookmark,
+        }
+        if reason:
+            record["reason"] = reason
+        if moved_to:
+            record["moved_to"] = moved_to
+
+        videos_data['failed_videos'].append(record)
+        videos_data['failed_count'] = len(videos_data['failed_videos'])
+        videos_data['last_failed'] = time.strftime("%Y-%m-%d %H:%M:%S")
+
+        self.save_uploaded_videos(videos_data)
+        logger.info("[StateManager] Recorded failed video: %s", os.path.basename(video_file))
+
     def is_video_uploaded(self, video_file: str) -> bool:
         """
         Check if video has already been uploaded.
@@ -398,6 +436,23 @@ class StateManager:
             if record.get('file_path') == video_file:
                 return True
 
+        return False
+
+    def is_video_failed(self, video_file: str) -> bool:
+        """
+        Check if video has been marked as failed.
+
+        Args:
+            video_file: Video file path
+
+        Returns:
+            True if marked failed, False otherwise
+        """
+        videos_data = self.load_uploaded_videos()
+        failed_list = videos_data.get('failed_videos', [])
+        for record in failed_list:
+            if record.get('file_path') == video_file:
+                return True
         return False
 
     def get_current_position(self) -> Dict[str, Any]:

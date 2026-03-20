@@ -4,6 +4,7 @@ Uses image recognition to automatically login to ixBrowser desktop application
 """
 
 import logging
+import sys
 import time
 from pathlib import Path
 from typing import Optional, Tuple
@@ -13,8 +14,19 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+
+def get_helper_images_dir() -> Path:
+    """Get helper_images directory path - works for both dev and frozen EXE."""
+    if getattr(sys, 'frozen', False):
+        # Running as EXE - use _MEIPASS
+        return Path(sys._MEIPASS) / "modules" / "auto_uploader" / "helper_images"
+    else:
+        # Running as script
+        return Path(__file__).resolve().parents[2] / "helper_images"
+
+
 # Helper images directory
-HELPER_IMAGES_DIR = Path(__file__).parents[2] / "helper_images"
+HELPER_IMAGES_DIR = get_helper_images_dir()
 
 
 class IXBrowserLoginHelper:
@@ -317,7 +329,22 @@ class IXBrowserLoginHelper:
                         break
 
                 if not password_field_activated:
-                    logger.error("[IXLogin] ✗ Failed to activate password field after 3 attempts")
+                    # Fallback: use Tab key to move from email field to password field
+                    logger.warning("[IXLogin] Image match failed — trying Tab key fallback")
+                    try:
+                        # Click back on email field area first to ensure focus
+                        if email_icon_location:
+                            pyautogui.click(email_icon_location[0] + 50, email_icon_location[1])
+                            time.sleep(0.3)
+                        pyautogui.press('tab')
+                        time.sleep(0.5)
+                        password_field_activated = True
+                        logger.info("[IXLogin] ✓ Password field activated via Tab key")
+                    except Exception as tab_err:
+                        logger.error("[IXLogin] Tab fallback failed: %s", tab_err)
+
+                if not password_field_activated:
+                    logger.error("[IXLogin] ✗ Failed to activate password field (image + Tab)")
                     time.sleep(2)
                     continue
 

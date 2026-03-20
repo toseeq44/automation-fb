@@ -293,8 +293,14 @@ def _extract_ytdlp_json(url: str, platform_key: str, cookie_file: str = None, ma
         
         # Platform-specific args
         if platform_key == 'instagram':
+            try:
+                from .config import get_instagram_feed_count
+                feed_count = get_instagram_feed_count(max_videos)
+            except Exception:
+                feed_count = 0
+            if feed_count > 0:
+                cmd.extend(['--extractor-args', f'instagram:feed_count={feed_count}'])
             cmd.extend([
-                '--extractor-args', 'instagram:feed_count=100',
                 '--user-agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1'
             ])
         elif platform_key == 'youtube':
@@ -626,9 +632,9 @@ class LinkGrabberThread(QThread):
         self.is_cancelled = False
         self.found_links = []
         
-        this_file = Path(__file__).resolve()
-        self.cookies_dir = this_file.parent.parent.parent / "cookies"
-        self.cookies_dir.mkdir(parents=True, exist_ok=True)
+        # Use persistent cookies directory (works in dev and EXE mode)
+        from modules.config.paths import get_cookies_dir
+        self.cookies_dir = get_cookies_dir()
 
     def run(self):
         try:
@@ -749,9 +755,9 @@ class BulkLinkGrabberThread(QThread):
         self.found_links = []
         self.creator_links_map = {}
         
-        this_file = Path(__file__).resolve()
-        self.cookies_dir = this_file.parent.parent.parent / "cookies"
-        self.cookies_dir.mkdir(parents=True, exist_ok=True)
+        # Use persistent cookies directory (works in dev and EXE mode)
+        from modules.config.paths import get_cookies_dir
+        self.cookies_dir = get_cookies_dir()
 
     def run(self):
         try:

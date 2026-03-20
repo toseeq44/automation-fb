@@ -32,6 +32,7 @@ class ApproachDialog(QDialog):
         ("free_automation", "Free Automation"),
         ("gologin", "GoLogin"),
         ("ix", "IX Browser"),
+        ("nstbrowser", "NSTbrowser"),
         ("vpn", "VPN"),
     ]
 
@@ -51,6 +52,7 @@ class ApproachDialog(QDialog):
         self._input_fields: Dict[str, Dict[str, QLineEdit]] = {}
         self._optional_fields: Dict[str, set[str]] = {
             "ix": {"api_url", "profile_id", "profile_name"},
+            "nstbrowser": {"base_url"},
         }
         self._free_fields: Dict[str, QLineEdit] = {}
         self._free_labels: Dict[str, str] = {
@@ -119,9 +121,15 @@ class ApproachDialog(QDialog):
                 "email": ("Account Email", False, ""),
                 "password": ("Account Password", True, ""),
             },
+            "nstbrowser": {
+                "base_url": ("API URL (optional)", False, "http://127.0.0.1:8848"),
+                "api_key": ("API Key", False, ""),
+                "email": ("Account Email", False, ""),
+                "password": ("Account Password", True, ""),
+            },
         }
 
-        for mode in ("gologin", "ix"):
+        for mode in ("gologin", "ix", "nstbrowser"):
             widget, fields = self._build_account_form(mode_field_map[mode])
             self._input_fields[mode] = fields
             self._stack.addWidget(widget)
@@ -209,7 +217,7 @@ class ApproachDialog(QDialog):
                     fields["password"].setText(secret["password"])
 
     def _on_approach_changed(self, index: int) -> None:
-        # 0 -> free, 1 -> gologin, 2 -> ix, 3 -> vpn
+        # 0 -> free, 1 -> gologin, 2 -> ix, 3 -> nstbrowser, 4 -> vpn
         self._stack.setCurrentIndex(index)
 
     def _persist_selection(self) -> None:
@@ -271,6 +279,11 @@ class ApproachDialog(QDialog):
             if text:
                 payload[key] = text
 
+        # Validate NSTbrowser credentials to catch common mistakes
+        if mode == "nstbrowser":
+            if not self._validate_nstbrowser_credentials(payload, fields):
+                return False
+
         # Persist credentials (password handled via credential manager)
         password = payload.pop("password", "")
         if password:
@@ -285,6 +298,78 @@ class ApproachDialog(QDialog):
             self._credentials.delete_credentials(f"approach:{mode}")
 
         self._settings.update_credentials(mode, payload)
+        return True
+
+    def _validate_nstbrowser_credentials(self, payload: Dict[str, str], fields: Dict[str, QLineEdit]) -> bool:
+        """Validate NSTbrowser credentials to catch common mistakes."""
+        import re
+
+        base_url = payload.get("base_url", "").strip()
+        api_key = payload.get("api_key", "").strip()
+
+        # Check if base_url looks like a UUID (common mistake)
+        uuid_pattern = r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+        if base_url and re.match(uuid_pattern, base_url, re.IGNORECASE):
+            QMessageBox.critical(
+                self,
+                "Invalid API URL",
+                "It looks like you entered your API Key in the 'API URL' field.\n\n"
+                "The API URL should be: http://127.0.0.1:8848\n"
+                "The API Key should be the UUID format key from NSTbrowser dashboard.\n\n"
+                "Please correct the fields and try again.",
+            )
+            if "base_url" in fields:
+                fields["base_url"].setFocus()
+                fields["base_url"].selectAll()
+            logging.error("NSTbrowser: API Key entered in base_url field")
+            return False
+
+        # Check if api_key looks like a URL (common mistake)
+        if api_key and (api_key.startswith("http://") or api_key.startswith("https://")):
+            QMessageBox.critical(
+                self,
+                "Invalid API Key",
+                "It looks like you entered a URL in the 'API Key' field.\n\n"
+                "The API Key should be in UUID format (e.g., d27f90bc-57ce-4bbe-9ab9-a3b7f99d616f)\n"
+                "The API URL should be in the 'API URL' field.\n\n"
+                "Please correct the fields and try again.",
+            )
+            if "api_key" in fields:
+                fields["api_key"].setFocus()
+                fields["api_key"].selectAll()
+            logging.error("NSTbrowser: URL entered in api_key field")
+            return False
+
+        # Validate api_key format (should be UUID)
+        if api_key and not re.match(uuid_pattern, api_key, re.IGNORECASE):
+            QMessageBox.warning(
+                self,
+                "Invalid API Key Format",
+                "The API Key should be in UUID format.\n\n"
+                "Example: d27f90bc-57ce-4bbe-9ab9-a3b7f99d616f\n\n"
+                "Please check your NSTbrowser dashboard for the correct API key.",
+            )
+            if "api_key" in fields:
+                fields["api_key"].setFocus()
+                fields["api_key"].selectAll()
+            logging.warning("NSTbrowser: Invalid API key format")
+            return False
+
+        # Validate base_url format if provided (should be URL)
+        if base_url and not (base_url.startswith("http://") or base_url.startswith("https://")):
+            QMessageBox.warning(
+                self,
+                "Invalid API URL Format",
+                "The API URL should start with http:// or https://\n\n"
+                "Default: http://127.0.0.1:8848\n\n"
+                "If you're not sure, leave it blank to use the default.",
+            )
+            if "base_url" in fields:
+                fields["base_url"].setFocus()
+                fields["base_url"].selectAll()
+            logging.warning("NSTbrowser: Invalid base_url format")
+            return False
+
         return True
 
     def _browse_folder(self, target: QLineEdit) -> None:

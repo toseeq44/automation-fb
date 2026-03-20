@@ -538,6 +538,12 @@ def download_video(
             "extractor_retries": 5,
             "sleep_interval_requests": 1,
             "max_sleep_interval": 5,
+            "throttled_rate": "100K",
+            "retry_sleep_functions": {
+                "http": lambda n: min(4 ** n, 120),
+                "fragment": lambda n: min(2 * n, 30),
+                "extractor": lambda n: min(3 ** n, 60),
+            },
             "http_headers": headers,
             "progress_hooks": [_hook],
         }
@@ -678,19 +684,22 @@ def download_video(
         web_cookies = list(cookie_pool)
 
         if is_shorts:
+            # tv_embedded bypasses YouTube PO Token requirement (2025/2026 change)
             client_cookie_pairs = [
-                ("android_vr", None),
+                ("tv_embedded", None),
+                ("android", None),
                 ("ios", None),
                 *[("web", c) for c in web_cookies],
-                ("android", None),
+                ("mweb", None),
                 ("web", None),
             ]
         else:
             client_cookie_pairs = [
+                ("tv_embedded", None),
                 *[("web", c) for c in web_cookies],
-                ("android_vr", None),
-                ("ios", None),
                 ("android", None),
+                ("ios", None),
+                ("mweb", None),
                 ("web", None),
             ]
 
@@ -718,7 +727,7 @@ def download_video(
                 if cancelled[0]:
                     break
 
-                extractor_args = {"youtube": {"player_client": [client]}}
+                extractor_args = {"youtube": {"player_client": [client], "player_skip": ["configs"]}}
                 for fmt in formats_to_try:
                     if cancelled[0]:
                         break
@@ -855,6 +864,46 @@ def download_video(
 
         if progress_cb and last_error[0]:
             progress_cb(f"  [TT] Final error: {last_error[0]}")
+        return _pick_fresh_video()
+
+    # ── Facebook: impersonation + Referer (required since Nov 2025) ──────────
+    if platform == "facebook":
+        fb_formats = [_SMART_FORMAT if ffmpeg_available else "best[ext=mp4]/best",
+                      "best[ext=mp4]/best", "best"]
+        fb_impersonate = {"generic": {"impersonate": ["chrome-131"]}}
+        fb_headers_extra = {"Referer": "https://www.facebook.com"}
+        cookie_choices_fb = list(cookie_pool) + [None]
+        strategy_list_fb = [("direct", False), ("proxy", bool(proxy_url))]
+
+        for strategy_label, use_proxy in strategy_list_fb:
+            if strategy_label == "proxy" and not use_proxy:
+                continue
+            if cancelled[0]:
+                break
+            active_proxy = proxy_url if use_proxy else None
+
+            for fmt in fb_formats:
+                if cancelled[0]:
+                    break
+                for ck in cookie_choices_fb:
+                    if cancelled[0]:
+                        break
+                    if progress_cb:
+                        ck_label = Path(ck).name if ck else "no-cookie"
+                        progress_cb(f"  [FB] {strategy_label} | {fmt} | {ck_label}")
+
+                    opts = _base_opts(fmt, ck, active_proxy, fb_impersonate)
+                    opts.setdefault("http_headers", {}).update(fb_headers_extra)
+                    ok, err = _try_opts(opts)
+                    if ok:
+                        return result_path[0] or _pick_fresh_video()
+
+                    err_low = (err or "").lower()
+                    if any(x in err_low for x in ("login", "private", "sign in")):
+                        break
+
+        if progress_cb and last_error[0]:
+            progress_cb(f"  [FB] Final error: {last_error[0]}")
         return _pick_fresh_video()
 
     smart_fmt = _SMART_FORMAT if ffmpeg_available else "best[ext=mp4]/best"

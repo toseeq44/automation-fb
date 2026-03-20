@@ -55,6 +55,31 @@ if exist "ffmpeg" (
     echo     [!] ffmpeg directory NOT found - will skip
 )
 
+if exist "demucs_models" (
+    if exist "demucs_models\htdemucs.yaml" (
+        echo     [OK] demucs_models directory found
+    ) else if exist "demucs_models\mdx_q.yaml" (
+        echo     [OK] demucs_models directory found
+    ) else (
+        echo     [!] demucs_models exists but no supported model manifest was found
+    )
+) else (
+    echo     [!] demucs_models directory NOT found - music removal will fall back
+)
+
+if exist "third_party\deno_runtime\deno.exe" (
+    echo     [OK] bundled Deno runtime found
+) else (
+    echo     [!] bundled Deno runtime NOT found - YouTube downloads may miss formats
+)
+
+%PYTHON_EXE% -c "import curl_cffi" 2>nul
+if errorlevel 1 (
+    echo     [!] curl_cffi NOT installed - TikTok browser impersonation will be unavailable
+) else (
+    echo     [OK] curl_cffi installed
+)
+
 if exist "modules\auto_uploader\helper_images" (
     echo     [OK] helper_images directory found
 ) else (

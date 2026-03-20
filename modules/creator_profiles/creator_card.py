@@ -26,7 +26,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from .config_manager import CreatorConfig
+from .config_manager import CreatorConfig, summarize_split_edit_settings
 from .download_engine import CreatorDownloadWorker
 
 _BG_CARD = "#161b22"
@@ -446,6 +446,10 @@ class CreatorCard(QFrame):
         v.addWidget(_div())
 
         # ── Grid: Videos + Editing Mode (Flags row removed) ──
+        controls_wrap = QVBoxLayout()
+        controls_wrap.setSpacing(6)
+        controls_wrap.setContentsMargins(0, 0, 0, 0)
+
         controls = QHBoxLayout()
         controls.setSpacing(8)
         controls.setContentsMargins(0, 0, 0, 0)
@@ -475,13 +479,17 @@ class CreatorCard(QFrame):
         controls.addSpacing(8)
         controls.addWidget(_lbl("Editing:"))
         self.mode_cb = QComboBox()
-        self.mode_cb.addItems(["None", "Preset", "Split"])
-        self.mode_cb.setMinimumWidth(78)
+        self.mode_cb.addItems(["None", "Preset", "Split", "Split + Edit"])
+        self.mode_cb.setMinimumWidth(108)
+        self.mode_cb.setMaximumWidth(150)
         self.mode_cb.setFixedHeight(30)
         self.mode_cb.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         self.mode_cb.setStyleSheet(_input_ss())
+        self.mode_cb.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.mode_cb.currentIndexChanged.connect(self._on_mode)
-        controls.addWidget(self.mode_cb)
+        controls.addWidget(self.mode_cb, 1)
+
+        controls_wrap.addLayout(controls)
 
         edit_row = QHBoxLayout()
         edit_row.setSpacing(6)
@@ -498,18 +506,24 @@ class CreatorCard(QFrame):
         self.split_sp = QDoubleSpinBox()
         self.split_sp.setRange(1.0, 3600.0)
         self.split_sp.setSuffix(" s")
-        self.split_sp.setFixedWidth(82)
+        self.split_sp.setFixedWidth(92)
         self.split_sp.setStyleSheet(_input_ss())
         self.split_sp.valueChanged.connect(self._auto_save)
         edit_row.addWidget(self.split_sp)
 
+        self.split_edit_btn = card_btn("Options", "cyan")
+        self.split_edit_btn.setFixedWidth(88)
+        self.split_edit_btn.clicked.connect(self._open_split_edit_dialog)
+        edit_row.addWidget(self.split_edit_btn)
+        edit_row.addStretch(1)
+
         self.edit_extra_w = QWidget()
         self.edit_extra_w.setStyleSheet("background:transparent; border:none;")
         self.edit_extra_w.setLayout(edit_row)
-        controls.addWidget(self.edit_extra_w, 1)
-        controls.addStretch()
+        self.edit_extra_w.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        controls_wrap.addWidget(self.edit_extra_w)
 
-        v.addLayout(controls)
+        v.addLayout(controls_wrap)
 
         # ── Toggle buttons — left-aligned, no "Flags:" label ──
         toggles_wrap = QVBoxLayout()
@@ -683,7 +697,16 @@ class CreatorCard(QFrame):
         c = self.config
         c.ensure_creator_url()
         mode_value = str(c.editing_mode).strip().lower()
-        mode_map = {"none": 0, "preset": 1, "split": 2, "0": 0, "1": 1, "2": 2}
+        mode_map = {
+            "none": 0,
+            "preset": 1,
+            "split": 2,
+            "split_edit": 3,
+            "0": 0,
+            "1": 1,
+            "2": 2,
+            "3": 3,
+        }
         mode_index = mode_map.get(mode_value, 0)
 
         # Prevent accidental autosave/overwrite while loading values into UI.
@@ -701,6 +724,7 @@ class CreatorCard(QFrame):
         ]
         for w in widgets_to_block:
             w.blockSignals(True)
+        self._loading_values = True
         try:
             self.n_spin.setValue(c.n_videos)
             self.upload_spin.setValue(c.uploading_target)
@@ -717,11 +741,13 @@ class CreatorCard(QFrame):
             _yt_map = {"all": 0, "shorts": 1, "long": 2}
             self.yt_type_cb.setCurrentIndex(_yt_map.get(c.yt_content_type, 0))
         finally:
+            self._loading_values = False
             for w in widgets_to_block:
                 w.blockSignals(False)
 
         self._refresh_toggle_styles()
         self._update_edit_vis()
+        self._refresh_split_edit_button()
         self._refresh_header()
 
     def _refresh_toggle_styles(self):
@@ -746,7 +772,7 @@ class CreatorCard(QFrame):
                 ))
 
     def _auto_save(self):
-        mode = ["none", "preset", "split"][self.mode_cb.currentIndex()]
+        mode = ["none", "preset", "split", "split_edit"][self.mode_cb.currentIndex()]
         self.config.data.update(
             {
                 "n_videos": self.n_spin.value(),
@@ -769,13 +795,22 @@ class CreatorCard(QFrame):
     def _on_mode(self):
         self._update_edit_vis()
         self._auto_save()
+        if self.mode_cb.currentIndex() == 3 and not getattr(self, "_loading_values", False):
+            self._open_split_edit_dialog()
 
     def _update_edit_vis(self):
         m = self.mode_cb.currentIndex()
         self.preset_cb.setVisible(m == 1)
-        self.split_sp.setVisible(m == 2)
+        self.split_sp.setVisible(m in (2, 3))
+        self.split_edit_btn.setVisible(m == 3)
         if hasattr(self, "edit_extra_w"):
-            self.edit_extra_w.setVisible(m in (1, 2))
+            self.edit_extra_w.setVisible(m in (1, 2, 3))
+
+    def _refresh_split_edit_button(self):
+        settings = self.config.split_edit_settings
+        summary = summarize_split_edit_settings(settings)
+        self.split_edit_btn.setToolTip(summary)
+        self.split_edit_btn.setText("Options")
 
     def _on_toggle_changed(self):
         self._refresh_toggle_styles()
@@ -1043,6 +1078,16 @@ class CreatorCard(QFrame):
             self.config = CreatorConfig(self.folder)
             self._load_values()
             self._refresh_activity()
+
+    def _open_split_edit_dialog(self):
+        from .split_edit_dialog import SplitEditDialog
+
+        dlg = SplitEditDialog(self.config.split_edit_settings, self, "Split + Edit Options")
+        if dlg.exec_():
+            self.config.data["split_edit_settings"] = dlg.get_settings()
+            self.config.save()
+            self.config = CreatorConfig(self.folder)
+            self._refresh_split_edit_button()
 
     def _on_remove(self):
         r = QMessageBox.question(

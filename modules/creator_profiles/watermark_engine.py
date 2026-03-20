@@ -9,13 +9,18 @@ Supports:
   - Both text + logo simultaneously, each with independent position
 """
 
+import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 # Supported logo image formats (auto-detect in creator folder)
 _LOGO_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".svg", ".gif"}
+_AVATAR_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".svg"}
+_AVATAR_VIDEO_EXTS = {".mp4", ".mov", ".webm", ".mkv", ".avi", ".gif", ".m4v"}
+_AVATAR_EXTS = _AVATAR_IMAGE_EXTS | _AVATAR_VIDEO_EXTS
 
 # Margin from edges (pixels)
 _MARGIN = 20
@@ -204,6 +209,64 @@ def auto_detect_logo(creator_folder: Path) -> Optional[str]:
     return None
 
 
+def auto_detect_avatar(creator_folder: Path) -> Optional[str]:
+    """
+    Look for a file named 'avatar.*' in creator_folder.
+    Returns absolute path string or None.
+    """
+    folder = Path(creator_folder)
+    for ext in _AVATAR_EXTS:
+        candidate = folder / f"avatar{ext}"
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+def _avatar_media_kind(path: Path, ffmpeg_path: str) -> str:
+    suffix = str(path.suffix or "").strip().lower()
+    if suffix in _AVATAR_VIDEO_EXTS:
+        return "video"
+    if suffix in _AVATAR_IMAGE_EXTS:
+        return "image"
+
+    ffprobe = _ffprobe_path(ffmpeg_path)
+    try:
+        run = subprocess.run(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_name",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if run.returncode == 0 and (run.stdout or "").strip():
+            return "video"
+    except Exception:
+        pass
+    return "image"
+
+
+def _avatar_box_dims(cfg: Dict) -> tuple[int, int]:
+    try:
+        width = int(cfg.get("width", 160) or 160)
+    except Exception:
+        width = 160
+    try:
+        height = int(cfg.get("height", 160) or 160)
+    except Exception:
+        height = 160
+    return max(8, min(2000, width)), max(8, min(2000, height))
+
+
 def _contains_cjk_or_cyrillic(text: str) -> str:
     """
     Returns 'cjk' if Chinese/Japanese/Korean characters are found.
@@ -219,6 +282,67 @@ def _contains_cjk_or_cyrillic(text: str) -> str:
         if 0x0400 <= cp <= 0x04FF:
             return 'cyrillic'
     return None
+
+
+def _contains_non_ascii(text: str) -> bool:
+    return any(ord(char) > 127 for char in (text or ""))
+
+
+def _pick_qt_font_family(requested_family: str, text: str) -> str:
+    """
+    Pick the best available Qt font family for the watermark text.
+
+    Qt does font fallback better than ffmpeg drawtext on Windows, so we lean on
+    it for multilingual text rendering.
+    """
+    try:
+        from PyQt5.QtGui import QFontDatabase
+    except Exception:
+        return (requested_family or "").strip()
+
+    requested = (requested_family or "").strip()
+    db = QFontDatabase()
+    available = {family.casefold(): family for family in db.families()}
+
+    candidates: List[str] = []
+    if requested:
+        candidates.append(requested)
+
+    if _contains_non_ascii(text):
+        candidates.extend(
+            [
+                "Segoe UI",
+                "Arial Unicode MS",
+                "Tahoma",
+                "Microsoft YaHei UI",
+                "Microsoft YaHei",
+                "Microsoft JhengHei UI",
+                "Microsoft JhengHei",
+                "Yu Gothic UI",
+                "Yu Gothic",
+                "Malgun Gothic",
+                "Meiryo",
+                "Nirmala UI",
+                "Leelawadee UI",
+                "Ebrima",
+                "Segoe UI Emoji",
+                "Arial",
+            ]
+        )
+    else:
+        candidates.extend(["Segoe UI", "Arial", "Verdana", "Tahoma"])
+
+    seen = set()
+    for candidate in candidates:
+        key = str(candidate or "").strip().casefold()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        match = available.get(key)
+        if match:
+            return match
+
+    return requested
 
 def _resolve_windows_font(font_family: str, weight: str = "normal", style: str = "normal", text: str = "") -> Optional[str]:
     """
@@ -271,12 +395,154 @@ def _resolve_windows_font(font_family: str, weight: str = "normal", style: str =
     return None
 
 
+def _render_text_overlay_image(
+    text: str,
+    wm_text_cfg: Dict,
+    output_path: Path,
+    progress_cb: Callable[[str], None] = None,
+) -> bool:
+    """
+    Render watermark text into a transparent PNG using Qt text rendering.
+
+    This path is much more reliable for multilingual scripts than ffmpeg
+    drawtext on Windows because Qt can use native font fallback/shaping.
+    """
+    try:
+        from PyQt5.QtCore import QPointF, QRectF, Qt
+        from PyQt5.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter
+        from PyQt5.QtWidgets import QApplication
+    except Exception as e:
+        if progress_cb:
+            progress_cb(f"    WaterMark: Qt text renderer unavailable ({e})")
+        return False
+
+    owned_app = None
+    app = QApplication.instance()
+    if app is None:
+        try:
+            os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+            owned_app = QApplication([])
+            app = owned_app
+        except Exception as e:
+            if progress_cb:
+                progress_cb(f"    WaterMark: failed to init Qt renderer ({e})")
+            return False
+
+    raw_text = str(text or "")
+    if not raw_text:
+        return False
+
+    requested_family = (wm_text_cfg.get("font_family") or "").strip()
+    font_family = _pick_qt_font_family(requested_family, raw_text)
+    font_size = max(8, int(wm_text_cfg.get("font_size") or 24))
+    font_weight = (wm_text_cfg.get("font_weight") or "bold").strip().lower()
+    font_style = (wm_text_cfg.get("font_style") or "normal").strip().lower()
+    render_style = _normalize_render_style(wm_text_cfg.get("render_style"))
+    font_color_hex = wm_text_cfg.get("font_color") or "#FFFFFF"
+    opacity = max(0, min(100, int(wm_text_cfg.get("opacity") or 80)))
+    letter_spacing = max(0, int(wm_text_cfg.get("letter_spacing") or 0))
+    shadow_alpha = max(0, min(100, int(wm_text_cfg.get("shadow_opacity", 75) or 75)))
+    shadow_offset = max(0, min(80, int(wm_text_cfg.get("shadow_offset", 2) or 2)))
+
+    has_non_ascii = _contains_non_ascii(raw_text)
+    # Complex scripts can break when spacing/style are forced through fallback fonts.
+    if has_non_ascii:
+        letter_spacing = 0
+        if font_family.casefold() != requested_family.casefold():
+            font_weight = "normal"
+            font_style = "normal"
+        if render_style == "outline_hollow":
+            render_style = "normal"
+
+    font = QFont()
+    if font_family:
+        font.setFamily(font_family)
+    font.setPixelSize(font_size)
+    font.setBold(font_weight == "bold")
+    font.setItalic(font_style == "italic")
+    font.setStyleStrategy(QFont.PreferDefault)
+    if letter_spacing > 0:
+        font.setLetterSpacing(QFont.AbsoluteSpacing, float(letter_spacing))
+
+    metrics = QFontMetrics(font)
+    lines = raw_text.splitlines() or [raw_text]
+    lines = lines if lines else [raw_text]
+    line_height = max(metrics.lineSpacing(), metrics.height())
+    widths = [max(1, metrics.horizontalAdvance(line or " ")) for line in lines]
+    outline_px = max(1, int(round(font_size * 0.06)))
+    padding = max(8, int(round(font_size * 0.35)))
+    extra = shadow_offset if render_style == "outline_shadow" else outline_px
+    canvas_w = max(widths) + (padding * 2) + (extra * 2)
+    canvas_h = (line_height * len(lines)) + (padding * 2) + (extra * 2)
+
+    image = QImage(canvas_w, canvas_h, QImage.Format_ARGB32_Premultiplied)
+    image.fill(Qt.transparent)
+
+    fill_color = QColor(font_color_hex)
+    if not fill_color.isValid():
+        fill_color = QColor("#FFFFFF")
+    fill_color.setAlphaF(opacity / 100.0)
+
+    shadow_color = QColor("#000000")
+    shadow_color.setAlphaF(shadow_alpha / 100.0)
+
+    painter = QPainter(image)
+    try:
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.TextAntialiasing, True)
+        painter.setFont(font)
+
+        text_x = padding + extra
+        text_y = padding + extra
+        text_rect = QRectF(
+            float(text_x),
+            float(text_y),
+            float(canvas_w - (text_x * 2) + padding),
+            float(canvas_h - (text_y * 2) + padding),
+        )
+
+        def _draw_lines(offset_x: int, offset_y: int, color: QColor) -> None:
+            painter.setPen(color)
+            for idx, line in enumerate(lines):
+                line_rect = QRectF(
+                    text_rect.x() + offset_x,
+                    text_rect.y() + offset_y + (idx * line_height),
+                    text_rect.width(),
+                    float(line_height),
+                )
+                painter.drawText(line_rect, int(Qt.AlignLeft | Qt.AlignVCenter), line)
+
+        if render_style == "outline_hollow" and not has_non_ascii:
+            for dx in range(-outline_px, outline_px + 1):
+                for dy in range(-outline_px, outline_px + 1):
+                    if dx == 0 and dy == 0:
+                        continue
+                    _draw_lines(dx, dy, fill_color)
+        elif render_style == "outline_shadow":
+            _draw_lines(shadow_offset, shadow_offset, shadow_color)
+            if not has_non_ascii:
+                for dx in range(-outline_px, outline_px + 1):
+                    for dy in range(-outline_px, outline_px + 1):
+                        if dx == 0 and dy == 0:
+                            continue
+                        _draw_lines(dx, dy, fill_color)
+            _draw_lines(0, 0, fill_color)
+        else:
+            _draw_lines(0, 0, fill_color)
+    finally:
+        painter.end()
+        owned_app = None
+
+    return image.save(str(output_path), "PNG")
+
+
 def apply_watermark(
     input_path: Path,
     output_path: Path,
     creator_folder: Path,
     wm_text_cfg: Dict,
     wm_logo_cfg: Dict,
+    wm_avatar_cfg: Dict,
     ffmpeg: str = None,
     progress_cb: Callable[[str], None] = None,
 ) -> bool:
@@ -291,12 +557,18 @@ def apply_watermark(
     input_path = Path(input_path)
     output_path = Path(output_path)
     media_duration_sec = _probe_duration_sec(input_path, ffmpeg) or _ANIMATE_CYCLE_SEC_DEFAULT
+    temp_overlay_files: List[Path] = []
 
-    explicit_layer_selection = bool(wm_text_cfg.get("enabled", False)) or bool(wm_logo_cfg.get("enabled", False))
+    explicit_layer_selection = (
+        bool(wm_text_cfg.get("enabled", False))
+        or bool(wm_logo_cfg.get("enabled", False))
+        or bool(wm_avatar_cfg.get("enabled", False))
+    )
     text_enabled = bool(wm_text_cfg.get("enabled", False)) if explicit_layer_selection else True
     logo_enabled = bool(wm_logo_cfg.get("enabled", False)) if explicit_layer_selection else True
+    avatar_enabled = bool(wm_avatar_cfg.get("enabled", False)) if explicit_layer_selection else False
 
-    if not text_enabled and not logo_enabled:
+    if not text_enabled and not logo_enabled and not avatar_enabled:
         # Nothing to do — copy as-is
         try:
             shutil.copy2(str(input_path), str(output_path))
@@ -315,16 +587,107 @@ def apply_watermark(
                 progress_cb("    WaterMark: logo file not found, skipping logo layer")
             logo_enabled = False
 
+    avatar_path: Optional[str] = None
+    avatar_kind = "image"
+    if avatar_enabled:
+        avatar_path = (wm_avatar_cfg.get("path") or "").strip()
+        if not avatar_path or not Path(avatar_path).exists():
+            avatar_path = auto_detect_avatar(creator_folder)
+        if not avatar_path:
+            if progress_cb:
+                progress_cb("    WaterMark: avatar file not found, skipping avatar layer")
+            avatar_enabled = False
+        else:
+            avatar_kind = _avatar_media_kind(Path(avatar_path), ffmpeg)
+
+    text_overlay_path: Optional[Path] = None
+    if text_enabled:
+        raw_text = (wm_text_cfg.get("text") or "").strip()
+        if not raw_text:
+            folder_name = Path(creator_folder).name
+            folder_name = str(folder_name or "").strip()
+            raw_text = folder_name if folder_name.startswith("@") else f"@{folder_name}"
+
+        try:
+            fd, tmp_png = tempfile.mkstemp(prefix="wm_text_", suffix=".png")
+            os.close(fd)
+            candidate_path = Path(tmp_png)
+            if _render_text_overlay_image(
+                text=raw_text,
+                wm_text_cfg=wm_text_cfg,
+                output_path=candidate_path,
+                progress_cb=progress_cb,
+            ):
+                text_overlay_path = candidate_path
+                temp_overlay_files.append(candidate_path)
+            else:
+                try:
+                    candidate_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                if progress_cb:
+                    progress_cb("    WaterMark: Qt text render failed, using ffmpeg text fallback")
+        except Exception as e:
+            if progress_cb:
+                progress_cb(f"    WaterMark: text overlay prep failed ({e})")
+
     # ── Build ffmpeg filter chain ──────────────────────────────────────────
-    # Inputs: [0] = video
-    # If logo: [1] = logo image
     inputs: List[str] = ["-i", str(input_path)]
+    next_input_index = 1
+    avatar_input_index: Optional[int] = None
+    if avatar_enabled and avatar_path:
+        avatar_input_index = next_input_index
+        if avatar_kind == "video":
+            inputs += ["-stream_loop", "-1", "-i", avatar_path]
+        else:
+            inputs += ["-i", avatar_path]
+        next_input_index += 1
+    text_input_index: Optional[int] = None
+    if text_enabled and text_overlay_path:
+        text_input_index = next_input_index
+        inputs += ["-i", str(text_overlay_path)]
+        next_input_index += 1
     if logo_enabled and logo_path:
+        logo_input_index = next_input_index
         inputs += ["-i", logo_path]
+        next_input_index += 1
+    else:
+        logo_input_index = None
 
     filter_parts: List[str] = []
     last_label = "[0:v]"
-    logo_input_index = 1  # ffmpeg input index for logo
+
+    if avatar_enabled and avatar_path and avatar_input_index is not None:
+        avatar_opacity = int(wm_avatar_cfg.get("opacity") or 80)
+        avatar_alpha = _opacity_to_alpha(avatar_opacity)
+        avatar_width, avatar_height = _avatar_box_dims(wm_avatar_cfg)
+        avatar_position = wm_avatar_cfg.get("position") or "TopRight"
+        x_expr, y_expr = _position_expr(avatar_position, target="overlay", cycle_sec=media_duration_sec)
+        x_expr = _escape_filter_expr(x_expr)
+        y_expr = _escape_filter_expr(y_expr)
+
+        avatar_src = "[avatar_src]"
+        avatar_box = "[avatar_box]"
+        avatar_alpha_label = "[avatar_a]"
+        avatar_out = "[vavatar]"
+
+        if avatar_kind == "video":
+            filter_parts.append(f"[{avatar_input_index}:v]setpts=PTS-STARTPTS{avatar_src}")
+        else:
+            filter_parts.append(f"[{avatar_input_index}:v]format=rgba{avatar_src}")
+
+        filter_parts.append(
+            f"{avatar_src}scale=w={avatar_width}:h={avatar_height}:force_original_aspect_ratio=decrease,"
+            f"format=rgba,pad={avatar_width}:{avatar_height}:(ow-iw)/2:(oh-ih)/2:color=black@0.0"
+            f"{avatar_box}"
+        )
+        filter_parts.append(
+            f"{avatar_box}colorchannelmixer=aa={avatar_alpha:.3f}{avatar_alpha_label}"
+        )
+        filter_parts.append(
+            f"{last_label}{avatar_alpha_label}overlay=eval=frame:shortest=1:x='{x_expr}':y='{y_expr}'{avatar_out}"
+        )
+        last_label = avatar_out
 
     # ── Text watermark filter ──────────────────────────────────────────────
     if text_enabled:
@@ -360,115 +723,116 @@ def apply_watermark(
 
         x_expr_raw, y_expr_raw = _position_expr(position, target="text", cycle_sec=media_duration_sec)
         color_str = _hex_to_ffmpeg_color(font_color_hex, opacity)
-
-        # Bold/italic: ffmpeg drawtext uses fontfile or font name with style suffix
-        # We try to resolve the exact .ttf file to bypass fontconfig unicode issues
-        font_file = _resolve_windows_font(font_family, font_weight, font_style)
-        
-        if font_file:
-            # use absolute font path
-            # Escape path: ffmpeg drawtext needs special escaping for Windows paths
-            ff_font_file = font_file.replace("\\", "\\\\").replace(":", "\\:")
-            font_opt = f"fontfile='{ff_font_file}'"
+        if text_input_index is not None and text_overlay_path:
+            x_expr, y_expr = _position_expr(position, target="overlay", cycle_sec=media_duration_sec)
+            x_expr = _escape_filter_expr(x_expr)
+            y_expr = _escape_filter_expr(y_expr)
+            out_label = "[vtxt]"
+            filter_parts.append(
+                f"{last_label}[{text_input_index}:v]overlay=eval=frame:x='{x_expr}':y='{y_expr}'{out_label}"
+            )
+            last_label = out_label
         else:
-            # fallback to font name + style hint via 'font' option
-            font_with_style = font_family
-            if font_weight == "bold" and font_style == "italic":
-                font_with_style = f"{font_family}:Bold Italic"
-            elif font_weight == "bold":
-                font_with_style = f"{font_family}:Bold"
-            elif font_style == "italic":
-                font_with_style = f"{font_family}:Italic"
-            font_with_style = _sanitize_text(font_with_style)
-            font_opt = f"font='{font_with_style}'"
+            # Fallback only: use legacy drawtext when Qt image rendering is unavailable.
+            font_file = _resolve_windows_font(font_family, font_weight, font_style, raw_text)
 
-        transparent_fill = _hex_to_ffmpeg_color(font_color_hex, 0)
+            if font_file:
+                ff_font_file = font_file.replace("\\", "\\\\").replace(":", "\\:")
+                font_opt = f"fontfile='{ff_font_file}'"
+            else:
+                font_with_style = font_family
+                if font_weight == "bold" and font_style == "italic":
+                    font_with_style = f"{font_family}:Bold Italic"
+                elif font_weight == "bold":
+                    font_with_style = f"{font_family}:Bold"
+                elif font_style == "italic":
+                    font_with_style = f"{font_family}:Italic"
+                font_with_style = _sanitize_text(font_with_style)
+                font_opt = f"font='{font_with_style}'"
 
-        def _drawtext_opts(
-            x_raw: str,
-            y_raw: str,
-            font_color: str,
-            border_w: int = 0,
-            border_color: str = "",
-            shadow_x: int = 0,
-            shadow_y: int = 0,
-            shadow_color: str = "",
-        ) -> str:
-            x_expr = _escape_filter_expr(x_raw)
-            y_expr = _escape_filter_expr(y_raw)
-            opts = [
-                f"text='{text}'",
-                font_opt,
-                f"fontsize={font_size}",
-                f"fontcolor={font_color}",
-                f"x='{x_expr}'",
-                f"y='{y_expr}'",
-            ]
-            if border_w > 0 and border_color:
-                opts.append(f"borderw={border_w}")
-                opts.append(f"bordercolor={border_color}")
-            if shadow_x or shadow_y:
-                opts.append(f"shadowx={int(shadow_x)}")
-                opts.append(f"shadowy={int(shadow_y)}")
-                if shadow_color:
-                    opts.append(f"shadowcolor={shadow_color}")
-            if letter_spacing > 0:
-                opts.append("expansion=normal")
-            return ":".join(opts)
+            transparent_fill = _hex_to_ffmpeg_color(font_color_hex, 0)
 
-        if render_style == "normal":
-            out_label = "[vtxt]"
-            drawtext = _drawtext_opts(
-                x_raw=x_expr_raw,
-                y_raw=y_expr_raw,
-                font_color=color_str,
-            )
-            filter_parts.append(f"{last_label}drawtext={drawtext}{out_label}")
-            last_label = out_label
+            def _drawtext_opts(
+                x_raw: str,
+                y_raw: str,
+                font_color: str,
+                border_w: int = 0,
+                border_color: str = "",
+                shadow_x: int = 0,
+                shadow_y: int = 0,
+                shadow_color: str = "",
+            ) -> str:
+                x_expr = _escape_filter_expr(x_raw)
+                y_expr = _escape_filter_expr(y_raw)
+                opts = [
+                    f"text='{text}'",
+                    font_opt,
+                    f"fontsize={font_size}",
+                    f"fontcolor={font_color}",
+                    f"x='{x_expr}'",
+                    f"y='{y_expr}'",
+                ]
+                if border_w > 0 and border_color:
+                    opts.append(f"borderw={border_w}")
+                    opts.append(f"bordercolor={border_color}")
+                if shadow_x or shadow_y:
+                    opts.append(f"shadowx={int(shadow_x)}")
+                    opts.append(f"shadowy={int(shadow_y)}")
+                    if shadow_color:
+                        opts.append(f"shadowcolor={shadow_color}")
+                if letter_spacing > 0:
+                    opts.append("expansion=normal")
+                return ":".join(opts)
 
-        elif render_style == "outline_hollow":
-            # Stable hollow: transparent fill + visible stroke.
-            border_w = max(1, int(round(font_size * 0.06)))
-            out_label = "[vtxt]"
-            drawtext = _drawtext_opts(
-                x_raw=x_expr_raw,
-                y_raw=y_expr_raw,
-                font_color=transparent_fill,
-                border_w=border_w,
-                border_color=color_str,
-            )
-            filter_parts.append(f"{last_label}drawtext={drawtext}{out_label}")
-            last_label = out_label
+            if render_style == "normal":
+                out_label = "[vtxt]"
+                drawtext = _drawtext_opts(
+                    x_raw=x_expr_raw,
+                    y_raw=y_expr_raw,
+                    font_color=color_str,
+                )
+                filter_parts.append(f"{last_label}drawtext={drawtext}{out_label}")
+                last_label = out_label
 
-        else:  # outline_shadow
-            # Readable style:
-            # 1) offset shadow fill
-            # 2) main fill + stroke
-            border_w = max(1, int(round(font_size * 0.06)))
-            shadow_color = _hex_to_ffmpeg_color("#000000", shadow_alpha)
-            shadow_x_raw = f"({x_expr_raw})+{shadow_offset}"
-            shadow_y_raw = f"({y_expr_raw})+{shadow_offset}"
-            fill_color = _hex_to_ffmpeg_color("#FFFFFF", opacity)
+            elif render_style == "outline_hollow":
+                border_w = max(1, int(round(font_size * 0.06)))
+                out_label = "[vtxt]"
+                drawtext = _drawtext_opts(
+                    x_raw=x_expr_raw,
+                    y_raw=y_expr_raw,
+                    font_color=transparent_fill,
+                    border_w=border_w,
+                    border_color=color_str,
+                )
+                filter_parts.append(f"{last_label}drawtext={drawtext}{out_label}")
+                last_label = out_label
 
-            shadow_label = "[vtxt_sh]"
-            out_label = "[vtxt]"
+            else:  # outline_shadow
+                border_w = max(1, int(round(font_size * 0.06)))
+                shadow_color = _hex_to_ffmpeg_color("#000000", shadow_alpha)
+                shadow_x_raw = f"({x_expr_raw})+{shadow_offset}"
+                shadow_y_raw = f"({y_expr_raw})+{shadow_offset}"
+                fill_color = _hex_to_ffmpeg_color("#FFFFFF", opacity)
 
-            shadow_draw = _drawtext_opts(
-                x_raw=shadow_x_raw,
-                y_raw=shadow_y_raw,
-                font_color=shadow_color,
-            )
-            main_draw = _drawtext_opts(
-                x_raw=x_expr_raw,
-                y_raw=y_expr_raw,
-                font_color=fill_color,
-                border_w=border_w,
-                border_color=color_str,
-            )
+                shadow_label = "[vtxt_sh]"
+                out_label = "[vtxt]"
 
-            filter_parts.append(f"{last_label}drawtext={shadow_draw}{shadow_label}")
-            filter_parts.append(f"{shadow_label}drawtext={main_draw}{out_label}")
-            last_label = out_label
+                shadow_draw = _drawtext_opts(
+                    x_raw=shadow_x_raw,
+                    y_raw=shadow_y_raw,
+                    font_color=shadow_color,
+                )
+                main_draw = _drawtext_opts(
+                    x_raw=x_expr_raw,
+                    y_raw=y_expr_raw,
+                    font_color=fill_color,
+                    border_w=border_w,
+                    border_color=color_str,
+                )
+
+                filter_parts.append(f"{last_label}drawtext={shadow_draw}{shadow_label}")
+                filter_parts.append(f"{shadow_label}drawtext={main_draw}{out_label}")
+                last_label = out_label
 
     # ── Logo watermark filter ──────────────────────────────────────────────
     if logo_enabled and logo_path:
@@ -521,21 +885,27 @@ def apply_watermark(
     if progress_cb:
         progress_cb(f"    WaterMark: applying to {input_path.name}...")
 
+    ok = False
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
         if r.returncode == 0 and output_path.exists() and output_path.stat().st_size > 0:
             if progress_cb:
                 progress_cb(f"    WaterMark: done → {output_path.name}")
-            return True
+            ok = True
         else:
             if progress_cb:
                 err = (r.stderr or "")[-200:]
                 progress_cb(f"    WaterMark: ffmpeg error: {err}")
-            return False
     except Exception as e:
         if progress_cb:
             progress_cb(f"    WaterMark: exception: {e}")
-        return False
+    finally:
+        for temp_path in temp_overlay_files:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+    return ok
 
 
 def apply_watermark_inplace(
@@ -543,12 +913,13 @@ def apply_watermark_inplace(
     creator_folder: Path,
     wm_text_cfg: Dict,
     wm_logo_cfg: Dict,
+    wm_avatar_cfg: Dict,
     keep_original: bool = False,
     ffmpeg: str = None,
     progress_cb: Callable[[str], None] = None,
-) -> Path:
+) -> Optional[Path]:
     """
-    Apply watermark to video_path. Returns path to watermarked file.
+    Apply watermark to video_path. Returns final output path on success, else None.
     If keep_original=False, replaces original. Otherwise saves as _wm suffix.
     """
     video_path = Path(video_path)
@@ -560,6 +931,7 @@ def apply_watermark_inplace(
         creator_folder=creator_folder,
         wm_text_cfg=wm_text_cfg,
         wm_logo_cfg=wm_logo_cfg,
+        wm_avatar_cfg=wm_avatar_cfg,
         ffmpeg=ffmpeg,
         progress_cb=progress_cb,
     )
@@ -571,7 +943,7 @@ def apply_watermark_inplace(
                 tmp_out.unlink()
             except Exception:
                 pass
-        return video_path  # Return original unchanged
+        return None
 
     if keep_original:
         final_out = video_path.with_name(f"{video_path.stem}_wm{video_path.suffix}")
@@ -583,8 +955,15 @@ def apply_watermark_inplace(
     else:
         # Replace original
         try:
-            video_path.unlink()
-            tmp_out.rename(video_path)
-        except Exception:
-            pass
-        return video_path
+            if video_path.exists():
+                video_path.unlink()
+            tmp_out.replace(video_path)
+            return video_path
+        except Exception as exc:
+            if progress_cb:
+                progress_cb(
+                    f"    WaterMark: finalization warning for {video_path.name}: {exc}"
+                )
+            if tmp_out.exists():
+                return tmp_out
+            return None

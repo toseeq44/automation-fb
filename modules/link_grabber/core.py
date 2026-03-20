@@ -1795,6 +1795,32 @@ def _get_ytdlp_binary_path() -> str:
         return 'yt-dlp'
 
 
+class _YTDLPQuietLogger:
+    """Route yt-dlp Python API messages through app logging instead of raw stderr."""
+
+    @staticmethod
+    def _normalize(message: str) -> str:
+        return re.sub(r"\s+", " ", str(message or "").strip())
+
+    def debug(self, message: str) -> None:
+        text = self._normalize(message)
+        if not text or text.startswith("[debug]"):
+            return
+        logging.debug("yt-dlp: %s", text)
+
+    def warning(self, message: str) -> None:
+        text = self._normalize(message)
+        if not text:
+            return
+        logging.warning("yt-dlp: %s", text)
+
+    def error(self, message: str) -> None:
+        text = self._normalize(message)
+        if not text:
+            return
+        logging.warning("yt-dlp: %s", text)
+
+
 def _execute_ytdlp_dual(url: str, options: dict, proxy: str = None, user_agent: str = None) -> typing.List[dict]:
     """
     DUAL YT-DLP APPROACH: Try Python API first, fallback to binary
@@ -1828,7 +1854,10 @@ def _execute_ytdlp_dual(url: str, options: dict, proxy: str = None, user_agent: 
 
         logging.debug("Trying yt-dlp Python API...")
 
-        with yt_dlp.YoutubeDL(options) as ydl:
+        python_api_options = dict(options)
+        python_api_options['logger'] = _YTDLPQuietLogger()
+
+        with yt_dlp.YoutubeDL(python_api_options) as ydl:
             info = ydl.extract_info(url, download=False)
 
             if info:
@@ -3945,11 +3974,13 @@ def extract_links_intelligent(
         options = options or {}
         max_videos = int(options.get('max_videos', 0) or 0)
         force_all_methods = bool(options.get('force_all_methods', False))
+        respect_global_exhaustive_mode = bool(options.get('respect_global_exhaustive_mode', True))
         use_instaloader = bool(options.get('use_instaloader', False))
         interactive_login_fallback = bool(options.get('interactive_login_fallback', True))
         manual_login_wait_seconds = int(options.get('manual_login_wait_seconds', 90) or 90)
         managed_profile_only = bool(options.get('managed_profile_only', False))
         cookie_browser = options.get('cookie_browser')  # "chrome", "firefox", "edge", or None
+        browser_max_scroll_attempts = options.get('browser_max_scroll_attempts')
         yt_content_type = options.get('yt_content_type', 'all')  # "all" | "shorts" | "long"
         print(f"[YT-Tab] options.yt_content_type = {yt_content_type!r}")
         explicit_browser_mode = bool(cookie_browser)
@@ -4078,7 +4109,9 @@ def extract_links_intelligent(
         active_proxy = parsed_proxies[0] if parsed_proxies else None  # Use first proxy if available
         use_enhancements = options.get('use_enhancements', True)  # Enable enhancements by default
         from .config import get_exhaustive_mode
-        exhaustive_mode = force_all_methods or get_exhaustive_mode()
+        exhaustive_mode = force_all_methods or (
+            respect_global_exhaustive_mode and get_exhaustive_mode()
+        )
 
         expected_count = None
         if platform_key == 'instagram' and exhaustive_mode:
@@ -4206,6 +4239,7 @@ def extract_links_intelligent(
                     platform_key=platform_key,
                     content_filter=content_filter_type,
                     max_items=max_videos,
+                    max_scroll_attempts_override=browser_max_scroll_attempts,
                     progress_callback=progress_callback,
                 )
                 if browser_entries:
@@ -4636,19 +4670,22 @@ def extract_links_intelligent(
                         progress_callback(f"Waiting {delay:.1f}s...")
                     time.sleep(delay)
 
-        # â”€â”€ Step 2.3 Tab Fallback: if primary tab yielded 0 results, try others â”€
-        # Only runs for YouTube profile URLs; only uses fast (non-browser) methods.
+        # â”€â”€ Step 2.3 Tab Fallback: only expand into extra tabs when we still need more â”€
+        # This keeps creator-profile extraction result-driven instead of always
+        # collecting homepage + videos + shorts when one pass already satisfied the need.
         _url_type_fb   = options.get('_url_type', '')
         _chosen_tab_fb = options.get('_chosen_tab', '')
         _avail_tabs_fb = options.get('_available_tabs', [])
         _base_url_fb   = options.get('_profile_base_url', _profile_base_url)
+        _need_more_entries_for_tab_fallback = (not entries) or (
+            max_videos > 0 and len(entries) < max_videos
+        )
 
-        # Always try remaining tabs for YouTube profiles so both shorts + long
-        # videos are available for yt_content_type filtering in selection_policy.
         if (
             platform_key == 'youtube'
             and _url_type_fb == 'profile'
             and _avail_tabs_fb
+            and _need_more_entries_for_tab_fallback
         ):
             remaining_tabs = [
                 t for t in _avail_tabs_fb
@@ -4927,6 +4964,7 @@ def extract_links_intelligent(
                                     _r_entries = auth_manager.grab_links_via_browser(
                                         url=url, platform_key=platform_key,
                                         content_filter=_content_filter, max_items=max_videos,
+                                        max_scroll_attempts_override=browser_max_scroll_attempts,
                                         progress_callback=progress_callback)
                                     for _re in (_r_entries or []):
                                         _rurl = _re.get("url")

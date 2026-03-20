@@ -13,7 +13,6 @@ Features:
 
 import json
 import random
-import socket
 import time
 import uuid
 import threading
@@ -27,16 +26,27 @@ from modules.shared.pacing import get_delay_multiplier, resolve_user_plan
 
 
 def _is_network_available() -> bool:
-    """Quick check if internet is reachable (DNS lookup to Google)."""
-    try:
-        socket.create_connection(("8.8.8.8", 53), timeout=3)
-        return True
-    except OSError:
-        return False
+    """Quick check if internet is reachable via HTTP HEAD request."""
+    import urllib.request
+    for url in ("https://www.google.com", "https://www.facebook.com"):
+        try:
+            req = urllib.request.Request(url, method="HEAD")
+            urllib.request.urlopen(req, timeout=5)
+            return True
+        except Exception:
+            continue
+    return False
 
 
 def _state_file() -> Path:
     return Path.home() / "Desktop" / "Links Grabber" / ".queue_state.json"
+
+
+def _creator_display_name(name: str) -> str:
+    text = str(name or "").strip()
+    if not text:
+        return "@?"
+    return text if text.startswith("@") else f"@{text}"
 
 
 class CreatorQueueManager(QThread):
@@ -54,6 +64,7 @@ class CreatorQueueManager(QThread):
     queue_progress       = pyqtSignal(str)
     creator_started      = pyqtSignal(str)
     creator_finished     = pyqtSignal(str, bool)
+    creator_progress_msg = pyqtSignal(str, str)   # folder_name, raw progress text
     creator_progress_pct = pyqtSignal(str, int)   # folder_name, percent (0-100)
     queue_finished       = pyqtSignal()
     paused               = pyqtSignal()
@@ -214,9 +225,10 @@ class CreatorQueueManager(QThread):
 
             folder = self._queue[self._current_index]
             creator_name = folder.name
+            creator_display = _creator_display_name(creator_name)
 
             self.queue_progress.emit(
-                f"Queue: {self._current_index + 1}/{total} — @{creator_name}"
+                f"Queue: {self._current_index + 1}/{total} — {creator_display}"
             )
             self.creator_started.emit(creator_name)
             self._save_state()
@@ -283,6 +295,7 @@ class CreatorQueueManager(QThread):
         
         # Local state for combined status display
         status_state = {"msg": "", "speed": "", "eta": ""}
+        creator_display = _creator_display_name(folder.name)
 
         worker = CreatorDownloadWorker(folder, creator_url)
         self._current_worker = worker
@@ -292,7 +305,7 @@ class CreatorQueueManager(QThread):
             worker.pause()
 
         def _update_combined_status():
-            txt = f"@{folder.name}: {status_state['msg']}"
+            txt = f"{creator_display}: {status_state['msg']}"
             if status_state['speed']:
                 txt += f" | {status_state['speed']}"
             if status_state['eta']:
@@ -300,6 +313,7 @@ class CreatorQueueManager(QThread):
             self.queue_progress.emit(txt)
 
         def _on_progress(msg: str):
+            self.creator_progress_msg.emit(folder.name, msg)
             status_state["msg"] = msg
             _update_combined_status()
 

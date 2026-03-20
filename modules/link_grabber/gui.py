@@ -1284,26 +1284,43 @@ FIX: Check proxy username/password, verify format
         """Check per-platform cookie files and display validity status."""
         try:
             from modules.video_downloader.core import _validate_cookie_file
+            from modules.shared.session_authority import get_session_authority
         except ImportError:
             return
 
         order = ["youtube", "tiktok", "instagram", "twitter", "facebook"]
         parts = []
+        authority = None
+        try:
+            authority = get_session_authority()
+        except Exception:
+            authority = None
         for platform in order:
             cookie_file = self.cookies_dir / f"{platform}.txt"
             if not cookie_file.exists():
                 parts.append(f"\u274c {platform.title()}")
                 continue
             result = _validate_cookie_file(str(cookie_file))
+            strict_auth = False
+            try:
+                if authority is not None:
+                    strict_auth = bool(authority._cookie_file_has_auth(cookie_file, platform))
+            except Exception:
+                strict_auth = False
+            total_cookies = max(int(result.get("total_cookies", 0) or 0), 1)
+            expired_cookies = int(result.get("expired_cookies", 0) or 0)
+            expired_ratio = expired_cookies / total_cookies
             if not result.get("valid"):
                 parts.append(f"\u274c {platform.title()}")
-            elif result.get("expired_cookies", 0) > 0:
-                parts.append(f"\u26a0 {platform.title()}")
+            elif strict_auth and result.get("fresh", True) and expired_ratio <= 0.5:
+                parts.append(f"\u2705 {platform.title()}")
             elif not result.get("fresh", True):
                 age = result.get("age_days", 0)
                 parts.append(f"\u26a0 {platform.title()} ({age}d)")
+            elif strict_auth:
+                parts.append(f"\u26a0 {platform.title()}")
             else:
-                parts.append(f"\u2705 {platform.title()}")
+                parts.append(f"\u26a0 {platform.title()}")
 
         if hasattr(self, "cookie_validity_label"):
             self.cookie_validity_label.setText("Cookies: " + "  ".join(parts))

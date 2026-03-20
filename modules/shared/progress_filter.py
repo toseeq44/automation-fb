@@ -34,6 +34,9 @@ _SUPPRESS_PATTERNS = [
     re.compile(r"auth:\s+synced|cookie sync|managed profile busy|pacing profile", re.I),
     re.compile(r"attempting download\.\.\.|removed leftover file|removed from .*\.txt", re.I),
     re.compile(r"fix:\s+copy ffmpeg folder|bundled ffmpeg failed", re.I),
+    re.compile(r"ffmpeg ok:|ffprobe", re.I),
+    re.compile(r"demucs .*fallback|demucs .*exception|dynamic link library|c10\.dll|torch\\lib", re.I),
+    re.compile(r"ffmpeg error:|error applying option|parsed_afftdn|value .* out of range", re.I),
 ]
 
 
@@ -151,10 +154,36 @@ def filter_for_gui(msg: str) -> str | None:
         return "Checking profile..."
     if "selected" in lower and "preparing downloads" in lower:
         return "Preparing download..."
+    if lower.startswith("selected download ("):
+        return "Downloading..."
     if "starting downloads" in lower:
         return "Starting download..."
     if "download queue ready" in lower:
         return "Starting download..."
+    if "editing: splitting into" in lower:
+        return "Splitting video..."
+    if lower.startswith("split part "):
+        return "Splitting video..."
+    if "editing: split+edit" in lower:
+        return "Editing clips..."
+    if "split+edit: editing" in lower:
+        return "Editing clips..."
+    if "split+edit: reducing background music" in lower:
+        return "Removing background music..."
+    if "split+edit: demucs vocals ready" in lower:
+        return "Background music removed"
+    if "split+edit: enhancing voice" in lower:
+        return "Enhancing voice..."
+    if "split+edit: done" in lower:
+        return "Clip edited"
+    if "split+edit: failed" in lower:
+        return "Editing failed"
+    if "watermark: applying" in lower:
+        return "Applying watermark..."
+    if "watermark: done" in lower:
+        return "Watermark done"
+    if "continuing:" in lower and link_match and "links extracted" in lower:
+        return f"Found {link_match.group(1)} links"
     if "no primary selection available" in lower:
         return "Trying backup links..."
     if "all videos already downloaded" in lower:
@@ -162,4 +191,35 @@ def filter_for_gui(msg: str) -> str | None:
     if "no existing media files found" in lower:
         return "Cleanup: nothing to remove"
 
-    return stripped
+    return None
+
+
+def filter_queue_progress_for_card(msg: str, creator_name: str) -> str | None:
+    """
+    Extract and clean a creator-specific queue progress message for card UI.
+
+    Queue-level messages like "Queue: 2/26" should not overwrite the active
+    card. Only messages explicitly scoped to the current creator are returned.
+    """
+    text = str(msg or "").strip()
+    name = str(creator_name or "").strip()
+    if not text or not name:
+        return None
+
+    bare = name.lstrip("@")
+    candidates = []
+    for candidate in (name, bare, f"@{bare}", f"@@{bare}"):
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+
+    scoped = None
+    for candidate in candidates:
+        prefix = f"{candidate}: "
+        if text.startswith(prefix):
+            scoped = text[len(prefix):].strip()
+            break
+
+    if not scoped:
+        return None
+
+    return filter_for_gui(scoped)

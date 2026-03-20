@@ -6,6 +6,8 @@ import re
 import time
 import random
 import shutil
+import sys
+from functools import lru_cache
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -13,6 +15,10 @@ from typing import Optional
 import yt_dlp
 from PyQt5.QtCore import QThread, pyqtSignal
 from modules.shared.auth_network_hub import AuthNetworkHub
+from modules.config.paths import ensure_deno_in_path
+
+# Ensure Deno JS runtime is in PATH for yt-dlp YouTube EJS challenge solving
+ensure_deno_in_path()
 
 from .url_utils import (
     coerce_bool,
@@ -56,6 +62,132 @@ def _extract_creator_from_url(url: str) -> str:
     except Exception:
         pass
     return ""
+
+
+def _build_download_failure_reason(last_dl_error: str) -> str:
+    reason = str(last_dl_error or "").strip()
+    return reason or "All download methods failed"
+
+
+def _clean_download_error_message(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "").strip())
+
+
+def _looks_informative_download_error(text: str) -> bool:
+    lower = _clean_download_error_message(text).lower()
+    if not lower:
+        return False
+    markers = (
+        "sign in",
+        "not a bot",
+        "requested format is not available",
+        "only images are available",
+        "po token",
+        "n challenge",
+        "login required",
+        "private",
+        "player blocked",
+        "unable to connect to proxy",
+        "proxy",
+        "http error 403",
+        "no video formats found",
+        "missing a url",
+        "failed to extract",
+    )
+    return any(marker in lower for marker in markers)
+
+
+def _pick_more_informative_error(current: str, candidate: str) -> str:
+    current_clean = _clean_download_error_message(current)
+    candidate_clean = _clean_download_error_message(candidate)
+    if not candidate_clean:
+        return current_clean
+    if not current_clean:
+        return candidate_clean
+    current_info = _looks_informative_download_error(current_clean)
+    candidate_info = _looks_informative_download_error(candidate_clean)
+    if candidate_info and not current_info:
+        return candidate_clean
+    if candidate_info == current_info and len(candidate_clean) > len(current_clean):
+        return candidate_clean
+    return current_clean
+
+
+@lru_cache(maxsize=1)
+def _get_impersonation_support() -> dict:
+    """Return the best available yt-dlp impersonation target, if any."""
+    support = {
+        "available": False,
+        "cli": None,
+        "py": None,
+        "detail": "no impersonate target is available",
+    }
+    try:
+        with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
+            available = list(ydl._get_available_impersonate_targets() or [])
+        if not available:
+            return support
+
+        normalized = []
+        for item in available:
+            target = item[0] if isinstance(item, tuple) and item else item
+            if target:
+                normalized.append(target)
+        if not normalized:
+            return support
+
+        def _sort_key(target):
+            client = str(getattr(target, "client", "") or "").lower()
+            order = {"chrome": 0, "edge": 1, "safari": 2}
+            return (order.get(client, 99), str(target).lower())
+
+        normalized.sort(key=_sort_key)
+        best = normalized[0]
+        support["available"] = True
+        support["cli"] = str(best)
+        support["py"] = best
+        support["detail"] = ""
+    except Exception as exc:
+        detail = _clean_download_error_message(str(exc))
+        if detail:
+            support["detail"] = detail
+    return support
+
+
+def _apply_tiktok_impersonation_opts(url: str, ydl_opts: dict) -> bool:
+    """Add yt-dlp impersonation to Python API options for TikTok when available."""
+    if _detect_platform(url) != "tiktok":
+        return False
+    support = _get_impersonation_support()
+    target = support.get("py")
+    if not target:
+        return False
+    ydl_opts.setdefault("impersonate", target)
+    return True
+
+
+def _apply_tiktok_impersonation_cli(url: str, cmd: list) -> bool:
+    """Add yt-dlp CLI impersonation args for TikTok when available."""
+    if _detect_platform(url) != "tiktok":
+        return False
+    support = _get_impersonation_support()
+    target = support.get("cli")
+    if not target:
+        return False
+    cmd.extend(["--impersonate", target])
+    return True
+
+
+def _get_tiktok_impersonation_warning() -> str:
+    """Explain why TikTok may still fail even with valid cookies."""
+    support = _get_impersonation_support()
+    if support.get("available"):
+        return ""
+    detail = support.get("detail") or "no impersonate target is available"
+    return (
+        "TikTok browser impersonation runtime missing "
+        f"(curl_cffi). Cookies/login alone may still fail: {detail}"
+    )
 
 
 def _get_random_user_agent() -> str:
@@ -173,6 +305,71 @@ def _resolve_ffmpeg_path() -> Optional[str]:
                 return str(fallback)
 
     return None
+
+
+def _resolve_js_runtime_path(runtime_name: str) -> Optional[str]:
+    """Resolve bundled or system JavaScript runtime path for yt-dlp."""
+    runtime = str(runtime_name or "").strip().lower()
+    if not runtime:
+        return None
+
+    exe_name = f"{runtime}.exe" if os.name == "nt" else runtime
+
+    env_path = os.getenv(f"{runtime.upper()}_PATH")
+    if env_path:
+        env_candidate = Path(env_path)
+        if env_candidate.exists():
+            return str(env_candidate)
+
+    candidates = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        base = Path(meipass)
+        candidates.extend([
+            base / "third_party" / f"{runtime}_runtime" / exe_name,
+            base / f"{runtime}_runtime" / exe_name,
+        ])
+
+    repo_root = Path(__file__).resolve().parents[2]
+    candidates.extend([
+        repo_root / "third_party" / f"{runtime}_runtime" / exe_name,
+        repo_root / f"{runtime}_runtime" / exe_name,
+    ])
+
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+
+    which_path = shutil.which(runtime)
+    if which_path:
+        return which_path
+
+    return None
+
+
+def _build_js_runtime_config() -> dict:
+    """Build yt-dlp js_runtimes config preferring bundled Deno."""
+    deno_path = _resolve_js_runtime_path("deno")
+    if deno_path:
+        return {"deno": {"path": deno_path}}
+
+    node_path = _resolve_js_runtime_path("node")
+    if node_path:
+        return {"node": {"path": node_path}}
+
+    return {}
+
+
+def _build_js_runtime_cli_args() -> list:
+    """Build command-line js runtime args for yt-dlp CLI."""
+    runtime_cfg = _build_js_runtime_config()
+    if not runtime_cfg:
+        return []
+    runtime_name, runtime_options = next(iter(runtime_cfg.items()))
+    runtime_path = str(runtime_options.get("path") or "").strip()
+    if runtime_path:
+        return ["--js-runtimes", f"{runtime_name}:{runtime_path}"]
+    return ["--js-runtimes", runtime_name]
 
 def _validate_cookie_file(cookie_file: str, max_age_days: int = 14) -> dict:
     """
@@ -344,6 +541,9 @@ class VideoDownloaderThread(QThread):
         self.cancelled = False
         self.success_count = 0
         self.skipped_count = 0
+        self.last_verified_output = ""
+        self.verified_outputs = []
+        self._tiktok_impersonation_warned = False
         self.skip_recent_window = coerce_bool(
             self.options.get('skip_recent_window'),
             default=self.skip_recent_window,
@@ -781,6 +981,25 @@ class VideoDownloaderThread(QThread):
             self.progress.emit(f"   {tag} no valid media file created")
         return new_files
 
+    def _remember_verified_output(self, url: str, verified_files: list) -> Optional[str]:
+        """Persist the exact verified media path for downstream callers."""
+        if not verified_files:
+            return None
+        try:
+            verified_path = max(
+                verified_files,
+                key=lambda fp: os.stat(fp).st_mtime_ns,
+            )
+        except OSError:
+            verified_path = verified_files[0]
+        verified_path = os.path.abspath(str(verified_path))
+        self.last_verified_output = verified_path
+        try:
+            self.verified_outputs.append({"url": str(url or ""), "path": verified_path})
+        except Exception:
+            pass
+        return verified_path
+
     def _quarantined_proxies(self) -> set:
         """Return the set of proxy URLs quarantined this session."""
         if not hasattr(self, '_proxy_quarantine'):
@@ -811,7 +1030,9 @@ class VideoDownloaderThread(QThread):
 
         Returns True only when a valid media file is confirmed on disk.
         """
+        self._last_method_error = ""
         before = self._snapshot_folder(output_path)
+        last_error = ""
 
         # Attempt 1: with healthy proxy
         proxy = self._get_healthy_proxy()
@@ -819,13 +1040,22 @@ class VideoDownloaderThread(QThread):
             ydl_opts['proxy'] = proxy
             self.progress.emit(f"   {tag} proxy: {proxy.split('@')[-1][:25]}")
             try:
-                retcode = self._run_ytdlp(ydl_opts, url)
+                self._run_ytdlp(ydl_opts, url)
                 new_files = self._verify_download(output_path, before, tag)
                 if new_files:
+                    self._last_method_error = ""
                     return True
+                detailed_error = _clean_download_error_message(
+                    getattr(self, "_last_method_error", "")
+                )
+                last_error = _pick_more_informative_error(
+                    last_error,
+                    detailed_error or "reported success but no verified media created",
+                )
                 # No file created — quarantine proxy (dead or silently failing)
                 self._quarantine_proxy(proxy)
-            except Exception:
+            except Exception as exc:
+                last_error = _pick_more_informative_error(last_error, str(exc))
                 self._quarantine_proxy(proxy)
 
         # Attempt 2: without proxy
@@ -836,17 +1066,76 @@ class VideoDownloaderThread(QThread):
             self._run_ytdlp(ydl_opts, url)
             new_files = self._verify_download(output_path, before, tag)
             if new_files:
+                self._last_method_error = ""
                 return True
-        except Exception:
-            pass
+            detailed_error = _clean_download_error_message(
+                getattr(self, "_last_method_error", "")
+            )
+            last_error = _pick_more_informative_error(
+                last_error,
+                detailed_error or "reported success but no verified media created",
+            )
+        except Exception as exc:
+            last_error = _pick_more_informative_error(last_error, str(exc))
 
+        self._last_method_error = last_error or "no verified media created"
         return False
 
-    @staticmethod
-    def _run_ytdlp(ydl_opts: dict, url: str) -> int:
-        """Run yt-dlp and return its exit code (0 = success)."""
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            return ydl.download([url])
+    def _run_ytdlp(self, ydl_opts: dict, url: str) -> int:
+        """Run yt-dlp and raise a useful error when extraction fails."""
+        opts = dict(ydl_opts or {})
+        opts.setdefault('quiet', True)
+        opts.setdefault('no_warnings', True)
+        if not opts.get('js_runtimes'):
+            js_runtime_cfg = _build_js_runtime_config()
+            if js_runtime_cfg:
+                opts['js_runtimes'] = js_runtime_cfg
+        captured_messages = []
+
+        if not opts.get('logger'):
+            class _CapturingLogger:
+                def debug(self, msg):
+                    cleaned = _clean_download_error_message(msg)
+                    if _looks_informative_download_error(cleaned):
+                        captured_messages.append(cleaned)
+                    return None
+
+                def warning(self, msg):
+                    cleaned = _clean_download_error_message(msg)
+                    if cleaned:
+                        captured_messages.append(cleaned)
+                    return None
+
+                def error(self, msg):
+                    cleaned = _clean_download_error_message(msg)
+                    if cleaned:
+                        captured_messages.append(cleaned)
+                    return None
+
+            opts['logger'] = _CapturingLogger()
+
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                rc = ydl.download([url])
+        except Exception as exc:
+            detail = ""
+            detail = _pick_more_informative_error(detail, str(exc))
+            for msg in reversed(captured_messages):
+                detail = _pick_more_informative_error(detail, msg)
+            self._last_method_error = detail or _clean_download_error_message(str(exc))
+            raise RuntimeError(detail or str(exc)) from exc
+
+        if rc != 0:
+            detail = ""
+            for msg in reversed(captured_messages):
+                detail = _pick_more_informative_error(detail, msg)
+            self._last_method_error = detail or f"yt-dlp exit code {rc}"
+            raise RuntimeError(detail or f"yt-dlp exit code {rc}")
+        detail = ""
+        for msg in reversed(captured_messages):
+            detail = _pick_more_informative_error(detail, msg)
+        self._last_method_error = detail if _looks_informative_download_error(detail) else ""
+        return rc
 
     def _cleanup_tracking_files(self, folder_path: str):
         """Remove any leftover tracking files (for single mode cleanup)"""
@@ -957,15 +1246,34 @@ class VideoDownloaderThread(QThread):
         logging.info("[VideoDownloader] No cookie file found for %s", platform)
         return None
 
+    def _maybe_warn_tiktok_impersonation_runtime(self) -> None:
+        """Emit a clear once-per-thread warning when TikTok impersonation support is missing."""
+        if self._tiktok_impersonation_warned:
+            return
+        warning = _get_tiktok_impersonation_warning()
+        if not warning:
+            return
+        self._tiktok_impersonation_warned = True
+        self._last_method_error = _pick_more_informative_error(
+            getattr(self, "_last_method_error", ""),
+            warning,
+        )
+        self.progress.emit("   [TikTok] Browser session found, but downloader lacks browser impersonation support")
+        self.progress.emit("   [TikTok] Cookies alone may fail until curl_cffi is bundled/installed")
+
     # -----------------------
     # ==== Download Methods per Platform ====
 
     def _method1_batch_file_approach(self, url, output_path, cookie_file=None):
         try:
+            if 'tiktok.com' in url.lower():
+                self._maybe_warn_tiktok_impersonation_runtime()
             from datetime import datetime
             start_time = datetime.now()
             self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] ðŸš€ [DL-1] YT-DLP Standard")
 
+            if 'tiktok.com' in url.lower():
+                self._maybe_warn_tiktok_impersonation_runtime()
             # Smart yt-dlp detection
             ytdlp_cmd = self._get_ytdlp_command()
             if not ytdlp_cmd:
@@ -997,6 +1305,7 @@ class VideoDownloaderThread(QThread):
                     'Accept-Language': 'en-US,en;q=0.9',
                 }
             }
+            _apply_tiktok_impersonation_opts(url, ydl_opts)
             self._apply_ffmpeg_ydl_opts(ydl_opts)
 
             # Add proxy if available
@@ -1039,6 +1348,7 @@ class VideoDownloaderThread(QThread):
         try:
             if 'tiktok.com' not in url.lower():
                 return False
+            self._maybe_warn_tiktok_impersonation_runtime()
 
             from datetime import datetime
             start_time = datetime.now()
@@ -1184,6 +1494,7 @@ class VideoDownloaderThread(QThread):
                     cmd.extend(_get_chrome120_headers())
                     cmd.extend(self._ffmpeg_cli_args())
                     cmd.extend(['--add-header', 'Referer:https://www.tiktok.com/'])
+                    _apply_tiktok_impersonation_cli(url, cmd)
 
                     # Add proxy if requested.
                     # Prefer proxy pool; fall back to legacy proxy_url/env proxy.
@@ -1261,6 +1572,8 @@ class VideoDownloaderThread(QThread):
 
     def _method3_optimized_ytdlp(self, url, output_path, cookie_file=None):
         try:
+            if 'tiktok.com' in url.lower():
+                self._maybe_warn_tiktok_impersonation_runtime()
             from datetime import datetime
             start_time = datetime.now()
             self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] ðŸ”„ [DL-3] yt-dlp with Cookies")
@@ -1283,6 +1596,7 @@ class VideoDownloaderThread(QThread):
                 'progress_hooks': [self._progress_hook],
                 'http_headers': {'User-Agent': user_agent},  # UA rotation
             }
+            _apply_tiktok_impersonation_opts(url, ydl_opts)
             self._apply_ffmpeg_ydl_opts(ydl_opts)
 
             # Add proxy if available
@@ -1648,12 +1962,20 @@ class VideoDownloaderThread(QThread):
             return False
 
     def _method6_youtube_dl_fallback(self, url, output_path, cookie_file=None):
-        """youtube-dl as final fallback (older but sometimes works)"""
+        """Final CLI fallback using the bundled yt-dlp executable."""
         try:
-            self.progress.emit("ðŸ”„ [DL-6] youtube-dl fallback (legacy)")
+            self.progress.emit("ðŸ”„ [DL-6] yt-dlp CLI fallback")
+            if 'tiktok.com' in url.lower():
+                self._maybe_warn_tiktok_impersonation_runtime()
+            ytdlp_cmd = self._get_ytdlp_command()
+            if not ytdlp_cmd:
+                self._last_method_error = "yt-dlp command not found"
+                self.progress.emit("âš ï¸ yt-dlp CLI not available")
+                return False
+
             format_string = self.format_override or 'best'
             cmd = [
-                'youtube-dl',
+                ytdlp_cmd,
                 '-o', os.path.join(output_path, '%(title).80s.%(ext)s'),
                 '-f', format_string,
                 '--no-warnings',
@@ -1662,6 +1984,8 @@ class VideoDownloaderThread(QThread):
                 '--no-check-certificate'
             ]
             cmd.extend(self._ffmpeg_cli_args())
+            cmd.extend(_build_js_runtime_cli_args())
+            _apply_tiktok_impersonation_cli(url, cmd)
 
             if cookie_file:
                 cmd.extend(['--cookies', cookie_file])
@@ -1676,22 +2000,30 @@ class VideoDownloaderThread(QThread):
                 encoding='utf-8',
                 errors='replace'
             )
+            cli_detail = _clean_download_error_message(
+                f"{result.stderr or ''} {result.stdout or ''}"
+            )
 
             if result.returncode == 0:
-                self.progress.emit("âœ… youtube-dl SUCCESS!")
+                self._last_method_error = cli_detail
+                self.progress.emit("âœ… yt-dlp CLI SUCCESS!")
                 return True
-            else:
-                self.progress.emit("âš ï¸ youtube-dl failed")
-                return False
+
+            self._last_method_error = cli_detail or "yt-dlp CLI fallback failed"
+            self.progress.emit("âš ï¸ yt-dlp CLI failed")
+            return False
 
         except subprocess.TimeoutExpired:
-            self.progress.emit("âš ï¸ youtube-dl timeout")
+            self._last_method_error = "yt-dlp CLI timeout"
+            self.progress.emit("âš ï¸ yt-dlp CLI timeout")
             return False
         except FileNotFoundError:
-            self.progress.emit("âš ï¸ youtube-dl not installed")
+            self._last_method_error = "yt-dlp CLI not installed"
+            self.progress.emit("âš ï¸ yt-dlp CLI not installed")
             return False
         except Exception as e:
-            self.progress.emit(f"âš ï¸ youtube-dl error: {str(e)[:100]}")
+            self._last_method_error = _clean_download_error_message(str(e))
+            self.progress.emit(f"âš ï¸ yt-dlp CLI error: {str(e)[:100]}")
             return False
 
     def _method_youtube_smart(self, url, output_path, cookie_file=None):
@@ -1701,6 +2033,7 @@ class VideoDownloaderThread(QThread):
         and falls back to web which has PO-token issues). Must call them cookie-free.
         """
         try:
+            self._last_method_error = ""
             from datetime import datetime
             start_time = datetime.now()
             self.progress.emit(f"[{start_time.strftime('%H:%M:%S')}] [DL-11] YouTube Smart Download")
@@ -1826,7 +2159,12 @@ class VideoDownloaderThread(QThread):
                                 self.progress.emit(f"   [YT] SUCCESS in {elapsed:.1f}s  [{client}/{cookie_label}]")
                                 return True
                         except Exception as e:
-                            err = str(e).lower()
+                            cleaned_error = _clean_download_error_message(str(e))
+                            self._last_method_error = _pick_more_informative_error(
+                                getattr(self, "_last_method_error", ""),
+                                cleaned_error,
+                            )
+                            err = cleaned_error.lower()
                             if 'requested format is not available' in err:
                                 continue        # try next format for this client
                             elif 'only images are available' in err:
@@ -1862,11 +2200,17 @@ class VideoDownloaderThread(QThread):
             return False
 
         except Exception as e:
+            self._last_method_error = _pick_more_informative_error(
+                getattr(self, "_last_method_error", ""),
+                str(e),
+            )
             self.progress.emit(f"   [YT] error: {str(e)[:120]}")
             return False
 
     def _method4_alternative_formats(self, url, output_path, cookie_file=None):
         try:
+            if 'tiktok.com' in url.lower():
+                self._maybe_warn_tiktok_impersonation_runtime()
             self.progress.emit("[DL-4] Alternative formats")
 
             # Get UA and proxy once for this method
@@ -1907,6 +2251,7 @@ class VideoDownloaderThread(QThread):
                     if current_proxy:
                         ydl_opts['proxy'] = current_proxy
                     if cookie_file: ydl_opts['cookiefile'] = cookie_file
+                    _apply_tiktok_impersonation_opts(url, ydl_opts)
                     self._apply_ffmpeg_ydl_opts(ydl_opts)
                     # Use central verified download with proxy fallback
                     if self._download_with_proxy_fallback(ydl_opts, url, output_path, "[DL-4]"):
@@ -1948,6 +2293,8 @@ class VideoDownloaderThread(QThread):
             # ENHANCED: Add realistic Chrome 120 headers to avoid detection
             cmd.extend(_get_chrome120_headers())
             cmd.extend(self._ffmpeg_cli_args())
+            cmd.extend(_build_js_runtime_cli_args())
+            _apply_tiktok_impersonation_cli(url, cmd)
 
             # Add proxy
             if current_proxy:
@@ -2192,6 +2539,7 @@ class VideoDownloaderThread(QThread):
                 success = False
                 attempted_methods = 0
                 last_dl_error = ""
+                best_dl_error = ""
                 expected_media_kind = str(self.options.get('_expected_media_kind') or "").strip().lower() or None
                 for _m_idx, method in enumerate(methods):
                     if self.cancelled: break
@@ -2200,6 +2548,7 @@ class VideoDownloaderThread(QThread):
                     _dl_start = time.time()
                     method_error = ""
                     try:
+                        self._last_method_error = ""
                         method_before = self._snapshot_folder(folder)
                         method_ok = bool(method(url, folder, cookie_file))
                         verified_files = self._verify_download(
@@ -2207,13 +2556,7 @@ class VideoDownloaderThread(QThread):
                         )
                         if verified_files:
                             success = True
-                            try:
-                                verified_path = max(
-                                    verified_files,
-                                    key=lambda fp: os.stat(fp).st_mtime_ns,
-                                )
-                            except OSError:
-                                verified_path = verified_files[0]
+                            verified_path = self._remember_verified_output(url, verified_files) or str(verified_files[0])
                             verified_name = Path(verified_path).name
                             state_label = "success" if method_ok else "recovered output"
                             self.progress.emit(f"{_dl_tag} {state_label}: {verified_name}")
@@ -2225,13 +2568,18 @@ class VideoDownloaderThread(QThread):
                             except Exception:
                                 pass
                             break
+                        detailed_method_error = _clean_download_error_message(
+                            getattr(self, "_last_method_error", "")
+                        )
                         if method_ok:
-                            method_error = "reported success but created no verified media"
+                            method_error = detailed_method_error or "reported success but created no verified media"
                         else:
-                            method_error = "no verified media created"
+                            method_error = detailed_method_error or "no verified media created"
                     except Exception as e:
                         method_error = str(e)[:200]
-                    last_dl_error = f"{method.__name__}: {method_error}"
+                    candidate_error = f"{method.__name__}: {method_error}"
+                    last_dl_error = candidate_error
+                    best_dl_error = _pick_more_informative_error(best_dl_error, candidate_error)
                     self.progress.emit(f"{_dl_tag} failed: {method_error[:140]}")
                     if attempted_methods < len(methods):
                         _next_m = methods[_m_idx + 1]
@@ -2241,17 +2589,18 @@ class VideoDownloaderThread(QThread):
                         from modules.link_grabber.intelligence import get_learning_system
                         get_learning_system().record_download_performance(
                             _creator, platform, method.__name__,
-                            False, time.time() - _dl_start, last_dl_error)
+                            False, time.time() - _dl_start, candidate_error)
                     except Exception:
                         pass
 
                 # Recovery chain if all methods failed
                 if not success and not self.cancelled:
+                    failure_detail = best_dl_error or last_dl_error
                     try:
                         from modules.shared.failure_classifier import classify_failure, is_auth_failure
                         from modules.shared.recovery_chain import RecoveryChain
                         from modules.shared.session_authority import get_session_authority
-                        _ft = classify_failure(last_dl_error, platform)
+                        _ft = classify_failure(failure_detail, platform)
                         _auth_triggered = is_auth_failure(_ft)
 
                         # Auth-wall fallback: some methods fail with generic
@@ -2287,9 +2636,17 @@ class VideoDownloaderThread(QThread):
                                             self._all_cookie_files.insert(0, _cdp_fresh)
                                             for method in methods[:2]:
                                                 try:
+                                                    method_before = self._snapshot_folder(folder)
                                                     if method(url, folder, _cdp_fresh):
-                                                        success = True
-                                                        break
+                                                        verified_files = self._verify_download(
+                                                            folder,
+                                                            method_before,
+                                                            expected_kind=expected_media_kind,
+                                                        )
+                                                        if verified_files:
+                                                            self._remember_verified_output(url, verified_files)
+                                                            success = True
+                                                            break
                                                 except Exception:
                                                     pass
                             except ImportError:
@@ -2304,9 +2661,17 @@ class VideoDownloaderThread(QThread):
                                         self._all_cookie_files.insert(0, cookie_file)
                                     for method in methods[:2]:
                                         try:
+                                            method_before = self._snapshot_folder(folder)
                                             if method(url, folder, cookie_file):
-                                                success = True
-                                                break
+                                                verified_files = self._verify_download(
+                                                    folder,
+                                                    method_before,
+                                                    expected_kind=expected_media_kind,
+                                                )
+                                                if verified_files:
+                                                    self._remember_verified_output(url, verified_files)
+                                                    success = True
+                                                    break
                                         except Exception:
                                             pass
                     except ImportError:
@@ -2321,7 +2686,7 @@ class VideoDownloaderThread(QThread):
                     self.video_complete.emit(url)
                 elif not self.cancelled:
                     self.progress.emit(f"Failed [{processed}/{total}]")
-                    reason = "All download methods failed"
+                    reason = _build_download_failure_reason(best_dl_error or last_dl_error)
                     self.failed_urls.append((url, reason))
                 pct = int((processed / total) * 100)
                 self.progress_percent.emit(pct)
@@ -2461,7 +2826,8 @@ class VideoDownloaderThread(QThread):
             elif self.success_count > 0:
                 self.finished.emit(True, f"âš ï¸ Partial: {self.success_count} downloaded, {self.skipped_count} skipped")
             else:
-                self.finished.emit(False, f"âŒ Failed - 0 downloaded")
+                fail_reason = self.failed_urls[-1][1] if self.failed_urls else "All download methods failed"
+                self.finished.emit(False, fail_reason)
         except Exception as e:
             self.progress.emit(f"âŒ CRITICAL ERROR: {str(e)[:200]}")
             self.finished.emit(False, f"âŒ Error: {str(e)[:100]}")

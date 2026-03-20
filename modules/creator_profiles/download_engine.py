@@ -14,6 +14,7 @@ import random
 import shutil
 import subprocess
 import re
+import sys
 import threading
 import time
 from datetime import datetime
@@ -33,6 +34,49 @@ from modules.video_downloader.core import VideoDownloaderThread
 # ── Approach Toggle ──────────────────────────────────────────────────────────
 # True = IXBrowser (Approach 2), False = Playwright (Approach 1 — existing)
 ENABLE_IXBROWSER_FALLBACK = True
+
+
+_SCOPED_LIBRARY_LOG_MARKERS = (
+    "modules/link_grabber/",
+    "modules\\link_grabber\\",
+)
+
+
+def _is_scoped_library_record(record: logging.LogRecord, thread_id: int) -> bool:
+    if getattr(record, "thread", None) != thread_id:
+        return False
+    path = str(getattr(record, "pathname", "") or "").replace("\\", "/").lower()
+    return any(marker.replace("\\", "/").lower() in path for marker in _SCOPED_LIBRARY_LOG_MARKERS)
+
+
+class _ScopedLibraryLogSuppressor(logging.Filter):
+    def __init__(self, thread_id: int):
+        super().__init__()
+        self.thread_id = thread_id
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not _is_scoped_library_record(record, self.thread_id)
+
+
+class _ScopedLibraryLogRelay(logging.Handler):
+    def __init__(self, worker: "CreatorDownloadWorker", thread_id: int):
+        super().__init__(level=logging.WARNING)
+        self.worker = worker
+        self.thread_id = thread_id
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if record.levelno < logging.WARNING:
+            return
+        if not _is_scoped_library_record(record, self.thread_id):
+            return
+        try:
+            message = re.sub(r"\s+", " ", str(record.getMessage() or "").strip())
+        except Exception:
+            message = ""
+        if not message:
+            return
+        stage = "ExtractorError" if record.levelno >= logging.ERROR else "ExtractorWarn"
+        self.worker._terminal_log(stage, message)
 
 
 # Ã¢â€â‚¬Ã¢â€â‚¬ User Agent Pool Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
@@ -75,6 +119,139 @@ def _safe_id_from_url(url: str) -> str:
             return m.group(1)
     # Fallback: clean the URL but keep enough to be unique
     return u.split('?')[0].rstrip("/").split('/')[-1]
+
+
+_GENERIC_TITLE_PHRASES = {
+    "instagram post",
+    "instagram reel",
+    "youtube video",
+    "youtube short",
+    "tiktok video",
+    "facebook video",
+    "facebook reel",
+    "video",
+    "post",
+    "reel",
+    "short",
+    "untitled",
+}
+
+_GENERIC_TITLE_WORDS = {
+    "facebook", "instagram", "tiktok", "youtube",
+    "video", "post", "short", "shorts", "reel", "reels",
+    "viral", "fyp",
+}
+
+
+def _clean_video_title_candidate(value: str, *, strip_tags: bool = True) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+
+    text = Path(text).stem
+    text = re.sub(r'^[\d.,]+[KkMm]?_views_[\d.,]+[KkMm]?_reactions?_', '', text)
+    text = text.replace("_", " ")
+    text = re.sub(r'[\\/*?:"<>|]+', "", text)
+    text = re.sub(r"\s+", " ", text).strip(" .-_")
+
+    if strip_tags:
+        tokens = text.split()
+        no_tags = [tok for tok in tokens if not tok.startswith("#")]
+        if no_tags and len(" ".join(no_tags).strip()) >= 5:
+            text = " ".join(no_tags)
+
+    return re.sub(r"\s+", " ", text).strip(" .-_")[:100]
+
+
+def _is_meaningful_video_title(title: str, creator_name: str = "", source_id: str = "") -> bool:
+    cleaned = _clean_video_title_candidate(title)
+    if len(cleaned) < 6:
+        return False
+
+    lowered = cleaned.lower().strip()
+    if lowered in _GENERIC_TITLE_PHRASES:
+        return False
+
+    normalized_title = re.sub(r'[^a-z0-9]+', '', lowered)
+    normalized_creator = re.sub(r'[^a-z0-9]+', '', str(creator_name or "").lower())
+    normalized_source_id = re.sub(r'[^a-z0-9]+', '', str(source_id or "").lower())
+
+    if normalized_creator and normalized_title == normalized_creator:
+        return False
+    if normalized_source_id and normalized_title == normalized_source_id:
+        return False
+
+    tokens = [tok for tok in re.split(r"\s+", lowered) if tok]
+    meaningful_tokens = [tok for tok in tokens if tok not in _GENERIC_TITLE_WORDS and not tok.startswith("#")]
+    if not meaningful_tokens:
+        return False
+
+    hashtag_tokens = [tok for tok in tokens if tok.startswith("#")]
+    if hashtag_tokens and len(hashtag_tokens) >= len(tokens):
+        return False
+
+    return True
+
+
+def _build_preferred_download_name(
+    *,
+    raw_filename: str,
+    provided_title: str,
+    creator_name: str,
+    source_url: str,
+    extension: str,
+) -> str:
+    source_id = _safe_id_from_url(source_url)
+    title_candidate = _clean_video_title_candidate(provided_title)
+    raw_candidate = _clean_video_title_candidate(raw_filename)
+
+    if _is_meaningful_video_title(title_candidate, creator_name, source_id):
+        stem = title_candidate
+    elif _is_meaningful_video_title(raw_candidate, creator_name, source_id):
+        stem = raw_candidate
+    else:
+        stem = f"{creator_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+    return f"{stem}{extension}"
+
+
+def _normalize_youtube_download_url(url: str) -> str:
+    """Use the more compatible watch URL for YouTube Shorts downloads."""
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    match = re.search(
+        r"(?:https?://)?(?:www\.)?youtube\.com/shorts/([A-Za-z0-9_-]{6,})",
+        raw,
+        re.IGNORECASE,
+    )
+    if not match:
+        return raw
+    return f"https://www.youtube.com/watch?v={match.group(1)}"
+
+
+def _infer_youtube_ix_view(yt_content_type: str, urls: List[str]) -> str:
+    """Pick the best YouTube IXBrowser tab based on preference and observed links."""
+    pref = str(yt_content_type or "all").strip().lower()
+    if pref in {"shorts", "long"}:
+        return pref
+
+    shorts_count = 0
+    long_count = 0
+    for url in urls or []:
+        u = str(url or "").strip().lower()
+        if not u:
+            continue
+        if "/shorts/" in u:
+            shorts_count += 1
+        elif "watch?v=" in u:
+            long_count += 1
+
+    if shorts_count and shorts_count >= long_count:
+        return "shorts"
+    if long_count:
+        return "long"
+    return "all"
 
 
 def _ffmpeg_path() -> str:
@@ -678,24 +855,47 @@ def _ffprobe_path(ffmpeg: str) -> str:
 
 
 def _probe_duration_seconds(input_path: Path, ffmpeg: str = "ffmpeg") -> float:
+    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     try:
-        cmd = [
-            _ffprobe_path(ffmpeg), "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
-            str(input_path),
+        ffprobe = _ffprobe_path(ffmpeg)
+        probe_cmds = [
+            [
+                ffprobe, "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(input_path),
+            ],
+            [
+                ffprobe, "-v", "error",
+                "-show_entries", "stream=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(input_path),
+            ],
         ]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        if r.returncode == 0:
-            sec = float((r.stdout or "").strip())
-            if sec > 0:
-                return sec
+        for cmd in probe_cmds:
+            r = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                creationflags=flags,
+            )
+            if r.returncode != 0:
+                continue
+            for raw in (r.stdout or "").splitlines():
+                try:
+                    sec = float((raw or "").strip())
+                except Exception:
+                    continue
+                if sec > 0:
+                    return sec
     except Exception:
         pass
     try:
         r = subprocess.run(
             [ffmpeg, "-i", str(input_path)],
             capture_output=True, text=True, timeout=30,
+            creationflags=flags,
         )
         text = (r.stderr or "") + "\n" + (r.stdout or "")
         m = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", text)
@@ -704,6 +904,48 @@ def _probe_duration_seconds(input_path: Path, ffmpeg: str = "ffmpeg") -> float:
     except Exception:
         pass
     return 0.0
+
+
+def _probe_duration_with_retry(
+    input_path: Path,
+    ffmpeg: str = "ffmpeg",
+    delays: Tuple[float, ...] = (0.0, 0.12, 0.30, 0.65, 1.10),
+) -> float:
+    last = 0.0
+    for idx, delay in enumerate(delays):
+        if idx > 0 and delay > 0:
+            time.sleep(delay)
+        last = _probe_duration_seconds(input_path, ffmpeg)
+        if last > 0:
+            return last
+    return last
+
+
+def _can_decode_media(input_path: Path, ffmpeg: str = "ffmpeg") -> bool:
+    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    try:
+        result = subprocess.run(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(input_path),
+                "-t",
+                "0.20",
+                "-f",
+                "null",
+                "-",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=45,
+            creationflags=flags,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
 
 
 def split_video(
@@ -770,19 +1012,20 @@ def split_video(
             str(out_path), "-y",
         ]
 
-        def _run_safe(command: List[str]) -> int:
+        def _run_safe(command: List[str]) -> Tuple[int, str]:
             flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
             p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=flags)
             try:
-                p.communicate(timeout=1800)
-                return p.returncode
+                stdout, stderr = p.communicate(timeout=1800)
+                text = ((stderr or b"") + b"\n" + (stdout or b"")).decode(errors="ignore")
+                return p.returncode, re.sub(r"\s+", " ", text).strip()
             except Exception:
                 p.kill()
                 p.wait()
-                return -1
+                return -1, "ffmpeg process timed out or was terminated"
 
         try:
-            rc = _run_safe(cmd)
+            rc, err_text = _run_safe(cmd)
             if rc != 0:
                 cmd2 = [
                     ffmpeg, "-hide_banner", "-loglevel", "error",
@@ -796,23 +1039,45 @@ def split_video(
                     "-avoid_negative_ts", "make_zero",
                     str(out_path), "-y",
                 ]
-                rc2 = _run_safe(cmd2)
+                rc2, err_text2 = _run_safe(cmd2)
                 if rc2 != 0:
+                    if progress_cb:
+                        progress_cb(f"    Split: ffmpeg failed for part {idx} (rc={rc2})")
+                        preview = (err_text2 or err_text)[:180]
+                        if preview:
+                            progress_cb(f"    Split: {preview}")
                     break
 
             if out_path.exists() and out_path.stat().st_size > 0:
-                actual = _probe_duration_seconds(out_path, ffmpeg)
+                actual = _probe_duration_with_retry(out_path, ffmpeg)
                 if actual >= min_valid_part_sec:
                     parts.append(out_path)
                 else:
-                    try:
-                        out_path.unlink()
-                    except Exception:
-                        pass
-                    break
+                    if _can_decode_media(out_path, ffmpeg):
+                        if progress_cb:
+                            progress_cb(
+                                f"    Split: keeping {out_path.name} after decode fallback "
+                                "(duration probe lagged)"
+                            )
+                        parts.append(out_path)
+                    else:
+                        if progress_cb:
+                            progress_cb(
+                                f"    Split: invalid part {idx} "
+                                f"(size={out_path.stat().st_size} bytes, duration={actual:.2f}s)"
+                            )
+                        try:
+                            out_path.unlink()
+                        except Exception:
+                            pass
+                        break
             else:
+                if progress_cb:
+                    progress_cb(f"    Split: no output created for part {idx}")
                 break
-        except Exception:
+        except Exception as exc:
+            if progress_cb:
+                progress_cb(f"    Split: exception on part {idx}: {exc}")
             break
 
         start += chunk
@@ -952,10 +1217,48 @@ class CreatorDownloadWorker(QThread):
         if not text:
             return
         creator_name = getattr(getattr(self, "creator_folder", None), "name", "?")
-        print(f"[CreatorProfile][@{creator_name}][{stage}] {text}", flush=True)
+        creator_display = creator_name if str(creator_name).startswith("@") else f"@{creator_name}"
+        print(f"[CreatorProfile][{creator_display}][{stage}] {text}", flush=True)
 
     def _mirror_progress_to_terminal(self, message: str) -> None:
         self._terminal_log("Progress", message)
+
+    def _install_scoped_log_bridge(self) -> None:
+        root_logger = logging.getLogger()
+        thread_id = threading.get_ident()
+        suppressor = _ScopedLibraryLogSuppressor(thread_id)
+        relay = _ScopedLibraryLogRelay(self, thread_id)
+        attached_handlers = []
+        for handler in list(root_logger.handlers):
+            if handler is relay:
+                continue
+            try:
+                handler.addFilter(suppressor)
+                attached_handlers.append(handler)
+            except Exception:
+                continue
+        root_logger.addHandler(relay)
+        self._scoped_log_bridge = (root_logger, relay, suppressor, attached_handlers)
+
+    def _remove_scoped_log_bridge(self) -> None:
+        bridge = getattr(self, "_scoped_log_bridge", None)
+        if not bridge:
+            return
+        root_logger, relay, suppressor, attached_handlers = bridge
+        try:
+            root_logger.removeHandler(relay)
+        except Exception:
+            pass
+        try:
+            relay.close()
+        except Exception:
+            pass
+        for handler in attached_handlers:
+            try:
+                handler.removeFilter(suppressor)
+            except Exception:
+                pass
+        self._scoped_log_bridge = None
 
     #Ã¢â€â‚¬Ã¢â€â‚¬ Proxy helpers Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
@@ -1070,18 +1373,19 @@ class CreatorDownloadWorker(QThread):
         self.progress.emit("[Cleanup] Checking top-level media...")
         self._terminal_log("Cleanup", f"scanning top-level folder: {folder}")
 
-        def _should_keep_image(path: Path) -> bool:
+        def _should_keep_asset(path: Path) -> bool:
             stem = path.stem.lower()
             name = path.name.lower()
             return (
                 "logo" in stem
                 or "avatar" in stem
-                or name in {"logo.png", "avatar.png"}
+                or name.startswith("logo.")
+                or name.startswith("avatar.")
             )
 
         top_level_names: List[str] = []
         found: List[Path] = []
-        kept_images: List[str] = []
+        kept_assets: List[str] = []
         try:
             for item in folder.iterdir():
                 if not item.is_file():
@@ -1091,13 +1395,20 @@ class CreatorDownloadWorker(QThread):
                     continue
                 suffix = item.suffix.lower()
                 if suffix in self._MEDIA_EXTENSIONS:
-                    found.append(item)
-                    continue
-                if suffix in self._IMAGE_EXTENSIONS:
-                    if _should_keep_image(item):
-                        kept_images.append(item.name)
+                    if _should_keep_asset(item):
+                        kept_assets.append(item.name)
                     else:
                         found.append(item)
+                    continue
+                if suffix in self._IMAGE_EXTENSIONS:
+                    if _should_keep_asset(item):
+                        kept_assets.append(item.name)
+                    else:
+                        found.append(item)
+                    continue
+                if _should_keep_asset(item):
+                    kept_assets.append(item.name)
+                    continue
         except Exception as exc:
             self.progress.emit("[Cleanup] Failed to scan old media.")
             self._terminal_log("Cleanup", f"scan failed: {exc}")
@@ -1105,12 +1416,12 @@ class CreatorDownloadWorker(QThread):
 
         self._terminal_log(
             "Cleanup",
-            f"top-level files={len(top_level_names)} delete_candidates={len(found)} keep_images={len(kept_images)}",
+            f"top-level files={len(top_level_names)} delete_candidates={len(found)} keep_assets={len(kept_assets)}",
         )
         for name in top_level_names:
             self._terminal_log("Cleanup", f"top-level file: {name}")
-        for name in kept_images:
-            self._terminal_log("Cleanup", f"preserved image: {name}")
+        for name in kept_assets:
+            self._terminal_log("Cleanup", f"preserved asset: {name}")
         for fp in found:
             self._terminal_log("Cleanup", f"delete candidate: {fp.name}")
 
@@ -1177,8 +1488,8 @@ class CreatorDownloadWorker(QThread):
             pass
         os.makedirs(temp_dl_dir, exist_ok=True)
 
-        def _run_once(opts: Dict) -> Tuple[bool, str]:
-            result = {"ok": False, "msg": ""}
+        def _run_once(opts: Dict) -> Tuple[bool, str, Optional[Path]]:
+            result = {"ok": False, "msg": "", "verified_path": None}
 
             downloader = VideoDownloaderThread(
                 urls=[url],
@@ -1218,7 +1529,7 @@ class CreatorDownloadWorker(QThread):
                         pass
                     downloader.wait(1500)
                     self._active_downloader = None
-                    return False, "Cancelled"
+                    return False, "Cancelled", None
                 time.sleep(0.15)
 
             downloader.wait(1500)
@@ -1226,6 +1537,13 @@ class CreatorDownloadWorker(QThread):
 
             if not result["ok"] and int(getattr(downloader, "success_count", 0) or 0) > 0:
                 result["ok"] = True
+
+            try:
+                verified_path = getattr(downloader, "last_verified_output", None) or None
+                if verified_path:
+                    result["verified_path"] = Path(str(verified_path))
+            except Exception:
+                result["verified_path"] = None
 
             reason = result["msg"]
             if not result["ok"] and not reason:
@@ -1235,7 +1553,7 @@ class CreatorDownloadWorker(QThread):
                         reason = str(failed_urls[0][1] or "").strip()
                 except Exception:
                     pass
-            return result["ok"], (reason or "")
+            return result["ok"], (reason or ""), result["verified_path"]
 
         # Use exact options the GUI manual VideoDownloader uses
         creator_name = ""
@@ -1253,13 +1571,26 @@ class CreatorDownloadWorker(QThread):
             "_expected_media_kind": "video",
         }
         
-        ok, reason = _run_once(robust_opts)
+        ok, reason, verified_path = _run_once(robust_opts)
         self._terminal_log("Downloader", f"_run_once result: ok={ok}, reason='{reason}'")
 
-        temp_media = self._scan_media_folder(temp_dl_dir)
+        temp_media = []
+        if verified_path:
+            try:
+                if verified_path.exists():
+                    temp_media = [verified_path]
+                    self._terminal_log("Downloader", f"using verified output path: {verified_path.name}")
+            except Exception:
+                temp_media = []
+        if not temp_media:
+            temp_media = self._scan_media_folder(temp_dl_dir)
+        if ok and not temp_media:
+            ok = False
+            reason = reason or "Downloader reported success but no output video was found in temp folder"
+            self._terminal_log("Downloader", f"normalized success-without-file to failure: {reason}")
 
-        if ok or temp_media:
-            fp = temp_media[0] if temp_media else None
+        if temp_media:
+            fp = temp_media[0]
 
             if fp:
                 # We found the downloaded file in the temp directory!
@@ -1302,6 +1633,13 @@ class CreatorDownloadWorker(QThread):
                         _ts = _dt.now().strftime("%Y%m%d_%H%M%S")
                         safe_name = f"{creator_name}_{_ts}{fp.suffix}"
                 
+                safe_name = _build_preferred_download_name(
+                    raw_filename=safe_name,
+                    provided_title=provided_title or "",
+                    creator_name=self.creator_folder.name.lstrip('@'),
+                    source_url=url,
+                    extension=fp.suffix,
+                )
                 target_path = self.creator_folder / safe_name
                 counter = 1
                 while target_path.exists():
@@ -1317,12 +1655,11 @@ class CreatorDownloadWorker(QThread):
                     
                 return target_path, ""
                 
-            # Cleanup if no file found
-            try: shutil.rmtree(temp_dl_dir)
-            except Exception: pass
-            
-            return None, "Downloader reported success but no output video was found in temp folder"
-            
+        try:
+            shutil.rmtree(temp_dl_dir)
+        except Exception:
+            pass
+
         if reason == "Cancelled":
             return None, reason
             
@@ -1333,6 +1670,7 @@ class CreatorDownloadWorker(QThread):
 
     def run(self):
         result = {"success": False, "downloaded": 0, "target": 0, "tier_used": None, "error": None}
+        self._install_scoped_log_bridge()
         try:
             self._execute(result)
         except Exception as e:
@@ -1343,6 +1681,8 @@ class CreatorDownloadWorker(QThread):
             traceback.print_exc()
             self.config.update_last_activity("failed", "Error", 0)
             self.config.save()
+        finally:
+            self._remove_scoped_log_bridge()
         # Store result as attribute so queue manager can read it directly
         # (avoids cross-thread signal delivery issues)
         self._result = result
@@ -1453,8 +1793,12 @@ class CreatorDownloadWorker(QThread):
                 usable += 1
             return usable
 
+        def _selected_ready_count() -> int:
+            return len(selected or [])
+
         download_queue: List[Dict] = []
         queued_ids: set = set()
+        ix_direct_retry_candidates: List[Dict] = []
 
         def _queue_entries(
             entries: List[Dict],
@@ -1487,7 +1831,13 @@ class CreatorDownloadWorker(QThread):
                 added += 1
             return added
 
-        def _download_entries(entries: List[Dict], label: str, allow_ix_retry: bool = False):
+        def _download_entries(
+            entries: List[Dict],
+            label: str,
+            allow_ix_retry: bool = False,
+            retry_entries: bool = False,
+            collect_retry_candidates: Optional[List[Dict]] = None,
+        ):
             nonlocal tier_used, last_error_message, failed_downloads
             for vid in entries:
                 # Check pause between videos
@@ -1504,14 +1854,24 @@ class CreatorDownloadWorker(QThread):
                 entry_key = _key(vid)
                 if not entry_key:
                     entry_key = url.strip()
-                if entry_key in attempted_ids:
+                if not retry_entries and entry_key in attempted_ids:
                     continue
 
                 entry_label = vid.get("_download_tier") or label
                 self.progress.emit(f"{entry_label} download ({len(downloads)+1}/{n_target}): {url[:80]}")
                 title = vid.get("title")
+                download_url = (
+                    _normalize_youtube_download_url(url)
+                    if platform_key == "youtube"
+                    else url
+                )
                 
                 self._terminal_log("Download", f"attempting: {url[:80]}")
+                if download_url != url:
+                    self._terminal_log(
+                        "Download",
+                        f"normalized youtube url for downloader: {download_url[:80]}",
+                    )
                 
                 # IX session refresh is reserved for the explicit IX fallback stage.
                 if allow_ix_retry:
@@ -1523,7 +1883,7 @@ class CreatorDownloadWorker(QThread):
                     except ImportError:
                         pass
 
-                fp, dl_error = self._download_single_via_video_downloader(url, title)
+                fp, dl_error = self._download_single_via_video_downloader(download_url, title)
 
                 # Active Retry Strategy against Bot Blocks
                 if not fp and allow_ix_retry:
@@ -1540,7 +1900,7 @@ class CreatorDownloadWorker(QThread):
                                 self._maybe_sync_profile_cookies(platform_key, force=True)
                                 self.progress.emit(f"  [IX Retry] Retrying download with fresh cookies...")
                                 time.sleep(2.0) # brief pause
-                                fp, dl_error = self._download_single_via_video_downloader(url, title)
+                                fp, dl_error = self._download_single_via_video_downloader(download_url, title)
                         except Exception as e:
                             self.progress.emit(f"  [IX Retry] Failed to refresh session: {e}")
 
@@ -1549,6 +1909,10 @@ class CreatorDownloadWorker(QThread):
                     failed_downloads += 1
                     err = (dl_error or "download failed").strip()
                     last_error_message = err
+                    if collect_retry_candidates is not None:
+                        retry_copy = dict(vid)
+                        retry_copy["_download_tier"] = "IX Direct Retry"
+                        collect_retry_candidates.append(retry_copy)
                     msg = f"  Failed ({failed_downloads}): {url[:60]} | {err[:120]}"
                     self.progress.emit(msg)
                     print(f"[CreatorProfile] {msg}")
@@ -1663,20 +2027,23 @@ class CreatorDownloadWorker(QThread):
                 if (_key(entry) not in session_ids and _key(entry) not in attempted_ids)
             ]
             usable_count = _count_usable_entries(annotated)
+            selected_count = len(selected)
             self._terminal_log(
                 "Selection",
                 (
                     f"{stage_label}: annotated={len(annotated)} "
-                    f"selected={len(selected)} usable={usable_count}/{n_target}"
+                    f"selected={selected_count}/{n_target} usable={usable_count}/{n_target}"
                 ),
             )
-            return usable_count
+            return selected_count
 
-        legacy_initial_fetch = max(
-            10,
-            n_target * (4 if use_popular_fallback else 2),
-        )
-        legacy_fetch_step = max(10, n_target * 2)
+        legacy_page_batch = max(10, n_target * 2)
+        legacy_first_pass_fetch_count = max(8, n_target + 4)
+        if dup_ctrl:
+            legacy_first_pass_fetch_count += max(2, n_target)
+        if use_popular_fallback or randomize_links:
+            legacy_first_pass_fetch_count += 2
+        legacy_first_pass_scroll_attempts = 1
         legacy_max_rounds = 5
 
         try:
@@ -1690,24 +2057,40 @@ class CreatorDownloadWorker(QThread):
             self._terminal_log("LinkGrab", msg)
             last_error_message = msg
 
-        def _run_legacy_extract(source_url: str, fetch_count: int, stage_label: str) -> int:
-            nonlocal creator_name, last_error_message
+        def _run_legacy_extract(
+            source_url: str,
+            fetch_count: int,
+            stage_label: str,
+            browser_max_scroll_attempts: Optional[int] = None,
+        ) -> int:
+            nonlocal creator_name, last_error_message, legacy_page_batch
             if extract_links_intelligent is None or get_cookies_dir is None:
                 return 0
 
             grab_opts = {
                 "max_videos": fetch_count,
-                "force_all_methods": True,
+                "force_all_methods": False,
+                "respect_global_exhaustive_mode": False,
                 "fast_mode": False,
                 "managed_profile_only": True,
                 "interactive_login_fallback": False,
                 "yt_content_type": yt_content_type,
             }
+            if browser_max_scroll_attempts is not None:
+                grab_opts["browser_max_scroll_attempts"] = browser_max_scroll_attempts
 
-            self._terminal_log(
-                "LinkGrab",
-                f"{stage_label}: requesting up to {fetch_count} links from {source_url}",
-            )
+            if stage_label == "Legacy" and browser_max_scroll_attempts is not None:
+                request_detail = f"running page-driven first-pass scan (buffer={fetch_count})"
+            elif fetch_count > 0:
+                request_detail = f"requesting up to {fetch_count} links"
+            else:
+                request_detail = "running page-driven first-pass scan"
+            if browser_max_scroll_attempts is not None:
+                request_detail = (
+                    f"{request_detail} "
+                    f"(scroll rounds={browser_max_scroll_attempts})"
+                )
+            self._terminal_log("LinkGrab", f"{stage_label}: {request_detail} from {source_url}")
 
             try:
                 extracted_entries, extracted_creator_name = extract_links_intelligent(
@@ -1720,21 +2103,25 @@ class CreatorDownloadWorker(QThread):
                 if extracted_creator_name:
                     creator_name = extracted_creator_name
                 added = _merge_latest_entries(extracted_entries, stage_label)
-                usable_count = _refresh_selection_state(stage_label)
+                if added > 0:
+                    legacy_page_batch = max(legacy_page_batch, added)
+                selected_count = _refresh_selection_state(stage_label)
+                usable_count = _count_usable_entries(annotated)
                 self._terminal_log(
                     "LinkGrab",
                     (
                         f"{stage_label}: extracted={len(extracted_entries or [])} "
-                        f"added={added} pool={len(latest_entries)} usable={usable_count}/{n_target}"
+                        f"added={added} pool={len(latest_entries)} "
+                        f"selected={selected_count}/{n_target} usable={usable_count}/{n_target}"
                     ),
                 )
-                return added
+                return selected_count
             except Exception as e:
                 msg = f"{stage_label} failed: {e}"
                 self.progress.emit(msg)
                 self._terminal_log("LinkGrab", msg)
                 last_error_message = msg
-                return 0
+                return _selected_ready_count()
 
         def _expand_legacy_pool(source_url: str, stage_label: str, start_round: int, total_rounds: int) -> int:
             total_added = 0
@@ -1742,24 +2129,26 @@ class CreatorDownloadWorker(QThread):
             for round_idx in range(start_round, total_rounds):
                 if self._check_pause():
                     return total_added
-                if _count_usable_entries(annotated) >= n_target:
+                if _selected_ready_count() >= n_target:
                     break
                 fetch_count = max(
-                    legacy_initial_fetch + (legacy_fetch_step * round_idx),
-                    len(latest_entries) + legacy_fetch_step,
+                    len(latest_entries) + legacy_page_batch,
+                    legacy_page_batch * (round_idx + 1),
                 )
                 self.progress.emit(
                     f"{stage_label}: expanding link pool to {fetch_count} candidate link(s)..."
                 )
-                added = _run_legacy_extract(
+                prev_pool_size = len(latest_entries)
+                _run_legacy_extract(
                     source_url=source_url,
                     fetch_count=fetch_count,
                     stage_label=f"{stage_label} R{round_idx + 1}",
                 )
-                total_added += added
-                if _count_usable_entries(annotated) >= n_target:
+                added_now = max(0, len(latest_entries) - prev_pool_size)
+                total_added += added_now
+                if _selected_ready_count() >= n_target:
                     break
-                if added <= 0:
+                if added_now <= 0:
                     stale_rounds += 1
                     if stale_rounds >= 1:
                         break
@@ -1773,10 +2162,11 @@ class CreatorDownloadWorker(QThread):
         if extract_links_intelligent is not None and get_cookies_dir is not None:
             _run_legacy_extract(
                 source_url=creator_url,
-                fetch_count=legacy_initial_fetch,
+                fetch_count=legacy_first_pass_fetch_count,
                 stage_label="Legacy",
+                browser_max_scroll_attempts=legacy_first_pass_scroll_attempts,
             )
-            if _count_usable_entries(annotated) < n_target:
+            if _selected_ready_count() < n_target:
                 _expand_legacy_pool(
                     source_url=creator_url,
                     stage_label="Legacy",
@@ -1824,6 +2214,7 @@ class CreatorDownloadWorker(QThread):
                     creator_url=creator_url,
                     platform_key=platform_key,
                     max_videos=fetch_count,
+                    yt_content_type=yt_content_type,
                     progress_cb=self.progress.emit,
                 )
                 if ix_creator_name:
@@ -1950,16 +2341,16 @@ class CreatorDownloadWorker(QThread):
         # short after the primary pool, expand from the reels/videos tab too.
         if (
             platform_key in {"facebook", "instagram"}
-            and _count_usable_entries(annotated) < n_target
+            and _selected_ready_count() < n_target
         ):
             if platform_key == "facebook":
                 backfill_url = _facebook_backfill_url(creator_url)
             else:
                 backfill_url = _instagram_backfill_url(creator_url)
 
-            need_more = max(1, n_target - _count_usable_entries(annotated))
+            need_more = max(1, n_target - _selected_ready_count())
             self.progress.emit(
-                f"{platform_key.title()} backfill: need {need_more} more usable link(s)."
+                f"{platform_key.title()} backfill: need {need_more} more matching link(s)."
             )
             backfill_added = _expand_legacy_pool(
                 source_url=backfill_url,
@@ -2101,7 +2492,12 @@ class CreatorDownloadWorker(QThread):
                 f"Download queue ready: {selected_count} selected + {backup_count} backup link(s)."
             )
 
-        _download_entries(download_queue, "Selected", allow_ix_retry=False)
+        _download_entries(
+            download_queue,
+            "Selected",
+            allow_ix_retry=False,
+            collect_retry_candidates=ix_direct_retry_candidates,
+        )
 
         # IXBrowser is a fallback stage only. We try it after the legacy
         # link-grabbing + downloading queue has already been attempted.
@@ -2132,18 +2528,49 @@ class CreatorDownloadWorker(QThread):
                     )
 
                 ix.maximize_browser(progress_cb=self.progress.emit)
-                fetch_count = (
-                    remaining_needed * 2 if use_popular_fallback else remaining_needed + 5
-                )
-                ix_entries, extracted_ix_creator_name = ix.extract_links(
-                    creator_url=creator_url,
-                    platform_key=platform_key,
-                    max_videos=fetch_count,
-                    progress_cb=self.progress.emit,
-                )
-                if extracted_ix_creator_name:
-                    ix_creator_name = extracted_ix_creator_name
-                self._terminal_log("IX", f"extracted {len(ix_entries)} links for '{ix_creator_name}'")
+
+                if ix_direct_retry_candidates and len(downloads) < n_target:
+                    same_url_retry_count = min(len(ix_direct_retry_candidates), remaining_needed)
+                    self._terminal_log(
+                        "IX",
+                        f"retrying same selected/backup urls before fresh extraction: {same_url_retry_count}",
+                    )
+                    self.progress.emit(
+                        f"[IX] Retrying {same_url_retry_count} previously selected link(s) with IXBrowser session..."
+                    )
+                    _download_entries(
+                        ix_direct_retry_candidates[:same_url_retry_count],
+                        "IX Direct Retry",
+                        allow_ix_retry=True,
+                        retry_entries=True,
+                    )
+
+                if len(downloads) < n_target:
+                    fetch_count = (
+                        remaining_needed * 2 if use_popular_fallback else remaining_needed + 5
+                    )
+                    ix_youtube_view = _infer_youtube_ix_view(
+                        yt_content_type,
+                        [
+                            *(e.get("url", "") for e in selected if isinstance(e, dict)),
+                            *(e.get("url", "") for e in annotated if isinstance(e, dict)),
+                            *(e.get("url", "") for e in latest_entries if isinstance(e, dict)),
+                        ],
+                    )
+                    if platform_key == "youtube":
+                        self._terminal_log("IX", f"youtube view selected: {ix_youtube_view}")
+                    ix_entries, extracted_ix_creator_name = ix.extract_links(
+                        creator_url=creator_url,
+                        platform_key=platform_key,
+                        max_videos=fetch_count,
+                        yt_content_type=ix_youtube_view,
+                        progress_cb=self.progress.emit,
+                    )
+                    if extracted_ix_creator_name:
+                        ix_creator_name = extracted_ix_creator_name
+                    self._terminal_log("IX", f"extracted {len(ix_entries)} links for '{ix_creator_name}'")
+                else:
+                    self.progress.emit("[IX] Same-link retry succeeded. Skipping fresh IX link grabbing.")
             except Exception as e:
                 ix_error = f"IXBrowser fallback failed: {e}"
                 self.progress.emit(ix_error)
@@ -2383,6 +2810,8 @@ class CreatorDownloadWorker(QThread):
             wm_enabled = self.config.watermark_enabled
             wm_text_cfg = self.config.watermark_text
             wm_logo_cfg = self.config.watermark_logo
+            wm_avatar_cfg = self.config.watermark_avatar
+            split_edit_cfg = self.config.split_edit_settings
 
             def _apply_wm(fp: Path, preserve_source: bool = False) -> Path:
                 if not wm_enabled:
@@ -2395,16 +2824,77 @@ class CreatorDownloadWorker(QThread):
                     creator_folder=self.creator_folder,
                     wm_text_cfg=wm_text_cfg,
                     wm_logo_cfg=wm_logo_cfg,
+                    wm_avatar_cfg=wm_avatar_cfg,
                     keep_original=preserve_source,
                     ffmpeg=self.ffmpeg,
                     progress_cb=self.progress.emit,
                 )
-                if result_path == fp and wm_enabled:
+                if not result_path:
                     self.progress.emit(f"  WARNING: watermark failed for {fp.name} - kept original")
+                    return fp
                 return result_path
 
             mode = self.config.editing_mode
-            if mode == "split" and ffmpeg_ok:
+            if mode == "split_edit" and ffmpeg_ok:
+                from .config_manager import summarize_split_edit_settings
+                from .split_edit_engine import apply_split_edit_to_clip
+
+                self.progress.emit(f"Editing: splitting into {self.config.split_duration}s segments...")
+                self.progress.emit(
+                    f"Editing: split+edit ({summarize_split_edit_settings(split_edit_cfg)})..."
+                )
+                for fp in downloads:
+                    if self._stop:
+                        break
+                    parts = split_video(
+                        fp,
+                        self.creator_folder,
+                        self.config.split_duration,
+                        self.ffmpeg,
+                        self.progress.emit,
+                    )
+                    if not parts:
+                        self.progress.emit(f"  WARNING: split failed for {fp.name} - kept original")
+                    for part in parts:
+                        if self._stop:
+                            break
+                        edited_part = apply_split_edit_to_clip(
+                            part,
+                            self.creator_folder,
+                            split_edit_cfg,
+                            self.ffmpeg,
+                            self.progress.emit,
+                        )
+                        final_part = edited_part or part
+                        if edited_part and edited_part != part and part.exists():
+                            try:
+                                part.unlink()
+                            except Exception:
+                                pass
+                        if wm_enabled:
+                            final_part = _apply_wm(final_part, preserve_source=False)
+                        self.config.append_activity_event(
+                            "split_edit_part_finalized",
+                            {
+                                "source": fp.name,
+                                "part": final_part.name if final_part else part.name,
+                                "edited": bool(edited_part),
+                            },
+                        )
+                    self.config.append_activity_event(
+                        "output_finalized",
+                        {"mode": "split_edit", "source": fp.name, "parts": len(parts)},
+                    )
+                    if parts and not keep_original and fp.exists():
+                        try:
+                            fp.unlink()
+                            self.progress.emit(f"Removed original: {fp.name}")
+                        except Exception:
+                            pass
+            elif mode == "split_edit" and not ffmpeg_ok:
+                self.progress.emit("SKIP split+edit: ffmpeg not available")
+
+            elif mode == "split" and ffmpeg_ok:
                 self.progress.emit(f"Editing: splitting into {self.config.split_duration}s segments...")
                 for fp in downloads:
                     if self._stop:
@@ -2472,10 +2962,10 @@ class CreatorDownloadWorker(QThread):
 
         if count == 0 and not result.get("error"):
             result["error"] = last_error_message or "No videos were downloaded"
-            print(f"[CreatorProfile] @{self.creator_folder.name}: FAIL REASON: {result['error']}")
+            self._terminal_log("Run", f"fail reason: {result['error']}")
         elif 0 < count < n_target and not result.get("error"):
             result["error"] = last_error_message or f"Only {count}/{n_target} downloaded"
-            print(f"[CreatorProfile] @{self.creator_folder.name}: PARTIAL: {result['error']}")
+            self._terminal_log("Run", f"partial: {result['error']}")
 
         result["success"] = count >= n_target
         result["downloaded"] = count
@@ -2487,7 +2977,6 @@ class CreatorDownloadWorker(QThread):
             summary_parts.append(f"Failed: {failed_downloads}")
         summary_parts.append(f"Tier: {tier_used or 'N/A'}")
         self.progress.emit(" | ".join(summary_parts))
-        print(f"[CreatorProfile] @{self.creator_folder.name}: Finished ({count}/{n_target}).\n")
 
         # Concise run summary for debugging / reliability checks.
         try:

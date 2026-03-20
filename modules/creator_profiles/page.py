@@ -32,7 +32,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .creator_card import CreatorCard
-from .config_manager import CreatorConfig
+from .config_manager import CreatorConfig, summarize_split_edit_settings
 from .queue_manager import CreatorQueueManager
 
 # ── Theme constants ───────────────────────────────────────────────────────────
@@ -66,6 +66,33 @@ _WM_COLOR_PRESETS = [
     ("Orange", "#FFA500"),
     ("Purple", "#B388FF"),
 ]
+
+_EDIT_MODE_LABELS = ["None", "Preset", "Split", "Split + Edit"]
+_EDIT_MODE_VALUES = ["none", "preset", "split", "split_edit"]
+
+
+def _edit_mode_value(index: int) -> str:
+    try:
+        return _EDIT_MODE_VALUES[int(index)]
+    except Exception:
+        return "none"
+
+
+def _edit_mode_index(value: str) -> int:
+    mode = str(value or "none").strip().lower()
+    try:
+        return _EDIT_MODE_VALUES.index(mode)
+    except ValueError:
+        return 0
+
+
+def _open_split_edit_settings_dialog(parent, settings, title: str = "Split + Edit Options"):
+    from .split_edit_dialog import SplitEditDialog
+
+    dlg = SplitEditDialog(settings, parent, title)
+    if dlg.exec_():
+        return dlg.get_settings()
+    return None
 
 
 def _abtn(text: str, fg: str, bg: str, border: str = None) -> QPushButton:
@@ -300,6 +327,7 @@ class AddCreatorDialog(QDialog):
         self.root = root
         self.preset_names = preset_names
         self.created_folder: Path = None
+        self._split_edit_settings = None
         self.setWindowTitle("Add Creator")
         self.setMinimumWidth(620)
         self.resize(640, 700)
@@ -355,7 +383,7 @@ class AddCreatorDialog(QDialog):
         form.addRow("N Videos:", self.n_spin)
 
         self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["None", "Preset", "Split"])
+        self.mode_combo.addItems(_EDIT_MODE_LABELS)
         self.mode_combo.currentIndexChanged.connect(self._on_mode_change)
         form.addRow("Editing Mode:", self.mode_combo)
 
@@ -368,6 +396,22 @@ class AddCreatorDialog(QDialog):
         self.split_spin.setValue(15.0)
         self.split_spin.setSuffix(" s")
         form.addRow("Split Duration:", self.split_spin)
+
+        self.split_edit_btn = QPushButton("Configure Split + Edit")
+        self.split_edit_btn.clicked.connect(self._open_split_edit_dialog)
+        self.split_edit_summary_lbl = QLabel("")
+        self.split_edit_summary_lbl.setWordWrap(True)
+        self.split_edit_summary_lbl.setStyleSheet(
+            "color:rgba(255,255,255,0.46); font-size:10px; background:transparent; border:none;"
+        )
+        self.split_edit_panel = QWidget()
+        self.split_edit_panel.setStyleSheet("background:transparent; border:none;")
+        split_edit_layout = QVBoxLayout(self.split_edit_panel)
+        split_edit_layout.setContentsMargins(0, 0, 0, 0)
+        split_edit_layout.setSpacing(4)
+        split_edit_layout.addWidget(self.split_edit_btn, 0, Qt.AlignLeft)
+        split_edit_layout.addWidget(self.split_edit_summary_lbl)
+        form.addRow("Split + Edit:", self.split_edit_panel)
 
         self.dup_check = QCheckBox("Skip already downloaded")
         self.dup_check.setChecked(True)
@@ -395,6 +439,7 @@ class AddCreatorDialog(QDialog):
         form.addRow("YT Content:", self.yt_type_combo)
 
         self._on_mode_change()
+        self._refresh_split_edit_summary()
         v.addLayout(form)
 
         # ── WaterMark Section ──────────────────────────────────────────────
@@ -554,6 +599,63 @@ class AddCreatorDialog(QDialog):
         lop_row = QHBoxLayout(); lop_row.addWidget(self.wm_logo_opacity_sl); lop_row.addWidget(self.wm_logo_opacity_lbl)
         lop_w = QWidget(); lop_w.setStyleSheet("background:transparent; border:none;"); lop_w.setLayout(lop_row)
         wm_form.addRow("  Opacity:", lop_w)
+
+        avatar_hdr = QLabel("  Avatar Overlay")
+        avatar_hdr.setStyleSheet("color:#aaa; font-size:11px; font-weight:bold; background:transparent; border:none;")
+        wm_form.addRow(avatar_hdr)
+
+        avatar_en_row = QHBoxLayout()
+        self.wm_avatar_enable_btn = QPushButton("OFF")
+        self.wm_avatar_enable_btn.setCheckable(True)
+        self.wm_avatar_enable_btn.setFixedWidth(68)
+        self.wm_avatar_enable_btn.clicked.connect(lambda: self._toggle_style(self.wm_avatar_enable_btn))
+        avatar_en_row.addWidget(self.wm_avatar_enable_btn); avatar_en_row.addStretch()
+        avatar_en_w = QWidget(); avatar_en_w.setStyleSheet("background:transparent; border:none;"); avatar_en_w.setLayout(avatar_en_row)
+        wm_form.addRow("  Enable Avatar:", avatar_en_w)
+
+        avatar_path_row = QHBoxLayout()
+        self.wm_avatar_path_edit = QLineEdit()
+        self.wm_avatar_path_edit.setPlaceholderText("Leave blank to auto-detect avatar.* in folder")
+        avatar_browse_btn = QToolButton()
+        avatar_browse_btn.setIcon(self.style().standardIcon(QStyle.SP_DirOpenIcon))
+        avatar_browse_btn.setToolTip("Select avatar image/video")
+        avatar_browse_btn.setAutoRaise(True)
+        avatar_browse_btn.setFixedSize(30, 28)
+        avatar_browse_btn.setStyleSheet(
+            "QToolButton { background:#2a2410; border:1px solid rgba(222,191,7,0.7); border-radius:4px; }"
+            "QToolButton:hover { background:#3a3216; border-color:#DEBF07; }"
+        )
+        avatar_browse_btn.clicked.connect(self._browse_avatar)
+        avatar_path_row.addWidget(self.wm_avatar_path_edit); avatar_path_row.addWidget(avatar_browse_btn)
+        avatar_path_w = QWidget(); avatar_path_w.setStyleSheet("background:transparent; border:none;"); avatar_path_w.setLayout(avatar_path_row)
+        wm_form.addRow("  Avatar Path:", avatar_path_w)
+
+        self.wm_avatar_pos_cb = QComboBox()
+        self.wm_avatar_pos_cb.addItems(["TopLeft", "TopRight", "BottomLeft", "BottomRight", "Center", "AnimateAround"])
+        self.wm_avatar_pos_cb.setFixedWidth(150)
+        wm_form.addRow("  Position:", self.wm_avatar_pos_cb)
+
+        self.wm_avatar_opacity_sl = QSlider(Qt.Horizontal)
+        self.wm_avatar_opacity_sl.setRange(0, 100); self.wm_avatar_opacity_sl.setValue(80)
+        self.wm_avatar_opacity_lbl = QLabel("80%")
+        self.wm_avatar_opacity_lbl.setStyleSheet("color:white; background:transparent; border:none; min-width:32px;")
+        self.wm_avatar_opacity_sl.valueChanged.connect(lambda v: self.wm_avatar_opacity_lbl.setText(f"{v}%"))
+        aop_row = QHBoxLayout(); aop_row.addWidget(self.wm_avatar_opacity_sl); aop_row.addWidget(self.wm_avatar_opacity_lbl)
+        aop_w = QWidget(); aop_w.setStyleSheet("background:transparent; border:none;"); aop_w.setLayout(aop_row)
+        wm_form.addRow("  Opacity:", aop_w)
+
+        avatar_size_row = QHBoxLayout()
+        self.wm_avatar_width_sp = QSpinBox()
+        self.wm_avatar_width_sp.setRange(8, 2000); self.wm_avatar_width_sp.setValue(160); self.wm_avatar_width_sp.setSuffix(" W")
+        self.wm_avatar_width_sp.setFixedWidth(92)
+        self.wm_avatar_height_sp = QSpinBox()
+        self.wm_avatar_height_sp.setRange(8, 2000); self.wm_avatar_height_sp.setValue(160); self.wm_avatar_height_sp.setSuffix(" H")
+        self.wm_avatar_height_sp.setFixedWidth(92)
+        avatar_size_row.addWidget(self.wm_avatar_width_sp)
+        avatar_size_row.addWidget(self.wm_avatar_height_sp)
+        avatar_size_row.addStretch()
+        avatar_size_w = QWidget(); avatar_size_w.setStyleSheet("background:transparent; border:none;"); avatar_size_w.setLayout(avatar_size_row)
+        wm_form.addRow("  Box Size:", avatar_size_w)
         self._set_color_preset_from_hex(self.wm_txt_color_preset_cb, "#FFFFFF")
 
         v.addLayout(wm_form)
@@ -592,7 +694,21 @@ class AddCreatorDialog(QDialog):
     def _on_mode_change(self):
         idx = self.mode_combo.currentIndex()
         self.preset_combo.setVisible(idx == 1)
-        self.split_spin.setVisible(idx == 2)
+        self.split_spin.setVisible(idx in (2, 3))
+        self.split_edit_panel.setVisible(idx == 3)
+        if idx == 3:
+            self._open_split_edit_dialog()
+
+    def _refresh_split_edit_summary(self):
+        summary = summarize_split_edit_settings(self._split_edit_settings)
+        self.split_edit_btn.setToolTip(summary)
+        self.split_edit_summary_lbl.setText(summary)
+
+    def _open_split_edit_dialog(self):
+        updated = _open_split_edit_settings_dialog(self, self._split_edit_settings)
+        if updated is not None:
+            self._split_edit_settings = updated
+            self._refresh_split_edit_summary()
 
     @staticmethod
     def _toggle_style(btn: QPushButton):
@@ -647,13 +763,22 @@ class AddCreatorDialog(QDialog):
         if path:
             self.wm_logo_path_edit.setText(path)
 
+    def _browse_avatar(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Avatar File", "",
+            "Media Files (*.png *.jpg *.jpeg *.webp *.bmp *.svg *.gif *.mp4 *.mov *.webm *.mkv *.avi *.m4v);;All Files (*)"
+        )
+        if path:
+            self.wm_avatar_path_edit.setText(path)
+
     def _collect_settings(self) -> Dict[str, object]:
-        mode = ["none", "preset", "split"][self.mode_combo.currentIndex()]
+        mode = _edit_mode_value(self.mode_combo.currentIndex())
         return {
             "n_videos": self.n_spin.value(),
             "editing_mode": mode,
             "preset_name": self.preset_combo.currentText(),
             "split_duration": self.split_spin.value(),
+            "split_edit_settings": self._split_edit_settings,
             "duplication_control": self.dup_check.isChecked(),
             "popular_fallback": self.pop_check.isChecked(),
             "prefer_popular_first": False,
@@ -682,6 +807,14 @@ class AddCreatorDialog(QDialog):
                 "path":     self.wm_logo_path_edit.text().strip(),
                 "position": self.wm_logo_pos_cb.currentText(),
                 "opacity":  self.wm_logo_opacity_sl.value(),
+            },
+            "watermark_avatar": {
+                "enabled":  self.wm_avatar_enable_btn.isChecked(),
+                "path":     self.wm_avatar_path_edit.text().strip(),
+                "position": self.wm_avatar_pos_cb.currentText(),
+                "opacity":  self.wm_avatar_opacity_sl.value(),
+                "width":    self.wm_avatar_width_sp.value(),
+                "height":   self.wm_avatar_height_sp.value(),
             },
         }
 
@@ -794,6 +927,7 @@ class BulkAddDialog(QDialog):
         self.root = root
         self.preset_names = preset_names
         self.created_count = 0
+        self._split_edit_settings = None
         self.setWindowTitle("Bulk Add Creators")
         self.setMinimumSize(900, 700)
         self.resize(980, 760)
@@ -911,7 +1045,7 @@ class BulkAddDialog(QDialog):
         self.n_spin.setRange(1, 500)
         self.n_spin.setValue(5)
         self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["None", "Preset", "Split"])
+        self.mode_combo.addItems(_EDIT_MODE_LABELS)
         self.mode_combo.currentIndexChanged.connect(self._on_mode_change)
         self.preset_combo = QComboBox()
         self.preset_combo.addItems(self.preset_names or ["- no presets -"])
@@ -919,6 +1053,20 @@ class BulkAddDialog(QDialog):
         self.split_spin.setRange(1.0, 3600.0)
         self.split_spin.setValue(15.0)
         self.split_spin.setSuffix(" s")
+        self.split_edit_btn = QPushButton("Configure Split + Edit")
+        self.split_edit_btn.clicked.connect(self._open_split_edit_dialog)
+        self.split_edit_summary_lbl = QLabel("")
+        self.split_edit_summary_lbl.setWordWrap(True)
+        self.split_edit_summary_lbl.setStyleSheet(
+            "color:rgba(255,255,255,0.46); font-size:10px; background:transparent; border:none;"
+        )
+        self.split_edit_panel = QWidget()
+        self.split_edit_panel.setStyleSheet("background:transparent; border:none;")
+        split_edit_layout = QVBoxLayout(self.split_edit_panel)
+        split_edit_layout.setContentsMargins(0, 0, 0, 0)
+        split_edit_layout.setSpacing(4)
+        split_edit_layout.addWidget(self.split_edit_btn, 0, Qt.AlignLeft)
+        split_edit_layout.addWidget(self.split_edit_summary_lbl)
         self.dup_check = QCheckBox("Skip already downloaded")
         self.dup_check.setChecked(True)
         self.pop_check = QCheckBox("Use popular fallback")
@@ -939,6 +1087,7 @@ class BulkAddDialog(QDialog):
         settings_form.addRow("Editing Mode:", self.mode_combo)
         settings_form.addRow("Preset:", self.preset_combo)
         settings_form.addRow("Split Duration:", self.split_spin)
+        settings_form.addRow("Split + Edit:", self.split_edit_panel)
         settings_form.addRow("Duplication:", self.dup_check)
         settings_form.addRow("Popular Fallback:", self.pop_check)
         settings_form.addRow("Randomize:", self.rand_check)
@@ -950,6 +1099,7 @@ class BulkAddDialog(QDialog):
         settings_form.addRow("YT Content:", self.yt_type_combo)
         v.addLayout(settings_form)
         self._on_mode_change()
+        self._refresh_split_edit_summary()
 
         # ── WaterMark Section ──────────────────────────────────────────────
         wm_div = QFrame()
@@ -993,6 +1143,11 @@ class BulkAddDialog(QDialog):
         self.wm_logo_enable_btn.setFixedWidth(65)
         self.wm_logo_enable_btn.clicked.connect(lambda: self._toggle_style(self.wm_logo_enable_btn))
 
+        self.wm_avatar_enable_btn = QPushButton("OFF")
+        self.wm_avatar_enable_btn.setCheckable(True)
+        self.wm_avatar_enable_btn.setFixedWidth(65)
+        self.wm_avatar_enable_btn.clicked.connect(lambda: self._toggle_style(self.wm_avatar_enable_btn))
+
         toggle_row = QHBoxLayout()
         toggle_row.setContentsMargins(0, 0, 0, 0)
         toggle_row.setSpacing(10)
@@ -1004,6 +1159,9 @@ class BulkAddDialog(QDialog):
         toggle_row.addSpacing(8)
         toggle_row.addWidget(_wm_tag("Logo WM"))
         toggle_row.addWidget(self.wm_logo_enable_btn)
+        toggle_row.addSpacing(8)
+        toggle_row.addWidget(_wm_tag("Avatar"))
+        toggle_row.addWidget(self.wm_avatar_enable_btn)
         toggle_row.addStretch()
         wm_wrap.addLayout(toggle_row)
 
@@ -1174,10 +1332,70 @@ class BulkAddDialog(QDialog):
         logo_row.addWidget(lop_w, 2)
         wm_wrap.addLayout(logo_row)
 
+        self.wm_avatar_path_edit = QLineEdit()
+        self.wm_avatar_path_edit.setPlaceholderText("Leave blank to auto-detect avatar.* in folder")
+        self.wm_avatar_path_edit.setMinimumWidth(240)
+        avatar_browse_btn = QToolButton()
+        avatar_browse_btn.setIcon(self.style().standardIcon(QStyle.SP_DirOpenIcon))
+        avatar_browse_btn.setFixedSize(30, 28)
+        avatar_browse_btn.setAutoRaise(True)
+        avatar_browse_btn.setStyleSheet(
+            "QToolButton { background:#2a2410; border:1px solid rgba(222,191,7,0.7); border-radius:4px; }"
+            "QToolButton:hover { background:#3a3216; border-color:#DEBF07; }"
+        )
+        avatar_browse_btn.setToolTip("Select avatar image/video")
+        avatar_browse_btn.clicked.connect(self._browse_avatar)
+
+        self.wm_avatar_pos_cb = QComboBox()
+        self.wm_avatar_pos_cb.addItems(["TopLeft", "TopRight", "BottomLeft", "BottomRight", "Center", "AnimateAround"])
+        self.wm_avatar_pos_cb.setMinimumWidth(130)
+
+        self.wm_avatar_opacity_sl = QSlider(Qt.Horizontal)
+        self.wm_avatar_opacity_sl.setRange(0, 100)
+        self.wm_avatar_opacity_sl.setValue(80)
+        self.wm_avatar_opacity_lbl = QLabel("80%")
+        self.wm_avatar_opacity_lbl.setStyleSheet("color:white; background:transparent; border:none; min-width:32px;")
+        self.wm_avatar_opacity_sl.valueChanged.connect(lambda v: self.wm_avatar_opacity_lbl.setText(f"{v}%"))
+        aop_row = QHBoxLayout()
+        aop_row.setContentsMargins(0, 0, 0, 0)
+        aop_row.setSpacing(6)
+        aop_row.addWidget(self.wm_avatar_opacity_sl, 1)
+        aop_row.addWidget(self.wm_avatar_opacity_lbl)
+        aop_w = QWidget()
+        aop_w.setStyleSheet("background:transparent; border:none;")
+        aop_w.setLayout(aop_row)
+
+        self.wm_avatar_width_sp = QSpinBox()
+        self.wm_avatar_width_sp.setRange(8, 2000)
+        self.wm_avatar_width_sp.setValue(160)
+        self.wm_avatar_width_sp.setMaximumWidth(92)
+        self.wm_avatar_height_sp = QSpinBox()
+        self.wm_avatar_height_sp.setRange(8, 2000)
+        self.wm_avatar_height_sp.setValue(160)
+        self.wm_avatar_height_sp.setMaximumWidth(92)
+
+        avatar_row = QHBoxLayout()
+        avatar_row.setContentsMargins(0, 0, 0, 0)
+        avatar_row.setSpacing(8)
+        avatar_row.addWidget(_wm_tag("Avatar Path"))
+        avatar_row.addWidget(self.wm_avatar_path_edit, 2)
+        avatar_row.addWidget(avatar_browse_btn)
+        avatar_row.addWidget(_wm_tag("Position"))
+        avatar_row.addWidget(self.wm_avatar_pos_cb)
+        avatar_row.addWidget(_wm_tag("Opacity"))
+        avatar_row.addWidget(aop_w, 2)
+        avatar_row.addWidget(_wm_tag("W"))
+        avatar_row.addWidget(self.wm_avatar_width_sp)
+        avatar_row.addWidget(_wm_tag("H"))
+        avatar_row.addWidget(self.wm_avatar_height_sp)
+        avatar_row.addStretch()
+        wm_wrap.addLayout(avatar_row)
+
         # Keep OFF buttons visually explicit from start.
         self._toggle_style(self.wm_enable_btn)
         self._toggle_style(self.wm_txt_enable_btn)
         self._toggle_style(self.wm_logo_enable_btn)
+        self._toggle_style(self.wm_avatar_enable_btn)
         self._set_color_preset_from_hex(self.wm_txt_color_preset_cb, "#FFFFFF")
 
         v.addWidget(wm_panel)
@@ -1265,7 +1483,21 @@ class BulkAddDialog(QDialog):
     def _on_mode_change(self):
         idx = self.mode_combo.currentIndex()
         self.preset_combo.setVisible(idx == 1)
-        self.split_spin.setVisible(idx == 2)
+        self.split_spin.setVisible(idx in (2, 3))
+        self.split_edit_panel.setVisible(idx == 3)
+        if idx == 3:
+            self._open_split_edit_dialog()
+
+    def _refresh_split_edit_summary(self):
+        summary = summarize_split_edit_settings(self._split_edit_settings)
+        self.split_edit_btn.setToolTip(summary)
+        self.split_edit_summary_lbl.setText(summary)
+
+    def _open_split_edit_dialog(self):
+        updated = _open_split_edit_settings_dialog(self, self._split_edit_settings)
+        if updated is not None:
+            self._split_edit_settings = updated
+            self._refresh_split_edit_summary()
 
     @staticmethod
     def _toggle_style(btn: QPushButton):
@@ -1289,13 +1521,22 @@ class BulkAddDialog(QDialog):
         if path:
             self.wm_logo_path_edit.setText(path)
 
+    def _browse_avatar(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Avatar File", "",
+            "Media Files (*.png *.jpg *.jpeg *.webp *.bmp *.svg *.gif *.mp4 *.mov *.webm *.mkv *.avi *.m4v);;All Files (*)"
+        )
+        if path:
+            self.wm_avatar_path_edit.setText(path)
+
     def _collect_settings(self) -> Dict[str, object]:
-        mode = ["none", "preset", "split"][self.mode_combo.currentIndex()]
+        mode = _edit_mode_value(self.mode_combo.currentIndex())
         return {
             "n_videos": self.n_spin.value(),
             "editing_mode": mode,
             "preset_name": self.preset_combo.currentText(),
             "split_duration": self.split_spin.value(),
+            "split_edit_settings": self._split_edit_settings,
             "duplication_control": self.dup_check.isChecked(),
             "popular_fallback": self.pop_check.isChecked(),
             "prefer_popular_first": False,
@@ -1324,6 +1565,14 @@ class BulkAddDialog(QDialog):
                 "path":     self.wm_logo_path_edit.text().strip(),
                 "position": self.wm_logo_pos_cb.currentText(),
                 "opacity":  self.wm_logo_opacity_sl.value(),
+            },
+            "watermark_avatar": {
+                "enabled":  self.wm_avatar_enable_btn.isChecked(),
+                "path":     self.wm_avatar_path_edit.text().strip(),
+                "position": self.wm_avatar_pos_cb.currentText(),
+                "opacity":  self.wm_avatar_opacity_sl.value(),
+                "width":    self.wm_avatar_width_sp.value(),
+                "height":   self.wm_avatar_height_sp.value(),
             },
         }
 
@@ -1424,6 +1673,7 @@ class AllSettingsDialog(QDialog):
         self.baseline_cfg = baseline_cfg
         self.preset_names = preset_names
         self.result_settings: Dict[str, object] = {}
+        self._split_edit_settings = baseline_cfg.split_edit_settings
         self.setWindowTitle("All Settings")
         self.setMinimumSize(860, 680)
         self.resize(920, 760)
@@ -1473,7 +1723,7 @@ class AllSettingsDialog(QDialog):
         settings_form.addRow("N Videos:", self.n_spin)
 
         self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["None", "Preset", "Split"])
+        self.mode_combo.addItems(_EDIT_MODE_LABELS)
         self.mode_combo.setMinimumWidth(170)
         self.mode_combo.currentIndexChanged.connect(self._on_mode_change)
         settings_form.addRow("Editing Mode:", self.mode_combo)
@@ -1488,6 +1738,22 @@ class AllSettingsDialog(QDialog):
         self.split_spin.setSuffix(" s")
         self.split_spin.setMinimumWidth(170)
         settings_form.addRow("Split Duration:", self.split_spin)
+
+        self.split_edit_btn = QPushButton("Configure Split + Edit")
+        self.split_edit_btn.clicked.connect(self._open_split_edit_dialog)
+        self.split_edit_summary_lbl = QLabel("")
+        self.split_edit_summary_lbl.setWordWrap(True)
+        self.split_edit_summary_lbl.setStyleSheet(
+            "color:rgba(255,255,255,0.46); font-size:10px; background:transparent; border:none;"
+        )
+        self.split_edit_panel = QWidget()
+        self.split_edit_panel.setStyleSheet("background:transparent; border:none;")
+        split_edit_layout = QVBoxLayout(self.split_edit_panel)
+        split_edit_layout.setContentsMargins(0, 0, 0, 0)
+        split_edit_layout.setSpacing(4)
+        split_edit_layout.addWidget(self.split_edit_btn, 0, Qt.AlignLeft)
+        split_edit_layout.addWidget(self.split_edit_summary_lbl)
+        settings_form.addRow("Split + Edit:", self.split_edit_panel)
 
         self.dup_check = QCheckBox("Skip already downloaded")
         settings_form.addRow("Duplication:", self.dup_check)
@@ -1647,6 +1913,72 @@ class AllSettingsDialog(QDialog):
         logo_op_w.setLayout(logo_op_row)
         wm_form.addRow("Logo Opacity:", logo_op_w)
 
+        self.wm_avatar_enable_check = QCheckBox("Enable avatar overlay")
+        wm_form.addRow("Avatar:", self.wm_avatar_enable_check)
+
+        avatar_row = QHBoxLayout()
+        avatar_row.setContentsMargins(0, 0, 0, 0)
+        avatar_row.setSpacing(6)
+        self.wm_avatar_path_edit = QLineEdit()
+        self.wm_avatar_path_edit.setPlaceholderText("Leave blank to auto-detect avatar.* in folder")
+        self.wm_avatar_path_edit.setMinimumWidth(300)
+        avatar_btn = QToolButton()
+        avatar_btn.setIcon(self.style().standardIcon(QStyle.SP_DirOpenIcon))
+        avatar_btn.setToolTip("Select avatar image/video")
+        avatar_btn.setAutoRaise(True)
+        avatar_btn.setFixedSize(30, 28)
+        avatar_btn.setStyleSheet(
+            "QToolButton { background:#2a2410; border:1px solid rgba(222,191,7,0.7); border-radius:4px; }"
+            "QToolButton:hover { background:#3a3216; border-color:#DEBF07; }"
+        )
+        avatar_btn.clicked.connect(self._browse_avatar)
+        avatar_row.addWidget(self.wm_avatar_path_edit, 1)
+        avatar_row.addWidget(avatar_btn)
+        avatar_w = QWidget()
+        avatar_w.setStyleSheet("background:transparent; border:none;")
+        avatar_w.setLayout(avatar_row)
+        wm_form.addRow("Avatar Path:", avatar_w)
+
+        self.wm_avatar_pos_cb = QComboBox()
+        self.wm_avatar_pos_cb.addItems(["TopLeft", "TopRight", "BottomLeft", "BottomRight", "Center", "AnimateAround"])
+        self.wm_avatar_pos_cb.setMinimumWidth(170)
+        wm_form.addRow("Avatar Position:", self.wm_avatar_pos_cb)
+
+        self.wm_avatar_opacity_sl = QSlider(Qt.Horizontal)
+        self.wm_avatar_opacity_sl.setRange(0, 100)
+        self.wm_avatar_opacity_sl.setValue(80)
+        self.wm_avatar_opacity_lbl = QLabel("80%")
+        self.wm_avatar_opacity_lbl.setStyleSheet("color:white; background:transparent; border:none; min-width:32px;")
+        self.wm_avatar_opacity_sl.valueChanged.connect(lambda v: self.wm_avatar_opacity_lbl.setText(f"{v}%"))
+        avatar_op_row = QHBoxLayout()
+        avatar_op_row.setContentsMargins(0, 0, 0, 0)
+        avatar_op_row.setSpacing(6)
+        avatar_op_row.addWidget(self.wm_avatar_opacity_sl, 1)
+        avatar_op_row.addWidget(self.wm_avatar_opacity_lbl)
+        avatar_op_w = QWidget()
+        avatar_op_w.setStyleSheet("background:transparent; border:none;")
+        avatar_op_w.setLayout(avatar_op_row)
+        wm_form.addRow("Avatar Opacity:", avatar_op_w)
+
+        avatar_size_row = QHBoxLayout()
+        avatar_size_row.setContentsMargins(0, 0, 0, 0)
+        avatar_size_row.setSpacing(6)
+        self.wm_avatar_width_sp = QSpinBox()
+        self.wm_avatar_width_sp.setRange(8, 2000)
+        self.wm_avatar_width_sp.setValue(160)
+        self.wm_avatar_width_sp.setSuffix(" px")
+        self.wm_avatar_height_sp = QSpinBox()
+        self.wm_avatar_height_sp.setRange(8, 2000)
+        self.wm_avatar_height_sp.setValue(160)
+        self.wm_avatar_height_sp.setSuffix(" px")
+        avatar_size_row.addWidget(self.wm_avatar_width_sp)
+        avatar_size_row.addWidget(self.wm_avatar_height_sp)
+        avatar_size_row.addStretch()
+        avatar_size_w = QWidget()
+        avatar_size_w.setStyleSheet("background:transparent; border:none;")
+        avatar_size_w.setLayout(avatar_size_row)
+        wm_form.addRow("Avatar Size:", avatar_size_w)
+
         content.addLayout(wm_form)
         content.addStretch(1)
 
@@ -1655,7 +1987,8 @@ class AllSettingsDialog(QDialog):
             self.wm_text_edit, self.wm_txt_pos_cb, self.wm_txt_font_edit, self.wm_txt_color_preset_cb,
             self.wm_txt_size_sp, self.wm_txt_weight_cb, self.wm_txt_style_cb,
             self.wm_txt_render_style_cb, self.wm_txt_shadow_offset_sp, self.wm_txt_spacing_sp, self.wm_logo_path_edit,
-            self.wm_logo_pos_cb
+            self.wm_logo_pos_cb, self.wm_avatar_path_edit, self.wm_avatar_pos_cb,
+            self.wm_avatar_width_sp, self.wm_avatar_height_sp
         ):
             ctrl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
@@ -1710,19 +2043,31 @@ class AllSettingsDialog(QDialog):
         if path:
             self.wm_logo_path_edit.setText(path)
 
+    def _browse_avatar(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Avatar File", "",
+            "Media Files (*.png *.jpg *.jpeg *.webp *.bmp *.svg *.gif *.mp4 *.mov *.webm *.mkv *.avi *.m4v);;All Files (*)"
+        )
+        if path:
+            self.wm_avatar_path_edit.setText(path)
+
     def _on_mode_change(self):
         m = self.mode_combo.currentIndex()
         self.preset_combo.setVisible(m == 1)
-        self.split_spin.setVisible(m == 2)
+        self.split_spin.setVisible(m in (2, 3))
+        self.split_edit_panel.setVisible(m == 3)
+        if m == 3 and not getattr(self, "_loading_settings", False):
+            self._open_split_edit_dialog()
 
     def _load_from_config(self):
         c = self.baseline_cfg
-        mode_map = {"none": 0, "preset": 1, "split": 2}
+        self._loading_settings = True
         self.n_spin.setValue(c.n_videos)
-        self.mode_combo.setCurrentIndex(mode_map.get(c.editing_mode, 0))
+        self.mode_combo.setCurrentIndex(_edit_mode_index(c.editing_mode))
         if c.preset_name and c.preset_name in self.preset_names:
             self.preset_combo.setCurrentText(c.preset_name)
         self.split_spin.setValue(c.split_duration)
+        self._split_edit_settings = c.split_edit_settings
         self.dup_check.setChecked(c.duplication_control)
         self.pop_check.setChecked(c.popular_fallback)
         self.rand_check.setChecked(c.randomize_links)
@@ -1750,15 +2095,36 @@ class AllSettingsDialog(QDialog):
         self.wm_logo_path_edit.setText(str(wl.get("path", "")))
         self.wm_logo_pos_cb.setCurrentText(str(wl.get("position", "TopLeft")))
         self.wm_logo_opacity_sl.setValue(int(wl.get("opacity", 80)))
+        wa = c.watermark_avatar
+        self.wm_avatar_enable_check.setChecked(bool(wa.get("enabled", False)))
+        self.wm_avatar_path_edit.setText(str(wa.get("path", "")))
+        self.wm_avatar_pos_cb.setCurrentText(str(wa.get("position", "TopRight")))
+        self.wm_avatar_opacity_sl.setValue(int(wa.get("opacity", 80)))
+        self.wm_avatar_width_sp.setValue(int(wa.get("width", 160)))
+        self.wm_avatar_height_sp.setValue(int(wa.get("height", 160)))
+        self._refresh_split_edit_summary()
         self._on_mode_change()
+        self._loading_settings = False
+
+    def _refresh_split_edit_summary(self):
+        summary = summarize_split_edit_settings(self._split_edit_settings)
+        self.split_edit_btn.setToolTip(summary)
+        self.split_edit_summary_lbl.setText(summary)
+
+    def _open_split_edit_dialog(self):
+        updated = _open_split_edit_settings_dialog(self, self._split_edit_settings)
+        if updated is not None:
+            self._split_edit_settings = updated
+            self._refresh_split_edit_summary()
 
     def _collect_settings(self) -> Dict[str, object]:
-        mode = ["none", "preset", "split"][self.mode_combo.currentIndex()]
+        mode = _edit_mode_value(self.mode_combo.currentIndex())
         return {
             "n_videos": self.n_spin.value(),
             "editing_mode": mode,
             "preset_name": self.preset_combo.currentText(),
             "split_duration": self.split_spin.value(),
+            "split_edit_settings": self._split_edit_settings,
             "duplication_control": self.dup_check.isChecked(),
             "popular_fallback": self.pop_check.isChecked(),
             "prefer_popular_first": False,
@@ -1785,6 +2151,14 @@ class AllSettingsDialog(QDialog):
                 "path":     self.wm_logo_path_edit.text().strip(),
                 "position": self.wm_logo_pos_cb.currentText(),
                 "opacity":  self.wm_logo_opacity_sl.value(),
+            },
+            "watermark_avatar": {
+                "enabled":  self.wm_avatar_enable_check.isChecked(),
+                "path":     self.wm_avatar_path_edit.text().strip(),
+                "position": self.wm_avatar_pos_cb.currentText(),
+                "opacity":  self.wm_avatar_opacity_sl.value(),
+                "width":    self.wm_avatar_width_sp.value(),
+                "height":   self.wm_avatar_height_sp.value(),
             },
         }
 
@@ -1842,6 +2216,7 @@ class CreatorProfilesPage(QWidget):
         self._queue_manager.queue_progress.connect(self._on_queue_progress)
         self._queue_manager.creator_started.connect(self._on_queue_creator_started)
         self._queue_manager.creator_finished.connect(self._on_queue_creator_finished)
+        self._queue_manager.creator_progress_msg.connect(self._on_queue_creator_progress)
         self._queue_manager.creator_progress_pct.connect(self._on_queue_creator_pct)
         self._queue_manager.queue_finished.connect(self._on_queue_finished)
         self._queue_manager.paused.connect(self._on_queue_paused)
@@ -2475,19 +2850,27 @@ class CreatorProfilesPage(QWidget):
     # ── Queue manager signal handlers ────────────────────────────────────
 
     def _on_queue_progress(self, msg: str):
-        """Update queue status label and active card's status."""
+        """Update the queue status label only."""
         self.queue_status_lbl.setText(msg)
         self.queue_status_lbl.setVisible(True)
-        # Also update the active card's status text
+
+    def _on_queue_creator_progress(self, creator_name: str, msg: str):
+        """Update only the active creator card with filtered per-creator progress."""
+        try:
+            from modules.shared.progress_filter import filter_queue_progress_for_card
+        except ImportError:
+            filter_queue_progress_for_card = None
+
         for fp, card in self.cards.items():
-            if card._queue_active:
-                # Extract creator-specific message (strip "@name: " prefix)
-                display = msg
-                prefix = f"@{fp.name}: "
-                if display.startswith(prefix):
-                    display = display[len(prefix):]
-                card._set_state("running", display)
-                break
+            if fp.name != creator_name:
+                continue
+            filtered = None
+            if filter_queue_progress_for_card is not None:
+                filtered = filter_queue_progress_for_card(msg, creator_name)
+            if filtered is None:
+                return
+            card._set_state("running", filtered)
+            return
 
     def _on_queue_creator_started(self, creator_name: str):
         """Highlight the card being processed (queue manager runs its own worker)."""
@@ -2701,6 +3084,7 @@ class CreatorProfilesPage(QWidget):
                 "editing_mode":        cfg.editing_mode,
                 "preset_name":         cfg.preset_name,
                 "split_duration":      cfg.split_duration,
+                "split_edit_settings": cfg.split_edit_settings,
                 "duplication_control": cfg.duplication_control,
                 "popular_fallback":    cfg.popular_fallback,
                 "prefer_popular_first": cfg.prefer_popular_first,
@@ -2733,7 +3117,7 @@ class CreatorProfilesPage(QWidget):
                 folder.mkdir(parents=True, exist_ok=True)
                 cfg = CreatorConfig(folder)
                 for key in ("creator_url", "n_videos", "editing_mode",
-                            "preset_name", "split_duration", "duplication_control",
+                            "preset_name", "split_duration", "split_edit_settings", "duplication_control",
                             "popular_fallback", "prefer_popular_first", "randomize_links",
                             "keep_original_after_edit", "delete_before_download",
                             "uploading_target"):

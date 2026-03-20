@@ -34,12 +34,88 @@ _WATERMARK_LOGO_DEFAULTS = {
     "size": 15,                   # % of video width (scale)
 }
 
+_WATERMARK_AVATAR_DEFAULTS = {
+    "enabled": False,
+    "path": "",                   # empty = auto-detect avatar.* in creator folder
+    "position": "TopRight",
+    "opacity": 80,
+    "width": 160,                 # target box width in px
+    "height": 160,                # target box height in px
+}
+
+EDITING_MODE_VALUES = ("none", "preset", "split", "split_edit")
+
+_SPLIT_EDIT_DEFAULTS = {
+    "zoom_percent": 100,
+    "remove_background_music": False,
+    "voice_enhance_enabled": False,
+    "voice_pitch_percent": 0,
+    "voice_clarity": "mild",      # mild | strong
+    "metadata_level": "off",      # off | medium | high
+    "mirror_horizontal": False,
+}
+
+
+def get_split_edit_defaults() -> Dict[str, Any]:
+    return _SPLIT_EDIT_DEFAULTS.copy()
+
+
+def merge_split_edit_settings(settings: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    merged = get_split_edit_defaults()
+    if isinstance(settings, dict):
+        merged.update(settings)
+
+    try:
+        merged["zoom_percent"] = max(50, min(200, int(merged.get("zoom_percent", 100))))
+    except Exception:
+        merged["zoom_percent"] = 100
+
+    merged["remove_background_music"] = bool(merged.get("remove_background_music", False))
+    merged["voice_enhance_enabled"] = bool(merged.get("voice_enhance_enabled", False))
+
+    try:
+        merged["voice_pitch_percent"] = max(-10, min(10, int(merged.get("voice_pitch_percent", 0))))
+    except Exception:
+        merged["voice_pitch_percent"] = 0
+
+    voice_clarity = str(merged.get("voice_clarity", "mild") or "mild").strip().lower()
+    merged["voice_clarity"] = voice_clarity if voice_clarity in {"mild", "strong"} else "mild"
+
+    metadata_level = str(merged.get("metadata_level", "off") or "off").strip().lower()
+    merged["metadata_level"] = metadata_level if metadata_level in {"off", "medium", "high"} else "off"
+
+    merged["mirror_horizontal"] = bool(merged.get("mirror_horizontal", False))
+    return merged
+
+
+def summarize_split_edit_settings(settings: Optional[Dict[str, Any]]) -> str:
+    merged = merge_split_edit_settings(settings)
+    parts = [f"{merged['zoom_percent']}% zoom"]
+
+    if merged["remove_background_music"]:
+        parts.append("music removal")
+
+    if merged["voice_enhance_enabled"]:
+        pitch = int(merged["voice_pitch_percent"])
+        pitch_label = f"{pitch:+d}%" if pitch else "0%"
+        parts.append(f"voice {merged['voice_clarity']} ({pitch_label})")
+
+    metadata = merged["metadata_level"]
+    if metadata != "off":
+        parts.append(f"metadata {metadata}")
+
+    if merged["mirror_horizontal"]:
+        parts.append("mirror")
+
+    return " | ".join(parts)
+
 _DEFAULTS = {
     "creator_url": "",
     "n_videos": 5,
-    "editing_mode": "none",       # "none" | "preset" | "split"
+    "editing_mode": "none",       # "none" | "preset" | "split" | "split_edit"
     "preset_name": "",
     "split_duration": 15.0,
+    "split_edit_settings": get_split_edit_defaults(),
     "duplication_control": True,
     "popular_fallback": True,
     "prefer_popular_first": False,
@@ -51,6 +127,7 @@ _DEFAULTS = {
     "watermark_enabled": False,
     "watermark_text": _WATERMARK_TEXT_DEFAULTS.copy(),
     "watermark_logo": _WATERMARK_LOGO_DEFAULTS.copy(),
+    "watermark_avatar": _WATERMARK_AVATAR_DEFAULTS.copy(),
     "downloaded_ids": [],
     "downloaded_url_history": [],
     "last_activity": {
@@ -113,6 +190,12 @@ class CreatorConfig:
                 wm_logo = _WATERMARK_LOGO_DEFAULTS.copy()
                 wm_logo.update(merged.get("watermark_logo") or {})
                 merged["watermark_logo"] = wm_logo
+                wm_avatar = _WATERMARK_AVATAR_DEFAULTS.copy()
+                wm_avatar.update(merged.get("watermark_avatar") or {})
+                merged["watermark_avatar"] = wm_avatar
+                merged["split_edit_settings"] = merge_split_edit_settings(
+                    merged.get("split_edit_settings")
+                )
                 return merged
             except Exception:
                 pass
@@ -361,7 +444,8 @@ class CreatorConfig:
 
     @property
     def editing_mode(self) -> str:
-        return str(self.data.get("editing_mode", "none")).strip().lower()
+        mode = str(self.data.get("editing_mode", "none")).strip().lower()
+        return mode if mode in EDITING_MODE_VALUES else "none"
 
     @property
     def preset_name(self) -> str:
@@ -370,6 +454,10 @@ class CreatorConfig:
     @property
     def split_duration(self) -> float:
         return float(self.data.get("split_duration", 15.0))
+
+    @property
+    def split_edit_settings(self) -> dict:
+        return merge_split_edit_settings(self.data.get("split_edit_settings"))
 
     @property
     def duplication_control(self) -> bool:
@@ -423,5 +511,12 @@ class CreatorConfig:
     def watermark_logo(self) -> dict:
         wm = self.data.get("watermark_logo") or {}
         defaults = _WATERMARK_LOGO_DEFAULTS.copy()
+        defaults.update(wm)
+        return defaults
+
+    @property
+    def watermark_avatar(self) -> dict:
+        wm = self.data.get("watermark_avatar") or {}
+        defaults = _WATERMARK_AVATAR_DEFAULTS.copy()
         defaults.update(wm)
         return defaults

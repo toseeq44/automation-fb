@@ -89,10 +89,6 @@ PLATFORM_SELECTORS: Dict[str, dict] = {
         "video_link": 'a[href*="/videos/"]',
         "video_tab": "/videos/",
     },
-    "youtube": {
-        "video_link": 'a#video-title-link, a[href*="/watch?v="]',
-        "video_tab": "/videos",
-    },
 }
 
 # Max scrolls with no new links before we stop
@@ -100,11 +96,36 @@ _MAX_STALE_SCROLLS = 5
 
 
 def _log(msg: str, progress_cb: Optional[Callable] = None):
-    """Print to terminal AND optionally emit to GUI progress."""
-    print(msg)
+    """Emit IX logs without double-printing when a progress callback exists."""
+    if not progress_cb:
+        print(msg)
     logger.info(msg)
     if progress_cb:
         progress_cb(msg)
+
+
+def _youtube_selector_config(yt_content_type: str = "all") -> Dict[str, Optional[str]]:
+    pref = str(yt_content_type or "all").strip().lower()
+    if pref == "shorts":
+        return {
+            "video_link": 'a#thumbnail[href*="/shorts/"], a[href*="/shorts/"]',
+            "video_tab": "/shorts",
+        }
+    if pref == "long":
+        return {
+            "video_link": 'a#video-title-link, a#thumbnail[href*="/watch?v="], a[href*="/watch?v="]',
+            "video_tab": "/videos",
+        }
+    return {
+        "video_link": 'a#video-title-link, a#thumbnail[href*="/watch?v="], a[href*="/watch?v="], a#thumbnail[href*="/shorts/"], a[href*="/shorts/"]',
+        "video_tab": None,
+    }
+
+
+def _get_selector_config(platform_key: str, yt_content_type: str = "all") -> Dict[str, Optional[str]]:
+    if platform_key == "youtube":
+        return _youtube_selector_config(yt_content_type=yt_content_type)
+    return PLATFORM_SELECTORS.get(platform_key, {})
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -523,6 +544,7 @@ class IXSessionManager:
         creator_url: str,
         platform_key: str,
         max_videos: int = 20,
+        yt_content_type: str = "all",
         progress_cb: Optional[Callable] = None,
     ) -> Tuple[List[dict], str]:
         """Scroll creator profile and extract video links via Selenium.
@@ -534,7 +556,7 @@ class IXSessionManager:
             _log("[IX-Links] ERROR: No Selenium driver!", progress_cb)
             return [], ""
 
-        sel = PLATFORM_SELECTORS.get(platform_key, {})
+        sel = _get_selector_config(platform_key, yt_content_type=yt_content_type)
         css_selector = sel.get("video_link")
         video_tab = sel.get("video_tab")
 

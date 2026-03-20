@@ -11,7 +11,7 @@ IMPORTANT: Before building, ensure these files exist:
 
 import os
 from pathlib import Path
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
 
 block_cipher = None
 
@@ -24,6 +24,15 @@ else:
 
 # Optional data files - only include if they exist
 optional_datas = []
+extra_hiddenimports = []
+
+try:
+    optional_datas += collect_data_files('curl_cffi')
+    optional_binaries += collect_dynamic_libs('curl_cffi')
+    extra_hiddenimports += collect_submodules('curl_cffi')
+    print("INFO: curl_cffi found - TikTok/browser impersonation will be bundled")
+except Exception:
+    print("WARNING: curl_cffi not found - TikTok downloads may fail despite valid cookies")
 
 # Check for ffmpeg - bundle entire folder preserving bin/ structure
 if os.path.exists('ffmpeg') and os.path.isdir('ffmpeg'):
@@ -39,6 +48,20 @@ if os.path.exists('ffmpeg') and os.path.isdir('ffmpeg'):
         optional_datas.append((os.path.join('ffmpeg', 'presets'), os.path.join('ffmpeg', 'presets')))
 else:
     print("WARNING: ffmpeg directory not found - video editing/watermark/split WILL NOT WORK")
+
+# Check for Demucs local model repo
+if os.path.exists('demucs_models') and os.path.isdir('demucs_models'):
+    optional_datas.append(('demucs_models', 'demucs_models'))
+    print("INFO: demucs_models directory found - split-edit music removal will work offline")
+else:
+    print("WARNING: demucs_models directory not found - split-edit music removal will fall back to FFmpeg filters")
+
+# Check for bundled Deno runtime used by yt-dlp YouTube JS challenges
+if os.path.exists(os.path.join('third_party', 'deno_runtime')) and os.path.isdir(os.path.join('third_party', 'deno_runtime')):
+    optional_datas.append((os.path.join('third_party', 'deno_runtime'), os.path.join('third_party', 'deno_runtime')))
+    print("INFO: third_party/deno_runtime found - YouTube downloads will use bundled JS runtime")
+else:
+    print("WARNING: third_party/deno_runtime not found - YouTube downloads may miss formats")
 
 # Check for presets
 if os.path.exists('presets') and os.path.isdir('presets'):
@@ -94,7 +117,7 @@ a = Analysis(
         # Configs to bundle
         ('api_config.json', '.'),
     ] + optional_datas,  # Add optional data files
-    hiddenimports=collect_submodules('encodings') + [
+    hiddenimports=collect_submodules('encodings') + collect_submodules('demucs') + collect_submodules('openunmix') + collect_submodules('torchaudio') + collect_submodules('dora') + collect_submodules('julius') + collect_submodules('yt_dlp_ejs') + extra_hiddenimports + [
         # PyQt5 essentials
         'PyQt5.sip',
         'PyQt5.QtWebEngineWidgets',
@@ -104,6 +127,7 @@ a = Analysis(
 
         # Video downloader dependencies
         'yt_dlp',
+        'yt_dlp_ejs',
         'yt_dlp.extractor',
         'yt_dlp.downloader',
         'yt_dlp.postprocessor',
@@ -112,6 +136,7 @@ a = Analysis(
         'requests',
         'urllib3',
         'certifi',
+        'curl_cffi',
 
         # Cookies and authentication
         'browser_cookie3',
@@ -220,6 +245,8 @@ a = Analysis(
         'modules.api_manager',
         'modules.auto_uploader',
         'modules.creator_profiles',
+        'modules.creator_profiles.demucs_runner',
+        'lameenc',
         'modules.license',
         'modules.link_grabber',
         'modules.logging',

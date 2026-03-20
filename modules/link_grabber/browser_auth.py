@@ -833,6 +833,7 @@ class ChromiumAuthManager:
         platform_key: str,
         content_filter: str,
         max_items: int = 0,
+        max_scroll_attempts_override: Optional[int] = None,
         progress_callback: Optional[Callable[[str], None]] = None,
     ) -> List[dict]:
         platform_key = (platform_key or "").lower().strip()
@@ -857,6 +858,7 @@ class ChromiumAuthManager:
                     target_url=target,
                     platform_key=platform_key,
                     max_items=max_items,
+                    max_scroll_attempts_override=max_scroll_attempts_override,
                     progress_callback=progress_callback,
                 ):
                     if href in seen:
@@ -1249,6 +1251,13 @@ class ChromiumAuthManager:
         if not raw:
             return []
 
+        if platform_key == "youtube":
+            # Respect the caller's chosen YouTube profile view. The higher-level
+            # extractor already decides whether we should hit homepage, /videos,
+            # or /shorts. If we need more later, extract_links_intelligent()
+            # performs the broader tab fallback explicitly.
+            return [raw]
+
         try:
             from .content_filter import ContentFilter
 
@@ -1270,6 +1279,7 @@ class ChromiumAuthManager:
         target_url: str,
         platform_key: str,
         max_items: int,
+        max_scroll_attempts_override: Optional[int] = None,
         progress_callback: Optional[Callable[[str], None]] = None,
     ) -> List[str]:
         selector_map = {
@@ -1281,7 +1291,10 @@ class ChromiumAuthManager:
         }
         selector = selector_map.get(platform_key, "a")
 
-        max_scroll_attempts = int(BROWSER_AUTH_CONFIG.get("max_scroll_attempts", 100))
+        if max_scroll_attempts_override is None:
+            max_scroll_attempts = int(BROWSER_AUTH_CONFIG.get("max_scroll_attempts", 100))
+        else:
+            max_scroll_attempts = max(1, int(max_scroll_attempts_override))
         stagnant_limit = int(BROWSER_AUTH_CONFIG.get("stagnant_limit", 5))
         sleep_seconds = float(BROWSER_AUTH_CONFIG.get("scroll_delay_min", 1.8))
 

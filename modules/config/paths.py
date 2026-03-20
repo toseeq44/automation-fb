@@ -222,6 +222,49 @@ def find_ytdlp_executable() -> str:
     return None
 
 
+def ensure_deno_in_path() -> bool:
+    """
+    Ensure the Deno JS runtime is discoverable by yt-dlp for YouTube
+    signature/n-challenge solving (EJS).
+
+    Checks bundled locations (EXE mode) and common install paths,
+    then adds to PATH if found but missing.
+    Returns True if deno is available after the call.
+    """
+    import shutil
+
+    if shutil.which("deno"):
+        return True
+
+    deno_name = "deno.exe" if sys.platform == "win32" else "deno"
+    candidates = []
+
+    # Priority 1: Bundled with EXE (_internal/third_party/deno_runtime/)
+    if getattr(sys, "frozen", False):
+        candidates.append(Path(sys._MEIPASS) / "third_party" / "deno_runtime")
+
+    # Priority 2: Dev-mode project folder
+    candidates.append(get_application_root() / "third_party" / "deno_runtime")
+
+    # Priority 3: User-installed Deno
+    if sys.platform == "win32":
+        home = Path.home()
+        candidates.extend([
+            home / ".deno" / "bin",
+            Path(os.environ.get("LOCALAPPDATA", "")) / "deno",
+        ])
+
+    for candidate in candidates:
+        try:
+            if (candidate / deno_name).is_file():
+                os.environ["PATH"] = str(candidate) + os.pathsep + os.environ.get("PATH", "")
+                return True
+        except Exception:
+            continue
+
+    return False
+
+
 # Export main functions
 __all__ = [
     'get_application_root',
@@ -230,4 +273,5 @@ __all__ = [
     'get_data_dir',
     'get_bundled_resource_path',
     'find_ytdlp_executable',
+    'ensure_deno_in_path',
 ]

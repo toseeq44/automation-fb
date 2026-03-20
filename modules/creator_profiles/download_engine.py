@@ -88,11 +88,12 @@ def _get_random_user_agent() -> str:
         return get_random_user_agent()
     except Exception:
         agents = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
         ]
         return random.choice(agents)
 
@@ -340,8 +341,8 @@ _SMART_FORMAT = (
 _CHROME120_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+    "Accept-Encoding": "gzip, deflate, br, zstd",
+    "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
     "Sec-Ch-Ua-Mobile": "?0",
     "Sec-Ch-Ua-Platform": '"Windows"',
     "Sec-Fetch-Dest": "document",
@@ -532,8 +533,11 @@ def download_video(
             "nocheckcertificate": True,
             "restrictfilenames": True,
             "socket_timeout": 60,
-            "retries": 3,
-            "fragment_retries": 3,
+            "retries": 10,
+            "fragment_retries": 10,
+            "extractor_retries": 5,
+            "sleep_interval_requests": 1,
+            "max_sleep_interval": 5,
             "http_headers": headers,
             "progress_hooks": [_hook],
         }
@@ -584,9 +588,11 @@ def download_video(
             "--no-playlist",
             "--continue",
             "--restrict-filenames",
-            "--retries", "3",
-            "--fragment-retries", "3",
+            "--retries", "10",
+            "--fragment-retries", "10",
+            "--extractor-retries", "5",
             "--socket-timeout", "60",
+            "--sleep-interval-requests", "1",
             "--user-agent", _get_random_user_agent(),
             "--no-check-certificate",
         ]
@@ -799,6 +805,56 @@ def download_video(
 
         if progress_cb and last_error[0]:
             progress_cb(f"  [IG] Final error: {last_error[0]}")
+        return _pick_fresh_video()
+
+    # ── TikTok: impersonate + watermark-free formats ──────────────────────────
+    if platform == "tiktok":
+        # TikTok requires browser fingerprint impersonation (chrome-131) since 2025.
+        # Format "b" = best single-stream (no merging needed, watermark-free).
+        tiktok_formats = ["b", "bv*+ba/b", "best[ext=mp4]/best", "best"]
+        cookie_choices_tt = list(cookie_pool) + [None]
+        strategy_list = [("direct", False), ("proxy", bool(proxy_url))]
+
+        for strategy_label, use_proxy in strategy_list:
+            if strategy_label == "proxy" and not use_proxy:
+                continue
+            if cancelled[0]:
+                break
+            active_proxy = proxy_url if use_proxy else None
+
+            for fmt in tiktok_formats:
+                if cancelled[0]:
+                    break
+                for ck in cookie_choices_tt:
+                    if cancelled[0]:
+                        break
+                    if progress_cb:
+                        ck_label = Path(ck).name if ck else "no-cookie"
+                        progress_cb(f"  [TT] {strategy_label} | {fmt} | {ck_label}")
+
+                    # Try with impersonate (primary - required for TikTok anti-bot)
+                    impersonate_args = {"generic": {"impersonate": ["chrome-131"]}}
+                    ok, err = _attempt_download(
+                        fmt=fmt, cookie=ck, proxy=active_proxy,
+                        extractor_args=impersonate_args,
+                        force_cli=False,
+                    )
+                    if ok:
+                        return result_path[0] or _pick_fresh_video()
+
+                    # Fallback: try CLI with --impersonate flag directly
+                    if ytdlp_bin and not ok:
+                        ok_cli, err_cli = _try_cli(fmt, ck, active_proxy)
+                        if ok_cli:
+                            return result_path[0] or _pick_fresh_video()
+
+                    err_low = (err or "").lower()
+                    if any(x in err_low for x in ("sign in", "login", "private")):
+                        _set_error("TikTok login required")
+                        break
+
+        if progress_cb and last_error[0]:
+            progress_cb(f"  [TT] Final error: {last_error[0]}")
         return _pick_fresh_video()
 
     smart_fmt = _SMART_FORMAT if ffmpeg_available else "best[ext=mp4]/best"
@@ -2150,7 +2206,7 @@ class CreatorDownloadWorker(QThread):
                     break
                 if added_now <= 0:
                     stale_rounds += 1
-                    if stale_rounds >= 1:
+                    if stale_rounds >= 2:
                         break
                 else:
                     stale_rounds = 0
@@ -2175,7 +2231,7 @@ class CreatorDownloadWorker(QThread):
                 )
 
         # ── Approach 2: IXBrowser Fallback ───────────────────────────────────────
-        if False and ENABLE_IXBROWSER_FALLBACK and not latest_entries:  # legacy IX hook kept disabled; fallback runs after legacy queue
+        if ENABLE_IXBROWSER_FALLBACK and not latest_entries:  # IXBrowser fallback runs when Playwright gets 0 links
             self.progress.emit("[IX] Primary grabber found 0 links. Falling back to IXBrowser approach...")
             print(f"[CreatorProfile] IXBrowser fallback for {creator_url} on {platform_key}")
 

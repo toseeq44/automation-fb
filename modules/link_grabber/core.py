@@ -4434,7 +4434,66 @@ def extract_links_intelligent(
                 from modules.shared.session_authority import get_session_authority
                 _sa = get_session_authority()
                 _sess = _sa.get_session_status()
-                if _sess.get(platform_key) and not _sa.is_profile_busy():
+                _profile_busy = _sa.is_profile_busy()
+                try:
+                    _profile_ready = bool(auth_manager.is_setup_complete())
+                except Exception:
+                    _profile_ready = False
+
+                _session_present = bool(_sess.get(platform_key))
+                _session_recovery_platform = platform_key in {"instagram", "tiktok"}
+                _can_try_browser_recovery = (
+                    not _profile_busy
+                    and (
+                        _session_present
+                        or (_session_recovery_platform and _profile_ready)
+                    )
+                )
+
+                if _can_try_browser_recovery and _session_recovery_platform:
+                    try:
+                        refreshed_cookie = _sa.force_browser_cookie_refresh(platform_key)
+                    except Exception as _refresh_err:
+                        refreshed_cookie = None
+                        logging.debug(
+                            "[ManagedBrowser] live cookie refresh failed for %s: %s",
+                            platform_key,
+                            _refresh_err,
+                        )
+                    if refreshed_cookie:
+                        cookie_file = refreshed_cookie
+                        _auth_ticket = dict(_auth_ticket or {})
+                        _auth_ticket["cookie_path"] = refreshed_cookie
+                        _auth_ticket["source_id"] = _auth_ticket.get("source_id") or "managed_browser_refresh"
+                        _auth_ticket["source_kind"] = _auth_ticket.get("source_kind") or "managed_browser_refresh"
+                        _candidates = [
+                            str(p).strip()
+                            for p in (_auth_ticket.get("candidate_paths") or [])
+                            if str(p).strip()
+                        ]
+                        if refreshed_cookie not in _candidates:
+                            _candidates.insert(0, refreshed_cookie)
+                        _auth_ticket["candidate_paths"] = _candidates
+                        meta["auth_ticket"] = dict(_auth_ticket)
+                        meta["attempt_reports"].append({
+                            "stage": "auth_ready",
+                            "method_id": "managed_browser_refresh",
+                            "auth_source": _auth_ticket.get("source_kind") or "managed_browser_refresh",
+                            "result": "success",
+                            "failure_type": "",
+                            "links_added": 0,
+                            "retry_used": True,
+                        })
+                        if progress_callback:
+                            progress_callback(
+                                f"Recovered live {platform_key} cookies from managed browser."
+                            )
+
+                if _can_try_browser_recovery:
+                    if progress_callback and _session_recovery_platform and not _session_present:
+                        progress_callback(
+                            f"Managed {platform_key} profile found. Trying live browser session recovery..."
+                        )
                     _content_filter = {
                         'youtube': 'all_videos',
                         'tiktok': 'all_videos',
@@ -4468,9 +4527,9 @@ def extract_links_intelligent(
                         "method_id": "managed_browser_session",
                         "auth_source": (_auth_ticket or {}).get("source_kind") or "managed_browser",
                         "result": "success" if added > 0 else "failed",
-                        "failure_type": "" if added > 0 else "auth_missing",
+                        "failure_type": "" if added > 0 else ("session_present_cookie_export_failed" if _session_recovery_platform else "auth_missing"),
                         "links_added": added,
-                        "retry_used": False,
+                        "retry_used": bool(_session_recovery_platform),
                     })
                     if added > 0:
                         pre_successful_method = "Managed Browser Session"
@@ -4480,7 +4539,10 @@ def extract_links_intelligent(
                         meta["failure_type"] = ""
                 elif not _allow_public_methods:
                     meta["stage_failed"] = meta.get("stage_failed") or "browser_session_extraction"
-                    meta["failure_type"] = meta.get("failure_type") or "auth_missing"
+                    if _session_recovery_platform and _profile_ready:
+                        meta["failure_type"] = meta.get("failure_type") or "session_cookie_export_failed"
+                    else:
+                        meta["failure_type"] = meta.get("failure_type") or "auth_missing"
             except Exception as _managed_browser_err:
                 logging.debug("[ManagedBrowser] extraction failed: %s", _managed_browser_err)
 

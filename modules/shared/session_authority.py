@@ -1332,7 +1332,7 @@ class AuthFallbackChain:
             can_use_public_fallback=(
                 bool(allow_public_fallback)
                 if allow_public_fallback is not None
-                else platform in {"youtube", "facebook", "instagram"}
+                else platform in {"youtube", "facebook", "instagram", "tiktok"}
             ),
         )
         candidate_paths: List[str] = []

@@ -1467,7 +1467,7 @@ class CreatorDownloadWorker(QThread):
                 "validated_at": 0.0,
                 "auth_strength": "none",
                 "candidate_paths": [],
-                "can_use_public_fallback": platform_key in {"youtube", "facebook", "instagram"},
+                "can_use_public_fallback": platform_key in {"youtube", "facebook", "instagram", "tiktok"},
             }
 
     def _record_attempt(

@@ -544,6 +544,17 @@ class VideoDownloaderThread(QThread):
         self.last_verified_output = ""
         self.verified_outputs = []
         self._tiktok_impersonation_warned = False
+        self.auth_ticket = dict(self.options.get("auth_ticket") or {})
+        self.explicit_cookie_file = str(self.options.get("cookie_file") or "").strip()
+        self.explicit_cookie_candidates = [
+            str(p).strip()
+            for p in (self.options.get("cookie_candidates") or [])
+            if str(p).strip()
+        ]
+        self.strict_auth_ticket = bool(self.options.get("strict_auth_ticket", False))
+        self.runtime_readiness = dict(self.options.get("runtime_readiness") or {})
+        self.platform_retry_policy = dict(self.options.get("platform_retry_policy") or {})
+        self.rate_limit_profile = dict(self.options.get("rate_limit_profile") or {})
         self.skip_recent_window = coerce_bool(
             self.options.get('skip_recent_window'),
             default=self.skip_recent_window,
@@ -574,7 +585,20 @@ class VideoDownloaderThread(QThread):
 
         # Auth configuration: Collect ALL and prioritize (profile-first)
         self._all_cookie_files = []
-        if self.urls:
+        for candidate in [
+            self.explicit_cookie_file,
+            self.auth_ticket.get("cookie_path") if isinstance(self.auth_ticket, dict) else "",
+            *(self.explicit_cookie_candidates or []),
+            *(
+                self.auth_ticket.get("candidate_paths") or []
+                if isinstance(self.auth_ticket, dict)
+                else []
+            ),
+        ]:
+            candidate = str(candidate or "").strip()
+            if candidate and candidate not in self._all_cookie_files:
+                self._all_cookie_files.append(candidate)
+        if self.urls and not self._all_cookie_files:
             first_url = self.urls[0]
             first_platform = self.auth_hub.detect_platform(first_url)
             try:
@@ -1209,6 +1233,20 @@ class VideoDownloaderThread(QThread):
         import logging
 
         platform = self.auth_hub.detect_platform(url)
+
+        if self._all_cookie_files:
+            preferred = self._all_cookie_files[0]
+            self._all_cookie_files = [
+                cf for idx, cf in enumerate(self._all_cookie_files)
+                if cf and (idx == 0 or cf != preferred)
+            ]
+            self._all_cookie_files.insert(0, preferred)
+            if self.strict_auth_ticket:
+                logging.info(
+                    "[VideoDownloader] Cookie for %s: %s (strict auth ticket)",
+                    platform, Path(preferred).name,
+                )
+                return preferred
 
         # Step 1: Try SessionAuthority (fresh profile export)
         try:
@@ -2178,6 +2216,21 @@ class VideoDownloaderThread(QThread):
                                                          'private', 'join this channel')):
                                 self.progress.emit(f"   [YT] Login required")
                                 return False
+                            elif any(x in err for x in ('rate limit', 'too many requests',
+                                                         '429', 'captcha', 'throttl',
+                                                         'challenge')):
+                                wait_s = float(
+                                    self.rate_limit_profile.get(
+                                        'youtube_rate_limit_backoff',
+                                        7.5,
+                                    ) or 7.5
+                                )
+                                wait_s = max(5.0, wait_s)
+                                self.progress.emit(
+                                    f"   [YT] Rate limited, cooling down {wait_s:.1f}s"
+                                )
+                                time.sleep(wait_s)
+                                break
                             else:
                                 self.progress.emit(f"   [YT] {client}: {str(e)[:80]}")
                                 break           # unknown error, try next client
@@ -2451,6 +2504,16 @@ class VideoDownloaderThread(QThread):
                         self._method5_force_ipv4,
                         self._method6_youtube_dl_fallback,
                     ]
+                    if self.runtime_readiness.get("platform_mode") == "browser_first":
+                        self.progress.emit("   [TikTok] Runtime degraded - using standard/browser-first order")
+                        methods = [
+                            self._method1_batch_file_approach,
+                            self._method3_optimized_ytdlp,
+                            self._method4_alternative_formats,
+                            self._method2_tiktok_special,
+                            self._method5_force_ipv4,
+                            self._method6_youtube_dl_fallback,
+                        ]
                 elif platform == 'instagram':
                     methods = [
                         self._method_instagram_enhanced,  # NEW: Try browser cookies first

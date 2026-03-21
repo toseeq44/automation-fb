@@ -134,6 +134,24 @@ def filter_for_gui(msg: str) -> str | None:
 
     lower = stripped.lower()
     link_match = _LINK_COUNT_RE.search(stripped)
+    if lower.startswith("runtime readiness failed:"):
+        return "Runtime issue"
+    if lower.startswith("runtime:"):
+        return stripped[:90]
+    if lower.startswith("auth ticket:"):
+        if "public" in lower:
+            return "Using public fallback..."
+        if "none" in lower:
+            return "Auth required"
+        return "Session ready"
+    if "auth source ready:" in lower:
+        return "Session ready"
+    if "no authenticated cookies available" in lower:
+        return "Auth required"
+    if lower.startswith("managed mode: authenticated link extraction not available"):
+        return "Auth required"
+    if "[public]" in lower and "fallback" in lower:
+        return "Trying public fallback..."
     if lower.startswith("platform:"):
         return "Starting..."
     if lower.startswith("pacing profile:"):

@@ -20,6 +20,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import yt_dlp
 from PyQt5.QtCore import QThread, pyqtSignal
@@ -64,6 +65,13 @@ class _ScopedLibraryLogRelay(logging.Handler):
         self.worker = worker
         self.thread_id = thread_id
 
+    # yt-dlp messages that are known platform issues — not actionable by the user.
+    _SUPPRESS_PATTERNS = (
+        "marked as broken, and will probably not work",
+        "Unable to extract data; please report this issue",
+        "Confirm you are on the latest version using yt-dlp -U",
+    )
+
     def emit(self, record: logging.LogRecord) -> None:
         if record.levelno < logging.WARNING:
             return
@@ -74,6 +82,9 @@ class _ScopedLibraryLogRelay(logging.Handler):
         except Exception:
             message = ""
         if not message:
+            return
+        # Suppress known yt-dlp platform-level broken-extractor noise
+        if any(p in message for p in self._SUPPRESS_PATTERNS):
             return
         stage = "ExtractorError" if record.levelno >= logging.ERROR else "ExtractorWarn"
         self.worker._terminal_log(stage, message)
@@ -286,26 +297,56 @@ def _detect_platform(url: str) -> str:
     return "other"
 
 
-def _facebook_backfill_url(url: str) -> str:
-    """Return a stronger Facebook source URL for reel/video discovery."""
+def _facebook_backfill_sources(url: str) -> List[Tuple[str, str]]:
+    """Return ordered Facebook profile/tab sources for reel/video discovery."""
     raw = (url or "").strip()
     if not raw:
-        return raw
+        return []
     low = raw.lower().rstrip("/")
 
     # Already a direct video-like URL or explicit reels/videos tab.
     if any(token in low for token in ("/reel/", "/reels", "/videos", "/watch/", "/share/v/")):
-        return raw
+        return [("direct", raw)]
+
+    def _dedupe(sources: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
+        deduped: List[Tuple[str, str]] = []
+        seen: set = set()
+        for label, candidate in sources:
+            candidate = (candidate or "").strip()
+            if not candidate:
+                continue
+            key = candidate.rstrip("/").lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append((label, candidate))
+        return deduped
+
+    def _set_profile_query_tab(source_url: str, tab_name: str) -> str:
+        parsed = urlparse(source_url)
+        query_items = [
+            (k, v)
+            for k, v in parse_qsl(parsed.query or "", keep_blank_values=True)
+            if k.lower() != "sk"
+        ]
+        query_items.append(("sk", tab_name))
+        return urlunparse(parsed._replace(query=urlencode(query_items)))
 
     # profile.php style prefers reels tab query.
     if "facebook.com/profile.php" in low:
-        if "sk=reels_tab" in low:
-            return raw
-        connector = "&" if "?" in raw else "?"
-        return f"{raw}{connector}sk=reels_tab"
+        return _dedupe([
+            ("reels", _set_profile_query_tab(raw, "reels_tab")),
+            ("videos", _set_profile_query_tab(raw, "videos")),
+            ("profile", raw),
+        ])
 
     # Username/profile style -> force reels tab URL.
-    return raw.rstrip("/") + "/reels"
+    base = raw.rstrip("/")
+    return _dedupe([
+        ("reels", base + "/reels"),
+        ("videos", base + "/videos"),
+        ("profile", raw),
+    ])
 
 
 def _instagram_backfill_url(url: str) -> str:
@@ -321,6 +362,48 @@ def _instagram_backfill_url(url: str) -> str:
 
     # Profile-like URL -> force reels tab.
     return raw.rstrip("/") + "/reels/"
+
+
+def _is_profile_listing_url(platform_key: str, url: str) -> bool:
+    """Return True when the source URL represents a creator listing, not a direct post."""
+    raw = (url or "").strip()
+    low = raw.lower()
+    if not raw:
+        return False
+
+    if platform_key == "facebook":
+        return (
+            ("facebook.com" in low or "fb.com" in low)
+            and not any(token in low for token in ("/reel/", "/watch/", "/share/v/"))
+        )
+
+    if platform_key == "instagram":
+        return (
+            "instagram.com" in low
+            and not any(token in low for token in ("/reel/", "/reels/", "/p/", "/tv/"))
+        )
+
+    if platform_key == "youtube":
+        parsed = urlparse(raw)
+        path = (parsed.path or "").lower()
+        return (
+            ("youtube.com" in low or "youtu.be" in low)
+            and bool(path.strip("/"))
+            and "watch?v=" not in low
+            and "/watch" not in path
+            and "/shorts/" not in path
+            and "/playlist" not in path
+            and "/live/" not in path
+        )
+
+    if platform_key == "tiktok":
+        return (
+            "tiktok.com" in low
+            and "/@" in low
+            and not any(token in low for token in ("/video/", "/photo/"))
+        )
+
+    return False
 
 
 # â"€â"€ Intelligent Link Grabbing handled via modules.link_grabber.core â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
@@ -801,8 +884,20 @@ def download_video(
             progress_cb(f"  [IG] Final error: {last_error[0]}")
         return _pick_fresh_video()
 
-    smart_fmt = _SMART_FORMAT if ffmpeg_available else "best[ext=mp4]/best"
-    format_candidates = [smart_fmt, "best[ext=mp4]/best", "best"]
+    # Facebook serves pre-muxed streams — bestvideo+bestaudio often fails.
+    # Use a wider ladder that tries pre-muxed HD/SD before the smart merge format.
+    if platform == "facebook":
+        smart_fmt = _SMART_FORMAT if ffmpeg_available else "best[ext=mp4]/best"
+        format_candidates = [
+            "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio/best[ext=mp4]/best",
+            "hd/sd/best[ext=mp4]/best",
+            smart_fmt,
+            "best[ext=mp4]/best",
+            "best",
+        ]
+    else:
+        smart_fmt = _SMART_FORMAT if ffmpeg_available else "best[ext=mp4]/best"
+        format_candidates = [smart_fmt, "best[ext=mp4]/best", "best"]
 
     cookie_choices = list(cookie_pool)
     cookie_choices.append(None)
@@ -1163,6 +1258,9 @@ class CreatorDownloadWorker(QThread):
         self._active_downloader: Optional[VideoDownloaderThread] = None
         self._cookie_sync_info: Dict[str, str] = {}
         self._last_download_error: str = ""
+        self._current_auth_ticket: Dict = {}
+        self._runtime_readiness: Dict = {}
+        self._attempt_summary: List[Dict] = []
 
         # Overall progress tracking for GUI progress bar
         self._n_target = 0           # total videos to download
@@ -1320,6 +1418,83 @@ class CreatorDownloadWorker(QThread):
         except Exception as e:
             self.progress.emit(f"  Cookie sync failed for {platform_key}: {str(e)[:100]}")
             return None
+
+    def _export_ix_platform_cookies(self, platform_key: str) -> Optional[str]:
+        """Best-effort IXBrowser cookie export for auth fallback chaining."""
+        try:
+            from .ix_link_grabber import get_ix_session
+            ix = get_ix_session()
+            if not ix.ensure_session(progress_cb=self.progress.emit):
+                return None
+            if not ix.check_login(platform_key, progress_cb=self.progress.emit):
+                return None
+            return ix.export_platform_cookies(platform_key, progress_cb=self.progress.emit)
+        except Exception as exc:
+            self._terminal_log("IX", f"cookie export failed for {platform_key}: {exc}")
+            return None
+
+    def _resolve_auth_ticket(self, platform_key: str, creator_hint: str = "") -> Dict:
+        """Build a single shared auth ticket for link grabbing and downloading."""
+        try:
+            from modules.shared.session_authority import (
+                AuthFallbackChain,
+                normalize_creator_key,
+            )
+            creator_name = creator_hint or self.creator_folder.name
+            creator_key = normalize_creator_key(
+                creator_name,
+                platform=platform_key,
+                creator_url=self.creator_url,
+            )
+            ticket = AuthFallbackChain().resolve_ticket(
+                platform=platform_key,
+                creator=creator_name,
+                creator_url=self.creator_url,
+                ix_cookie_provider=self._export_ix_platform_cookies,
+                progress_callback=self.progress.emit,
+            )
+            ticket_dict = ticket.to_dict()
+            ticket_dict["creator_key"] = creator_key
+            return ticket_dict
+        except Exception as exc:
+            self._terminal_log("Auth", f"resolve_auth_ticket failed: {exc}")
+            return {
+                "creator_key": str(self.creator_folder.name).lstrip("@").lower(),
+                "platform": platform_key,
+                "source_id": "",
+                "source_kind": "none",
+                "cookie_path": None,
+                "validated_at": 0.0,
+                "auth_strength": "none",
+                "candidate_paths": [],
+                "can_use_public_fallback": platform_key in {"youtube", "facebook", "instagram"},
+            }
+
+    def _record_attempt(
+        self,
+        *,
+        stage: str,
+        method_id: str,
+        auth_source: str = "",
+        result: str = "failed",
+        failure_type: str = "",
+        links_added: int = 0,
+        retry_used: bool = False,
+        detail: str = "",
+    ) -> None:
+        """Append a structured attempt record for later debugging/UI summaries."""
+        self._attempt_summary.append(
+            {
+                "stage": str(stage or ""),
+                "method_id": str(method_id or ""),
+                "auth_source": str(auth_source or ""),
+                "result": str(result or ""),
+                "failure_type": str(failure_type or ""),
+                "links_added": int(links_added or 0),
+                "retry_used": bool(retry_used),
+                "detail": str(detail or ""),
+            }
+        )
 
     # ── Delete-before-download cleanup ──────────────────────────────────────
 
@@ -1561,14 +1736,28 @@ class CreatorDownloadWorker(QThread):
             creator_name = self.config.data.get('creator_name') or self.creator_folder.name
         except Exception:
             creator_name = self.creator_folder.name
+        current_auth_ticket = dict(getattr(self, "_current_auth_ticket", {}) or {})
+        runtime_readiness = dict(getattr(self, "_runtime_readiness", {}) or {})
         robust_opts: Dict = {
             "quality": "HD", # Use exact same string as VideoDownloader dropsdown for YouTube formats
             "skip_recent_window": False,
             "force_all_methods": True,
             "max_retries": 3,
-            "rate_limit_delay": 2.5,
+            "rate_limit_delay": 5.0,
+            "rate_limit_profile": {"youtube_rate_limit_backoff": 8.0},
+            "platform_retry_policy": {
+                "auth_refresh_first": True,
+                "respect_auth_ticket": True,
+            },
             "_creator_hint": creator_name,
             "_expected_media_kind": "video",
+            "auth_ticket": current_auth_ticket,
+            "cookie_candidates": list(
+                current_auth_ticket.get("candidate_paths") or []
+            ),
+            "cookie_file": current_auth_ticket.get("cookie_path"),
+            "strict_auth_ticket": bool(current_auth_ticket),
+            "runtime_readiness": runtime_readiness,
         }
         
         ok, reason, verified_path = _run_once(robust_opts)
@@ -1669,7 +1858,23 @@ class CreatorDownloadWorker(QThread):
     # Ã¢â€â‚¬Ã¢â€â‚¬ Thread entry Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
     def run(self):
-        result = {"success": False, "downloaded": 0, "target": 0, "tier_used": None, "error": None}
+        result = {
+            "success": False,
+            "downloaded": 0,
+            "failed": 0,
+            "target": 0,
+            "tier_used": None,
+            "error": None,
+            "status_code": "failed",
+            "failure_type": "",
+            "stage_failed": "",
+            "auth_source_used": "",
+            "links_found": 0,
+            "download_attempts": 0,
+            "anonymous_fallback_used": False,
+            "attempt_summary": [],
+            "runtime_readiness": {},
+        }
         self._install_scoped_log_bridge()
         try:
             self._execute(result)
@@ -1710,6 +1915,18 @@ class CreatorDownloadWorker(QThread):
             return
 
         platform_key = _detect_platform(creator_url)
+        self._attempt_summary = []
+        try:
+            from modules.shared.runtime_readiness import get_runtime_readiness
+            self._runtime_readiness = get_runtime_readiness(platform_key)
+        except Exception as exc:
+            self._runtime_readiness = {
+                "ready": False,
+                "platform": platform_key,
+                "issues": [f"runtime readiness failed: {exc}"],
+                "warnings": [],
+            }
+        result["runtime_readiness"] = dict(self._runtime_readiness or {})
         self._terminal_log(
             "Run",
             (
@@ -1719,6 +1936,56 @@ class CreatorDownloadWorker(QThread):
             ),
         )
         self.progress.emit(f"Platform: {platform_key.upper()} | Target: {n_target} videos")
+        for warning in self._runtime_readiness.get("warnings", []) or []:
+            self.progress.emit(f"Runtime: {warning}")
+        if not self._runtime_readiness.get("ready", False):
+            runtime_error = "; ".join(self._runtime_readiness.get("issues", []) or [])
+            result["error"] = runtime_error or "Runtime readiness failed"
+            result["status_code"] = "failed_auth" if "Playwright" in runtime_error else "runtime_unavailable"
+            result["failure_type"] = "runtime_missing"
+            result["stage_failed"] = "runtime_readiness"
+            self._record_attempt(
+                stage="runtime_readiness",
+                method_id="get_runtime_readiness",
+                auth_source="",
+                result="failed",
+                failure_type="runtime_missing",
+                detail=result["error"],
+            )
+            self.progress.emit(f"Runtime readiness failed: {result['error']}")
+            self.config.update_last_activity("failed", "Runtime", 0)
+            self.config.save()
+            return
+
+        self._current_auth_ticket = self._resolve_auth_ticket(platform_key)
+        result["auth_source_used"] = (
+            self._current_auth_ticket.get("source_kind")
+            or self._current_auth_ticket.get("source_id")
+            or ""
+        )
+        result["anonymous_fallback_used"] = (
+            self._current_auth_ticket.get("auth_strength") != "authenticated"
+        )
+        self.progress.emit(
+            "Auth ticket: "
+            f"{self._current_auth_ticket.get('source_kind') or 'none'}"
+        )
+        self._record_attempt(
+            stage="auth_ticket",
+            method_id="resolve_auth_ticket",
+            auth_source=result["auth_source_used"],
+            result=(
+                "success"
+                if self._current_auth_ticket.get("auth_strength") == "authenticated"
+                else "fallback"
+            ),
+            failure_type=(
+                ""
+                if self._current_auth_ticket.get("auth_strength") == "authenticated"
+                else "public_only"
+            ),
+            detail=str(self._current_auth_ticket.get("cookie_path") or ""),
+        )
         self.progress_percent.emit(0)
 
         # ── Delete-before-download cleanup (once per creator run) ─────────
@@ -1865,6 +2132,7 @@ class CreatorDownloadWorker(QThread):
                     if platform_key == "youtube"
                     else url
                 )
+                result["download_attempts"] = int(result.get("download_attempts", 0) or 0) + 1
                 
                 self._terminal_log("Download", f"attempting: {url[:80]}")
                 if download_url != url:
@@ -1880,6 +2148,17 @@ class CreatorDownloadWorker(QThread):
                         ix_session = get_ix_session()
                         if ix_session.ensure_session(progress_cb=self.progress.emit):
                             self._maybe_sync_profile_cookies(platform_key, force=True)
+                            refreshed_ticket = self._resolve_auth_ticket(
+                                platform_key,
+                                creator_hint=vid.get("creator", self.creator_folder.name),
+                            )
+                            if refreshed_ticket:
+                                self._current_auth_ticket = refreshed_ticket
+                                result["auth_source_used"] = (
+                                    refreshed_ticket.get("source_kind")
+                                    or refreshed_ticket.get("source_id")
+                                    or result.get("auth_source_used", "")
+                                )
                     except ImportError:
                         pass
 
@@ -1909,6 +2188,26 @@ class CreatorDownloadWorker(QThread):
                     failed_downloads += 1
                     err = (dl_error or "download failed").strip()
                     last_error_message = err
+                    attempt_failure_type = ""
+                    result["stage_failed"] = result.get("stage_failed") or "download"
+                    if not result.get("failure_type"):
+                        try:
+                            from modules.shared.failure_classifier import classify_failure
+                            attempt_failure_type = classify_failure(err, platform_key).name.lower()
+                            result["failure_type"] = attempt_failure_type
+                        except Exception:
+                            result["failure_type"] = "download_failed"
+                    if not attempt_failure_type:
+                        attempt_failure_type = str(result.get("failure_type") or "download_failed")
+                    self._record_attempt(
+                        stage="download",
+                        method_id=str(entry_label or label).strip().lower().replace(" ", "_"),
+                        auth_source=result.get("auth_source_used", ""),
+                        result="failed",
+                        failure_type=attempt_failure_type,
+                        retry_used=bool(allow_ix_retry or retry_entries),
+                        detail=url[:240],
+                    )
                     if collect_retry_candidates is not None:
                         retry_copy = dict(vid)
                         retry_copy["_download_tier"] = "IX Direct Retry"
@@ -1930,6 +2229,7 @@ class CreatorDownloadWorker(QThread):
                 vid_id = vid.get("id") or _safe_id_from_url(url)
                 if vid_id:
                     self.config.add_downloaded_id(vid_id)
+                    self.config.save()  # persist immediately so concurrent workers see this ID
                 self.config.add_url_to_history(
                     url, platform=platform_key,
                     creator=vid.get("creator", self.creator_folder.name),
@@ -1939,6 +2239,15 @@ class CreatorDownloadWorker(QThread):
                 self.config.append_activity_event(
                     "download_completed",
                     {"video_id": vid_id, "title": vid.get("title", ""), "tier": entry_label},
+                )
+                self._record_attempt(
+                    stage="download",
+                    method_id=str(entry_label or label).strip().lower().replace(" ", "_"),
+                    auth_source=result.get("auth_source_used", ""),
+                    result="success",
+                    links_added=1,
+                    retry_used=bool(allow_ix_retry or retry_entries),
+                    detail=url[:240],
                 )
                 self.progress.emit(f"Progress: {len(downloads)}/{n_target}")
 
@@ -2043,7 +2352,7 @@ class CreatorDownloadWorker(QThread):
             legacy_first_pass_fetch_count += max(2, n_target)
         if use_popular_fallback or randomize_links:
             legacy_first_pass_fetch_count += 2
-        legacy_first_pass_scroll_attempts = 1
+        legacy_first_pass_scroll_attempts = 3
         legacy_max_rounds = 5
 
         try:
@@ -2075,7 +2384,15 @@ class CreatorDownloadWorker(QThread):
                 "managed_profile_only": True,
                 "interactive_login_fallback": False,
                 "yt_content_type": yt_content_type,
+                "auth_ticket": dict(self._current_auth_ticket or {}),
+                "include_meta": True,
             }
+            source_lower = (source_url or "").lower()
+            if _is_profile_listing_url(platform_key, source_url):
+                # Creator-profile listings across platforms can under-fill on the
+                # first successful method. Keep scanning until the pool is truly
+                # exhausted instead of trusting one weak profile pass.
+                grab_opts["force_all_methods"] = True
             if browser_max_scroll_attempts is not None:
                 grab_opts["browser_max_scroll_attempts"] = browser_max_scroll_attempts
 
@@ -2093,16 +2410,46 @@ class CreatorDownloadWorker(QThread):
             self._terminal_log("LinkGrab", f"{stage_label}: {request_detail} from {source_url}")
 
             try:
-                extracted_entries, extracted_creator_name = extract_links_intelligent(
+                extracted_data = extract_links_intelligent(
                     url=source_url,
                     platform_key=platform_key,
                     options=grab_opts,
                     cookies_dir=get_cookies_dir(),
                     progress_callback=self.progress.emit,
                 )
+                extracted_entries = extracted_data[0] if isinstance(extracted_data, tuple) else extracted_data
+                extracted_creator_name = (
+                    extracted_data[1]
+                    if isinstance(extracted_data, tuple) and len(extracted_data) > 1
+                    else ""
+                )
+                extracted_meta = (
+                    extracted_data[2]
+                    if isinstance(extracted_data, tuple)
+                    and len(extracted_data) > 2
+                    and isinstance(extracted_data[2], dict)
+                    else {}
+                )
+                if extracted_meta:
+                    self._attempt_summary.extend(extracted_meta.get("attempt_reports", []) or [])
+                    refreshed_ticket = extracted_meta.get("auth_ticket") or {}
+                    if refreshed_ticket:
+                        self._current_auth_ticket = dict(refreshed_ticket)
+                        result["auth_source_used"] = (
+                            self._current_auth_ticket.get("source_kind")
+                            or self._current_auth_ticket.get("source_id")
+                            or result.get("auth_source_used", "")
+                        )
+                        result["anonymous_fallback_used"] = (
+                            self._current_auth_ticket.get("auth_strength") != "authenticated"
+                        )
+                    if not extracted_entries:
+                        result["stage_failed"] = extracted_meta.get("stage_failed") or result.get("stage_failed", "")
+                        result["failure_type"] = extracted_meta.get("failure_type") or result.get("failure_type", "")
                 if extracted_creator_name:
                     creator_name = extracted_creator_name
                 added = _merge_latest_entries(extracted_entries, stage_label)
+                result["links_found"] = len(latest_entries)
                 if added > 0:
                     legacy_page_batch = max(legacy_page_batch, added)
                 selected_count = _refresh_selection_state(stage_label)
@@ -2150,7 +2497,7 @@ class CreatorDownloadWorker(QThread):
                     break
                 if added_now <= 0:
                     stale_rounds += 1
-                    if stale_rounds >= 1:
+                    if stale_rounds >= 2:
                         break
                 else:
                     stale_rounds = 0
@@ -2344,25 +2691,33 @@ class CreatorDownloadWorker(QThread):
             and _selected_ready_count() < n_target
         ):
             if platform_key == "facebook":
-                backfill_url = _facebook_backfill_url(creator_url)
+                backfill_sources = _facebook_backfill_sources(creator_url)
             else:
-                backfill_url = _instagram_backfill_url(creator_url)
+                backfill_sources = [("reels", _instagram_backfill_url(creator_url))]
 
             need_more = max(1, n_target - _selected_ready_count())
             self.progress.emit(
                 f"{platform_key.title()} backfill: need {need_more} more matching link(s)."
             )
-            backfill_added = _expand_legacy_pool(
-                source_url=backfill_url,
-                stage_label=f"{platform_key.title()} backfill",
-                start_round=0,
-                total_rounds=3,
-            )
-            debug_log.append({
-                "action": f"{platform_key}_backfill",
-                "added": backfill_added,
-                "backfill_url": backfill_url[:120],
-            })
+
+            for backfill_kind, backfill_url in backfill_sources:
+                if _selected_ready_count() >= n_target:
+                    break
+                if not backfill_url:
+                    continue
+                stage_label = f"{platform_key.title()} backfill {backfill_kind}".strip()
+                backfill_added = _expand_legacy_pool(
+                    source_url=backfill_url,
+                    stage_label=stage_label,
+                    start_round=0,
+                    total_rounds=3,
+                )
+                debug_log.append({
+                    "action": f"{platform_key}_backfill",
+                    "kind": backfill_kind,
+                    "added": backfill_added,
+                    "backfill_url": backfill_url[:120],
+                })
 
         # Remove session-already-attempted duplicates
         selected = [
@@ -2514,6 +2869,7 @@ class CreatorDownloadWorker(QThread):
             ix_entries: List[Dict] = []
             ix_creator_name = creator_name or self.creator_folder.name
             ix = None
+            ix_error_message = ""
 
             try:
                 from .ix_link_grabber import get_ix_session
@@ -2526,10 +2882,15 @@ class CreatorDownloadWorker(QThread):
                     raise RuntimeError(
                         f"Not logged in to {platform_key.upper()} in IXBrowser"
                     )
+                result["auth_source_used"] = "ix_browser"
 
                 ix.maximize_browser(progress_cb=self.progress.emit)
 
-                if ix_direct_retry_candidates and len(downloads) < n_target:
+                if (
+                    platform_key == "youtube"
+                    and ix_direct_retry_candidates
+                    and len(downloads) < n_target
+                ):
                     same_url_retry_count = min(len(ix_direct_retry_candidates), remaining_needed)
                     self._terminal_log(
                         "IX",
@@ -2573,6 +2934,7 @@ class CreatorDownloadWorker(QThread):
                     self.progress.emit("[IX] Same-link retry succeeded. Skipping fresh IX link grabbing.")
             except Exception as e:
                 ix_error = f"IXBrowser fallback failed: {e}"
+                ix_error_message = str(e)
                 self.progress.emit(ix_error)
                 self._terminal_log("IX", f"error: {ix_error}")
                 last_error_message = ix_error
@@ -2650,6 +3012,16 @@ class CreatorDownloadWorker(QThread):
                 "IX",
                 f"selected_count={ix_selected_count} backup_count={ix_backup_count} extracted={len(ix_annotated)}",
             )
+            self._record_attempt(
+                stage="ix_extraction",
+                method_id="ix_browser",
+                auth_source="ix_browser",
+                result="success" if ix_selected_count or ix_backup_count else "failed",
+                failure_type="" if ix_selected_count or ix_backup_count else (ix_error_message or "no_links"),
+                links_added=len(ix_annotated),
+                retry_used=False,
+                detail=creator_url[:240],
+            )
             if ix_selected_count or ix_backup_count:
                 self.progress.emit(
                     f"[IX] Queue ready: {ix_selected_count} selected + {ix_backup_count} backup link(s)."
@@ -2661,6 +3033,169 @@ class CreatorDownloadWorker(QThread):
                 )
             else:
                 self.progress.emit("[IX] Fallback did not add any usable links.")
+
+        # ── Instaloader Fallback (Instagram only) ─────────────────────────────
+        # yt-dlp's instagram:user extractor is officially broken.
+        # instaloader is the purpose-built library for Instagram profile scraping.
+        if platform_key == "instagram" and len(downloads) < n_target:
+            remaining_needed = max(1, n_target - len(downloads))
+            self._terminal_log(
+                "Instaloader",
+                f"entering fallback because total delivered={len(downloads)}/{n_target}; remaining_needed={remaining_needed}",
+            )
+            try:
+                from .instaloader_grabber import grab_instagram_links_instaloader, is_session_available
+                if is_session_available():
+                    il_raw = grab_instagram_links_instaloader(
+                        profile_url=creator_url,
+                        max_videos=remaining_needed + 5,
+                        progress_cb=self.progress.emit,
+                    )
+                    if il_raw:
+                        for e in il_raw:
+                            if not e.get("id"):
+                                e["id"] = _safe_id_from_url(e.get("url", ""))
+                            e.setdefault("platform", platform_key)
+                            e.setdefault("creator", creator_name or self.creator_folder.name)
+                        il_annotated = [
+                            normalise_entry(e)
+                            for e in il_raw
+                            if isinstance(e, dict) and e.get("url")
+                        ]
+                        il_selected, il_debug = select_videos(
+                            entries=il_annotated,
+                            n_videos=remaining_needed,
+                            skip_downloaded=effective_skip_downloaded,
+                            popular_enabled=use_popular_fallback,
+                            random_enabled=randomize_links,
+                            already_downloaded=already_downloaded,
+                            platform=platform_key,
+                            yt_content_type=yt_content_type,
+                        )
+                        il_selected = [
+                            e for e in il_selected
+                            if (_key(e) not in session_ids and _key(e) not in attempted_ids)
+                        ]
+                        for d in il_debug:
+                            self._terminal_log("SelectionDebugIL", json.dumps(d, ensure_ascii=False))
+                        self._terminal_log(
+                            "Instaloader",
+                            f"selected_count={len(il_selected)} extracted={len(il_annotated)}",
+                        )
+                        il_queue_start = len(download_queue)
+                        _queue_entries(il_selected, "Instaloader Selected", skip_downloaded=dup_ctrl)
+                        _queue_entries(il_annotated, "Instaloader Backup", supported_only=True, skip_downloaded=dup_ctrl)
+                        if len(download_queue) > il_queue_start:
+                            _download_entries(download_queue[il_queue_start:], "Instaloader", allow_ix_retry=False)
+                    else:
+                        self._terminal_log("Instaloader", "no video links extracted")
+                else:
+                    self._terminal_log("Instaloader", "no session file — skipping (run: python -m instaloader --login=username)")
+            except Exception as _il_exc:
+                self._terminal_log("Instaloader", f"fallback error: {_il_exc}")
+
+        if (
+            len(downloads) < n_target
+            and not latest_entries
+            and not ix_annotated
+            and not (
+                platform_key == "instagram"
+                and str(result.get("failure_type") or "") in {"auth_missing", "auth_expired", "auth_wall"}
+            )
+            and (self._current_auth_ticket or {}).get("can_use_public_fallback")
+            and extract_links_intelligent is not None
+            and get_cookies_dir is not None
+        ):
+            remaining_needed = max(1, n_target - len(downloads))
+            self.progress.emit("[Public] Auth paths exhausted. Trying limited public fallback...")
+            try:
+                public_data = extract_links_intelligent(
+                    url=creator_url,
+                    platform_key=platform_key,
+                    cookies_dir=get_cookies_dir(),
+                    options={
+                        "max_videos": remaining_needed + 5,
+                        "force_all_methods": False,
+                        "respect_global_exhaustive_mode": False,
+                        "fast_mode": False,
+                        "managed_profile_only": True,
+                        "public_fallback_only": True,
+                        "interactive_login_fallback": False,
+                        "yt_content_type": yt_content_type,
+                        "auth_ticket": dict(self._current_auth_ticket or {}),
+                        "include_meta": True,
+                    },
+                    progress_callback=self.progress.emit,
+                )
+                public_entries = public_data[0] if isinstance(public_data, tuple) else public_data
+                public_meta = (
+                    public_data[2]
+                    if isinstance(public_data, tuple)
+                    and len(public_data) > 2
+                    and isinstance(public_data[2], dict)
+                    else {}
+                )
+                self._attempt_summary.extend(public_meta.get("attempt_reports", []) or [])
+                self._record_attempt(
+                    stage="public_fallback",
+                    method_id="extract_links_intelligent",
+                    auth_source="public",
+                    result="success" if public_entries else "failed",
+                    failure_type="" if public_entries else str(public_meta.get("failure_type") or "no_links"),
+                    links_added=len(public_entries or []),
+                    retry_used=False,
+                    detail=creator_url[:240],
+                )
+                if public_entries:
+                    result["anonymous_fallback_used"] = True
+                    for entry in public_entries:
+                        if not isinstance(entry, dict):
+                            continue
+                        if not entry.get("id"):
+                            entry["id"] = _safe_id_from_url(entry.get("url", ""))
+                        entry["platform"] = platform_key
+                        entry["creator"] = entry.get("creator") or creator_name or self.creator_folder.name
+                    public_annotated = [
+                        normalise_entry(e)
+                        for e in public_entries
+                        if isinstance(e, dict) and e.get("url")
+                    ]
+                    public_selected, public_debug = select_videos(
+                        entries=public_annotated,
+                        n_videos=remaining_needed,
+                        skip_downloaded=effective_skip_downloaded,
+                        popular_enabled=use_popular_fallback,
+                        random_enabled=randomize_links,
+                        already_downloaded=already_downloaded,
+                        platform=platform_key,
+                        yt_content_type=yt_content_type,
+                    )
+                    public_selected = [
+                        e for e in public_selected
+                        if (_key(e) not in session_ids and _key(e) not in attempted_ids)
+                    ]
+                    for d in public_debug:
+                        self._terminal_log("SelectionDebugPublic", json.dumps(d, ensure_ascii=False))
+                    public_queue_start = len(download_queue)
+                    public_added = _queue_entries(
+                        public_selected,
+                        "Public Selected",
+                        skip_downloaded=dup_ctrl,
+                    )
+                    public_added += _queue_entries(
+                        public_annotated,
+                        "Public Backup",
+                        supported_only=True,
+                        skip_downloaded=dup_ctrl,
+                    )
+                    if public_added:
+                        _download_entries(
+                            download_queue[public_queue_start:],
+                            "Public",
+                            allow_ix_retry=False,
+                        )
+            except Exception as exc:
+                self._terminal_log("PublicFallback", f"failed: {exc}")
 
         # History stays the last fallback, only after both legacy and IX paths.
         if len(downloads) < n_target:
@@ -2956,8 +3491,25 @@ class CreatorDownloadWorker(QThread):
 
         # Ã¢â€â‚¬Ã¢â€â‚¬ Finalize Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         count = len(downloads)
-        status = "success" if count >= n_target else ("partial" if count > 0 else "failed")
-        self.config.update_last_activity(status, tier_used or "N/A", count)
+        status_code = "success" if count >= n_target else ("partial_download" if count > 0 else "failed")
+        activity_status = "success" if count >= n_target else ("partial" if count > 0 else "failed")
+        if not result.get("failure_type") and last_error_message:
+            try:
+                from modules.shared.failure_classifier import classify_failure
+                result["failure_type"] = classify_failure(last_error_message, platform_key).name.lower()
+            except Exception:
+                result["failure_type"] = "download_failed"
+        if status_code == "failed":
+            if result.get("stage_failed") == "runtime_readiness":
+                status_code = "runtime_unavailable"
+            elif result.get("failure_type") in {"auth_expired", "auth_missing", "auth_wall"}:
+                status_code = "failed_auth"
+            elif int(result.get("links_found", 0) or 0) == 0:
+                status_code = "link_grab_failed"
+            else:
+                status_code = "download_failed"
+        result["status_code"] = status_code
+        self.config.update_last_activity(activity_status, tier_used or "N/A", count)
         self.config.save()
 
         if count == 0 and not result.get("error"):
@@ -2967,15 +3519,18 @@ class CreatorDownloadWorker(QThread):
             result["error"] = last_error_message or f"Only {count}/{n_target} downloaded"
             self._terminal_log("Run", f"partial: {result['error']}")
 
-        result["success"] = count >= n_target
+        result["success"] = status_code == "success"
         result["downloaded"] = count
         result["failed"] = failed_downloads
         result["target"] = n_target
         result["tier_used"] = tier_used
+        result["links_found"] = max(int(result.get("links_found", 0) or 0), len(latest_entries))
+        result["attempt_summary"] = list(self._attempt_summary or [])
         summary_parts = [f"Done: {count}/{n_target}"]
         if failed_downloads:
             summary_parts.append(f"Failed: {failed_downloads}")
         summary_parts.append(f"Tier: {tier_used or 'N/A'}")
+        summary_parts.append(f"Status: {status_code}")
         self.progress.emit(" | ".join(summary_parts))
 
         # Concise run summary for debugging / reliability checks.
@@ -2992,5 +3547,3 @@ class CreatorDownloadWorker(QThread):
             )
         except Exception:
             pass
-
-

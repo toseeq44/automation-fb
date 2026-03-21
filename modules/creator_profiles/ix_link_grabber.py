@@ -529,7 +529,7 @@ class IXSessionManager:
                     )
                     return False
 
-            _log(f"[IX-Login] CONFIRMED logged in to {platform_key}", progress_cb)
+            _log(f"[IX-Login] No logout patterns found for {platform_key} — assuming logged in", progress_cb)
             self._login_verified[platform_key] = True
             return True
 
@@ -793,6 +793,7 @@ class IXSessionManager:
             self._is_open = False
             self._session = None
             self._login_verified.clear()
+            IXSessionManager._instance = None  # reset singleton so next call gets a fresh instance
             _log("[IX-Session] Session fully closed", progress_cb)
 
     def is_alive(self) -> bool:
@@ -804,6 +805,74 @@ class IXSessionManager:
             return True
         except Exception:
             return False
+
+    def export_platform_cookies(
+        self,
+        platform_key: str,
+        progress_cb: Optional[Callable] = None,
+    ) -> str:
+        """Export IXBrowser cookies for a platform as a Netscape file."""
+        if not self._driver:
+            _log("[IX-Cookies] ERROR: No Selenium driver!", progress_cb)
+            return ""
+
+        domain_tokens = {
+            "youtube": ("youtube.com", "google.com", "youtu.be"),
+            "instagram": ("instagram.com",),
+            "tiktok": ("tiktok.com",),
+            "facebook": ("facebook.com", "fb.com"),
+            "twitter": ("x.com", "twitter.com"),
+        }.get((platform_key or "").strip().lower(), ())
+        if not domain_tokens:
+            return ""
+
+        try:
+            cookies = self._driver.get_cookies() or []
+        except Exception as exc:
+            _log(f"[IX-Cookies] Failed reading cookies: {exc}", progress_cb)
+            return ""
+
+        filtered = []
+        for cookie in cookies:
+            domain = str(cookie.get("domain", "")).lower()
+            if any(token in domain for token in domain_tokens):
+                filtered.append(cookie)
+
+        if not filtered:
+            _log(f"[IX-Cookies] No cookies found for {platform_key}", progress_cb)
+            return ""
+
+        try:
+            from modules.config.paths import get_cookies_dir
+            out_dir = get_cookies_dir() / "browser_cookies"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_path = out_dir / f"{platform_key}_ixbrowser_profile.txt"
+            with out_path.open("w", encoding="utf-8") as handle:
+                handle.write("# Netscape HTTP Cookie File\n")
+                handle.write(f"# Exported from IXBrowser profile ({platform_key})\n\n")
+                for cookie in filtered:
+                    domain = str(cookie.get("domain", "")).strip()
+                    if not domain:
+                        continue
+                    include_subdomains = "TRUE" if domain.startswith(".") else "FALSE"
+                    path = str(cookie.get("path", "/") or "/")
+                    secure = "TRUE" if bool(cookie.get("secure", False)) else "FALSE"
+                    expiry = int(cookie.get("expiry", 0) or 0)
+                    if expiry <= 0:
+                        expiry = int(time.time()) + (365 * 24 * 60 * 60)
+                    name = str(cookie.get("name", "")).strip()
+                    value = str(cookie.get("value", "")).strip()
+                    if not name:
+                        continue
+                    handle.write(
+                        f"{domain}\t{include_subdomains}\t{path}\t{secure}\t"
+                        f"{expiry}\t{name}\t{value}\n"
+                    )
+            _log(f"[IX-Cookies] Exported {len(filtered)} cookies for {platform_key}", progress_cb)
+            return str(out_path)
+        except Exception as exc:
+            _log(f"[IX-Cookies] Export failed: {exc}", progress_cb)
+            return ""
 
 
 # ═════════════════════════════════════════════════════════════════════════════

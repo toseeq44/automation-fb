@@ -33,8 +33,10 @@ import shutil
 import subprocess
 import threading
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
+from urllib.parse import parse_qs, urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +86,94 @@ def get_session_authority() -> SessionAuthority:
 # Supported platforms
 # ---------------------------------------------------------------------------
 PLATFORMS = ("youtube", "instagram", "tiktok", "twitter", "facebook")
+
+
+@dataclass
+class AuthTicket:
+    """Normalized auth decision shared across link grabbing and downloading."""
+
+    creator_key: str
+    platform: str
+    source_id: str = ""
+    source_kind: str = "none"
+    cookie_path: Optional[str] = None
+    validated_at: float = 0.0
+    auth_strength: str = "none"
+    candidate_paths: List[str] = field(default_factory=list)
+    can_use_public_fallback: bool = True
+
+    def is_authenticated(self) -> bool:
+        return bool(self.cookie_path) and self.auth_strength == "authenticated"
+
+    def to_dict(self) -> Dict:
+        return {
+            "creator_key": self.creator_key,
+            "platform": self.platform,
+            "source_id": self.source_id,
+            "source_kind": self.source_kind,
+            "cookie_path": self.cookie_path,
+            "validated_at": self.validated_at,
+            "auth_strength": self.auth_strength,
+            "candidate_paths": list(self.candidate_paths or []),
+            "can_use_public_fallback": bool(self.can_use_public_fallback),
+        }
+
+
+def _infer_creator_from_url(url: str, platform: str = "") -> str:
+    """Best-effort creator extraction shared across the pipeline."""
+    raw_url = (url or "").strip()
+    if not raw_url:
+        return ""
+    try:
+        parsed = urlparse(raw_url)
+        parts = [p for p in (parsed.path or "").split("/") if p]
+        lower_parts = [p.lower() for p in parts]
+        platform = (platform or "").strip().lower()
+
+        if platform == "youtube":
+            for idx, part in enumerate(parts):
+                if part.startswith("@"):
+                    return part[1:]
+                if part.lower() in {"channel", "c", "user"} and idx + 1 < len(parts):
+                    return parts[idx + 1]
+        elif platform == "instagram":
+            if parts and lower_parts[0] not in {"p", "reel", "reels", "tv", "stories"}:
+                return parts[0]
+        elif platform == "tiktok":
+            if parts and parts[0].startswith("@"):
+                return parts[0][1:]
+        elif platform == "facebook":
+            if parts:
+                if lower_parts[0] == "profile.php":
+                    fb_id = parse_qs(parsed.query or "").get("id", [""])[0].strip()
+                    if fb_id:
+                        return f"fb_{fb_id}"
+                if lower_parts[0] not in {"reel", "reels", "watch", "videos", "share", "people"}:
+                    return parts[0]
+            fb_id = parse_qs(parsed.query or "").get("id", [""])[0].strip()
+            if fb_id:
+                return f"fb_{fb_id}"
+        elif platform == "twitter":
+            if parts and lower_parts[0] not in {"home", "search", "i"}:
+                return parts[0].lstrip("@")
+    except Exception:
+        return ""
+    return ""
+
+
+def normalize_creator_key(
+    creator: str = "",
+    platform: str = "",
+    creator_url: str = "",
+) -> str:
+    """Return a stable creator key used for auth-source memory."""
+    candidate = (creator or "").strip()
+    if not candidate:
+        candidate = _infer_creator_from_url(creator_url, platform)
+    candidate = candidate.strip().lstrip("@")
+    candidate = re.sub(r"\s+", "", candidate)
+    candidate = candidate.strip("/").lower()
+    return candidate or "unknown_creator"
 
 
 # ---------------------------------------------------------------------------
@@ -1058,19 +1148,23 @@ AUTH_SRC_MANAGED = "managed_profile"
 AUTH_SRC_GUI_COOKIE = "gui_user_cookie"
 AUTH_SRC_LAST_KNOWN = "last_known_good"
 AUTH_SRC_BROWSER_REFRESH = "browser_refresh_recovery"
+AUTH_SRC_IX_COOKIE = "ix_browser_cookie"
+AUTH_SRC_PUBLIC = "public_fallback"
 
 _SOURCE_MEMORY_FILE = "auth_source_memory.json"
 _SOURCE_MEMORY_MAX_AGE = 7 * 86400  # 7 days
 
 
 class AuthFallbackChain:
-    """Four-source auth chain with strict validation and source memory.
+    """Auth chain with strict validation, source memory, and IX support.
 
     Priority:
-      1. managed_profile    — fresh export from persistent browser profile
-      2. gui_user_cookie    — user-provided cookie file in cookies/ dir
-      3. last_known_good    — prior canonical cookie with valid auth markers
+      1. remembered source  — last successful source for creator+platform
+      2. managed_profile    — fresh export from persistent browser profile
+      3. gui_user_cookie    — user-provided cookie file in cookies/ dir
       4. browser_refresh    — live navigation refresh (if profile not busy)
+      5. ix_browser_cookie  — IXBrowser onesoul fresh export
+      6. last_known_good    — prior canonical cookie with valid auth markers
 
     Each source is strictly validated with platform-specific auth markers
     before being accepted.  The chain never overwrites authenticated
@@ -1110,9 +1204,19 @@ class AuthFallbackChain:
         except Exception as exc:
             logger.debug("[AuthSourceMemory] save failed: %s", exc)
 
-    def get_preferred_source(self, creator: str, platform: str) -> Optional[str]:
+    def get_preferred_source(
+        self,
+        creator: str,
+        platform: str,
+        creator_url: str = "",
+    ) -> Optional[str]:
         """Return the preferred auth source for a creator+platform, or None."""
-        key = f"{creator}|{platform}".lower()
+        creator_key = normalize_creator_key(
+            creator,
+            platform=platform,
+            creator_url=creator_url,
+        )
+        key = f"{creator_key}|{platform}".lower()
         entry = self._memory.get(key)
         if not entry:
             return None
@@ -1121,9 +1225,20 @@ class AuthFallbackChain:
             return None
         return entry.get("source")
 
-    def record_success(self, creator: str, platform: str, source: str) -> None:
+    def record_success(
+        self,
+        creator: str,
+        platform: str,
+        source: str,
+        creator_url: str = "",
+    ) -> None:
         """Record that a source worked for a creator+platform."""
-        key = f"{creator}|{platform}".lower()
+        creator_key = normalize_creator_key(
+            creator,
+            platform=platform,
+            creator_url=creator_url,
+        )
+        key = f"{creator_key}|{platform}".lower()
         self._memory[key] = {"source": source, "ts": time.time()}
         self._save_memory()
         logger.info(
@@ -1139,58 +1254,153 @@ class AuthFallbackChain:
         platform: str,
         creator: str = "",
     ) -> Tuple[Optional[str], str]:
-        """Walk the fallback chain and return (cookie_path, source_id).
+        """Backward-compatible cookie resolver built on top of AuthTicket."""
+        ticket = self.resolve_ticket(platform=platform, creator=creator)
+        return ticket.cookie_path, ticket.source_id
 
-        Returns (None, "") if no authenticated cookie could be found.
-        Logs every step with [AuthSource] / [AuthFallback] tags.
-        """
-        platform = platform.lower().strip()
+    @staticmethod
+    def _is_exported_cookie_file(cookie_path: Path) -> bool:
+        try:
+            header = cookie_path.read_text(encoding="utf-8", errors="ignore")[:256]
+        except Exception:
+            return False
+        return "Exported from persistent Chromium profile" in header
 
-        # Build ordered source list (preferred source first if known)
+    @staticmethod
+    def _source_kind(source_id: str) -> str:
+        return {
+            AUTH_SRC_MANAGED: "managed_browser",
+            AUTH_SRC_GUI_COOKIE: "manual_cookie",
+            AUTH_SRC_BROWSER_REFRESH: "managed_browser_refresh",
+            AUTH_SRC_IX_COOKIE: "ix_browser",
+            AUTH_SRC_LAST_KNOWN: "last_known_good",
+            AUTH_SRC_PUBLIC: "public",
+        }.get(source_id, "unknown")
+
+    def _ordered_sources(
+        self,
+        creator: str,
+        platform: str,
+        creator_url: str = "",
+    ) -> List[str]:
         sources = [
             AUTH_SRC_MANAGED,
             AUTH_SRC_GUI_COOKIE,
-            AUTH_SRC_LAST_KNOWN,
             AUTH_SRC_BROWSER_REFRESH,
+            AUTH_SRC_IX_COOKIE,
+            AUTH_SRC_LAST_KNOWN,
         ]
-        preferred = self.get_preferred_source(creator, platform) if creator else None
+        preferred = self.get_preferred_source(
+            creator,
+            platform,
+            creator_url=creator_url,
+        ) if creator or creator_url else None
         if preferred and preferred in sources:
             sources.remove(preferred)
             sources.insert(0, preferred)
             logger.info(
                 "[AuthSource] preferred=%s for %s|%s (from memory)",
-                preferred, creator, platform,
+                preferred,
+                normalize_creator_key(
+                    creator,
+                    platform=platform,
+                    creator_url=creator_url,
+                ),
+                platform,
             )
+        return sources
 
+    def resolve_ticket(
+        self,
+        platform: str,
+        creator: str = "",
+        creator_url: str = "",
+        ix_cookie_provider=None,
+        allow_public_fallback: Optional[bool] = None,
+        progress_callback=None,
+    ) -> AuthTicket:
+        """Resolve a shared auth ticket for the current creator and platform."""
+        platform = (platform or "").lower().strip()
+        creator_key = normalize_creator_key(
+            creator,
+            platform=platform,
+            creator_url=creator_url,
+        )
+        ticket = AuthTicket(
+            creator_key=creator_key,
+            platform=platform,
+            can_use_public_fallback=(
+                bool(allow_public_fallback)
+                if allow_public_fallback is not None
+                else platform in {"youtube", "facebook", "instagram"}
+            ),
+        )
+        candidate_paths: List[str] = []
         prev_source = None
-        for src in sources:
-            cookie_path = self._try_source(platform, src)
+        for src in self._ordered_sources(
+            creator,
+            platform,
+            creator_url=creator_url,
+        ):
+            cookie_path = self._try_source(
+                platform,
+                src,
+                ix_cookie_provider=ix_cookie_provider,
+            )
             if cookie_path:
+                if cookie_path not in candidate_paths:
+                    candidate_paths.append(cookie_path)
                 if prev_source:
                     logger.info(
                         "[AuthFallback] from=%s to=%s reason=prev_source_failed platform=%s",
                         prev_source, src, platform,
                     )
                 logger.info(
-                    "[AuthSource] selected=%s cookie=%s platform=%s",
-                    src, Path(cookie_path).name, platform,
+                    "[AuthSource] selected=%s cookie=%s platform=%s creator=%s",
+                    src, Path(cookie_path).name, platform, creator_key,
                 )
-                return cookie_path, src
+                ticket.source_id = src
+                ticket.source_kind = self._source_kind(src)
+                ticket.cookie_path = cookie_path
+                ticket.validated_at = time.time()
+                ticket.auth_strength = "authenticated"
+                ticket.candidate_paths = list(candidate_paths)
+                if progress_callback:
+                    progress_callback(f"Auth source ready: {ticket.source_kind}")
+                return ticket
             prev_source = src
 
         logger.warning(
-            "[AuthSource] ALL sources exhausted for %s — no authenticated cookie",
+            "[AuthSource] ALL sources exhausted for %s - no authenticated cookie",
             platform,
         )
-        return None, ""
+        ticket.source_id = AUTH_SRC_PUBLIC if ticket.can_use_public_fallback else ""
+        ticket.source_kind = self._source_kind(ticket.source_id) if ticket.source_id else "none"
+        ticket.candidate_paths = list(candidate_paths)
+        if progress_callback:
+            if ticket.can_use_public_fallback:
+                progress_callback("No authenticated cookies available. Public fallback only.")
+            else:
+                progress_callback("No authenticated cookies available.")
+        return ticket
 
-    def _try_source(self, platform: str, source: str) -> Optional[str]:
+    def _try_source(
+        self,
+        platform: str,
+        source: str,
+        ix_cookie_provider=None,
+    ) -> Optional[str]:
         """Try a single source, return validated cookie path or None."""
         try:
             if source == AUTH_SRC_MANAGED:
                 return self._try_managed(platform)
             elif source == AUTH_SRC_GUI_COOKIE:
                 return self._try_gui_cookie(platform)
+            elif source == AUTH_SRC_IX_COOKIE:
+                return self._try_ix_cookie(
+                    platform,
+                    ix_cookie_provider=ix_cookie_provider,
+                )
             elif source == AUTH_SRC_LAST_KNOWN:
                 return self._try_last_known(platform)
             elif source == AUTH_SRC_BROWSER_REFRESH:
@@ -1225,16 +1435,28 @@ class AuthFallbackChain:
 
         Looks for platform-specific files that the user manually placed
         (e.g., instagram.txt, facebook.txt) and validates auth markers.
-        Does NOT scan local browser profiles.
+        Does NOT scan local browser profiles or browser_cookies staging files.
         """
-        candidates = [
-            self._cookies_dir / f"{platform}.txt",
-            self._cookies_dir / "browser_cookies" / f"{platform}_chromium_profile.txt",
-        ]
+        candidates = [self._cookies_dir / f"{platform}.txt"]
         for c in candidates:
             if c.exists() and c.stat().st_size > 10:
+                if self._is_exported_cookie_file(c):
+                    continue
                 if self._validate(str(c), platform):
                     return str(c)
+        return None
+
+    def _try_ix_cookie(self, platform: str, ix_cookie_provider=None) -> Optional[str]:
+        """Source 4: Fresh export from IXBrowser onesoul profile."""
+        if ix_cookie_provider is None:
+            return None
+        try:
+            cookie_path = ix_cookie_provider(platform)
+        except Exception as exc:
+            logger.debug("[AuthSource] ix_cookie_provider failed for %s: %s", platform, exc)
+            return None
+        if cookie_path and self._validate(cookie_path, platform):
+            return cookie_path
         return None
 
     def _try_last_known(self, platform: str) -> Optional[str]:

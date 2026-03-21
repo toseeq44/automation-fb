@@ -2766,11 +2766,19 @@ class CreatorProfilesPage(QWidget):
             parent=self,
         )
 
-        # If download+upload mode, connect queue_finished to mark download done
+        # If download+upload mode, connect queue_finished to mark download done.
+        # Always clean up any previous callback first to avoid orphaned connections.
+        if hasattr(self, "_onego_dl_done_cb"):
+            try:
+                self._queue_manager.queue_finished.disconnect(self._onego_dl_done_cb)
+            except Exception:
+                pass
+            del self._onego_dl_done_cb
+
         if result["mode"] == MODE_DOWNLOAD_UPLOAD:
             def _on_dl_done():
                 worker.mark_download_done()
-            self._onego_dl_done_cb = _on_dl_done  # prevent GC
+            self._onego_dl_done_cb = _on_dl_done  # keep ref for later disconnect
             self._queue_manager.queue_finished.connect(_on_dl_done)
 
         self._onego_worker = worker
@@ -2806,6 +2814,11 @@ class CreatorProfilesPage(QWidget):
     def _on_run_all(self):
         """Start sequential queue using CreatorQueueManager."""
         if not self.cards:
+            return
+        # Guard: prevent starting a new queue while one is already running.
+        # Multiple concurrent queues cause the same creator to be processed
+        # simultaneously, resulting in duplicate downloads and platform bans.
+        if self._queue_manager.isRunning():
             return
         folders = list(self.cards.keys())
         self.summary_btn.setVisible(False)
@@ -2890,7 +2903,7 @@ class CreatorProfilesPage(QWidget):
                 card._on_progress_percent(pct)
                 break
 
-    def _on_queue_creator_finished(self, creator_name: str, success: bool):
+    def _on_queue_creator_finished(self, creator_name: str, success: bool, result: object = None):
         """Un-highlight the finished card, update stats and summary."""
         self._queue_stats["done"] += 1
         if success:
@@ -2912,7 +2925,30 @@ class CreatorProfilesPage(QWidget):
                 card.config = CreatorConfig(fp)
                 card._refresh_activity()
                 card._refresh_header()
-                if success:
+                status_code = ""
+                downloaded = 0
+                target = 0
+                if isinstance(result, dict):
+                    status_code = str(result.get("status_code", "") or "")
+                    downloaded = int(result.get("downloaded", 0) or 0)
+                    target = int(result.get("target", 0) or 0)
+                if status_code == "success":
+                    card._set_state("done", "Queue: Complete")
+                    card._set_completion_progress(downloaded, target, "done")
+                elif status_code == "partial_download":
+                    card._set_state("partial", "Queue: Partial")
+                    card._set_completion_progress(downloaded, target, "partial")
+                elif status_code == "failed_auth":
+                    card._set_state("error", "Queue: Auth required")
+                elif status_code == "link_grab_failed":
+                    card._set_state("error", "Queue: No links")
+                elif status_code == "download_failed":
+                    card._set_state("error", "Queue: Download failed")
+                elif status_code == "runtime_unavailable":
+                    card._set_state("error", "Queue: Runtime issue")
+                elif status_code == "no_url_configured":
+                    card._set_state("error", "Queue: No URL")
+                elif success:
                     card._set_state("done", "Queue: Complete")
                 else:
                     card._set_state("error", "Queue: Failed")

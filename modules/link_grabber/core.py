@@ -3711,22 +3711,6 @@ def _method_facebook_json(
     if not session:
         return []
 
-    # Ensure we land on the videos/reels page for profile URLs
-    target_url = url
-    if not any(kw in url for kw in ('/videos', '/reels', '/watch', '/reel/')):
-        if _re.search(r'facebook\.com/[^/]+/?$', url):
-            target_url = url.rstrip('/') + '/videos'
-
-    try:
-        r = session.get(target_url, timeout=20, allow_redirects=True)
-        if r.url and 'login' in r.url:
-            logging.debug("FacebookJSON: redirected to login (cookies not valid)")
-            return []
-        html = r.text
-    except Exception as exc:
-        logging.debug(f"FacebookJSON: page fetch failed: {exc}")
-        return []
-
     results: typing.List[dict] = []
     seen:    typing.Set[str]   = set()
     limit    = max_videos if max_videos > 0 else 500
@@ -3745,29 +3729,57 @@ def _method_facebook_json(
         r'href="(/reel/[^"?]+)"',
     ]
 
-    for pat in patterns:
-        for m in _re.finditer(pat, html):
-            raw = m.group(1)
-            raw = raw.replace('\\/', '/').replace('\\u0026', '&')
-            if raw.startswith('/'):
-                raw = 'https://www.facebook.com' + raw
-            # Normalise: keep ?v= param for /watch/ but drop everything else
-            if '/watch' in raw and '?v=' in raw:
-                clean = raw.split('&')[0]
-            else:
-                clean = raw.split('?')[0].rstrip('/')
-            if not _re.search(r'/(reel|videos|watch)', clean):
-                continue
-            if clean in seen:
-                continue
-            seen.add(clean)
-            results.append({'url': clean, 'title': '', 'date': '00000000'})
-            if len(results) >= limit:
-                break
+    def _parse_html(html: str) -> None:
+        for pat in patterns:
+            for m in _re.finditer(pat, html):
+                if len(results) >= limit:
+                    return
+                raw = m.group(1)
+                raw = raw.replace('\\/', '/').replace('\\u0026', '&')
+                if raw.startswith('/'):
+                    raw = 'https://www.facebook.com' + raw
+                if '/watch' in raw and '?v=' in raw:
+                    clean = raw.split('&')[0]
+                else:
+                    clean = raw.split('?')[0].rstrip('/')
+                if not _re.search(r'/(reel|videos|watch)', clean):
+                    continue
+                if clean in seen:
+                    continue
+                seen.add(clean)
+                results.append({'url': clean, 'title': '', 'date': '00000000'})
+
+    # Build candidate tab URLs to try. For a plain profile URL we scan both
+    # /videos and /reels tabs since Facebook splits content across them.
+    base = url.rstrip('/')
+    is_direct = any(kw in url for kw in ('/videos', '/reels', '/watch', '/reel/'))
+    if is_direct:
+        tab_urls = [url]
+    elif 'profile.php' in url.lower():
+        connector = '&' if '?' in url else '?'
+        tab_urls = [
+            f"{base}{connector}sk=videos_tab",
+            f"{base}{connector}sk=reels_tab",
+        ]
+    else:
+        tab_urls = [
+            base + '/videos',
+            base + '/reels',
+        ]
+
+    for tab_url in tab_urls:
         if len(results) >= limit:
             break
+        try:
+            r = session.get(tab_url, timeout=20, allow_redirects=True)
+            if r.url and 'login' in r.url:
+                logging.debug("FacebookJSON: redirected to login (cookies not valid)")
+                return results  # return what we have so far
+            _parse_html(r.text)
+        except Exception as exc:
+            logging.debug(f"FacebookJSON: fetch failed for {tab_url}: {exc}")
 
-    logging.info(f"FacebookJSON: {len(results)} video links from page HTML")
+    logging.info(f"FacebookJSON: {len(results)} video links from {len(tab_urls)} tab(s)")
     return results
 
 
@@ -3979,6 +3991,9 @@ def extract_links_intelligent(
         interactive_login_fallback = bool(options.get('interactive_login_fallback', True))
         manual_login_wait_seconds = int(options.get('manual_login_wait_seconds', 90) or 90)
         managed_profile_only = bool(options.get('managed_profile_only', False))
+        include_meta = bool(options.get('include_meta', False))
+        public_fallback_only = bool(options.get('public_fallback_only', False))
+        provided_auth_ticket = options.get('auth_ticket') if isinstance(options.get('auth_ticket'), dict) else {}
         cookie_browser = options.get('cookie_browser')  # "chrome", "firefox", "edge", or None
         browser_max_scroll_attempts = options.get('browser_max_scroll_attempts')
         yt_content_type = options.get('yt_content_type', 'all')  # "all" | "shorts" | "long"
@@ -3991,6 +4006,13 @@ def extract_links_intelligent(
             interactive_login_fallback = False
         url = _normalize_source_url(url, platform_key)
         creator = _extract_creator_from_url(url, platform_key)
+        meta = {
+            "attempt_reports": [],
+            "status_code": "link_grab_failed",
+            "failure_type": "",
+            "stage_failed": "",
+            "auth_ticket": dict(provided_auth_ticket or {}),
+        }
 
         # Get learning system
         learning_system = get_learning_system()
@@ -3999,6 +4021,8 @@ def extract_links_intelligent(
         cookie_file = None
         temp_cookie_files: typing.List[str] = []
         _auth_source_id: typing.Optional[str] = None  # tracks which source provided cookies
+        _auth_ticket = dict(provided_auth_ticket or {})
+        _allow_public_methods = True
 
         # ── Managed-profile auth fallback chain ───────────────────────
         # When running in CreatorProfile mode (managed_profile_only),
@@ -4006,15 +4030,49 @@ def extract_links_intelligent(
         # priority, cooldown awareness, and source memory.
         if managed_profile_only:
             try:
-                from modules.shared.session_authority import AuthFallbackChain
+                from modules.shared.session_authority import AuthFallbackChain, normalize_creator_key
                 _chain = AuthFallbackChain()
-                cookie_file, _auth_source_id = _chain.resolve_cookie(
-                    platform_key, creator=creator,
+                if _auth_ticket:
+                    _auth_ticket = dict(_auth_ticket)
+                else:
+                    _auth_ticket = _chain.resolve_ticket(
+                        platform=platform_key,
+                        creator=creator,
+                        creator_url=url,
+                    ).to_dict()
+                _auth_ticket["creator_key"] = normalize_creator_key(
+                    creator,
+                    platform=platform_key,
+                    creator_url=url,
                 )
+                meta["auth_ticket"] = dict(_auth_ticket)
+                cookie_file = _auth_ticket.get("cookie_path")
+                _auth_source_id = _auth_ticket.get("source_id") or None
                 if cookie_file and progress_callback:
                     progress_callback(f"Cookies ready ({Path(cookie_file).name})")
+                    meta["attempt_reports"].append({
+                        "stage": "auth_ready",
+                        "method_id": "auth_ticket",
+                        "auth_source": _auth_ticket.get("source_kind") or _auth_source_id or "unknown",
+                        "result": "success",
+                        "failure_type": "",
+                        "links_added": 0,
+                        "retry_used": False,
+                    })
                 elif not cookie_file and progress_callback:
-                    progress_callback("No authenticated cookies available. Trying API methods...")
+                    progress_callback("No authenticated cookies available. Waiting for browser/IX fallback...")
+                    meta["stage_failed"] = "auth_ready"
+                    meta["failure_type"] = "auth_missing"
+                    meta["attempt_reports"].append({
+                        "stage": "auth_ready",
+                        "method_id": "auth_ticket",
+                        "auth_source": _auth_ticket.get("source_kind") or "none",
+                        "result": "failed",
+                        "failure_type": "auth_missing",
+                        "links_added": 0,
+                        "retry_used": False,
+                    })
+                    _allow_public_methods = bool(_auth_ticket.get("can_use_public_fallback")) and public_fallback_only
             except Exception as _chain_err:
                 logging.debug("[AuthFallbackChain] init/resolve failed: %s", _chain_err)
 
@@ -4371,6 +4429,78 @@ def extract_links_intelligent(
             except Exception as _cdp_err:
                 logging.debug("[ManagedCDP] attach-first failed: %s", _cdp_err)
 
+        if managed_profile_only and not entries and not cookie_file and auth_manager is not None:
+            try:
+                from modules.shared.session_authority import get_session_authority
+                _sa = get_session_authority()
+                _sess = _sa.get_session_status()
+                if _sess.get(platform_key) and not _sa.is_profile_busy():
+                    _content_filter = {
+                        'youtube': 'all_videos',
+                        'tiktok': 'all_videos',
+                        'instagram': 'reels_only',
+                        'twitter': 'video_tweets',
+                        'facebook': 'videos_reels',
+                    }.get(platform_key, 'all')
+                    browser_entries = auth_manager.grab_links_via_browser(
+                        url=url,
+                        platform_key=platform_key,
+                        content_filter=_content_filter,
+                        max_items=max_videos,
+                        max_scroll_attempts_override=browser_max_scroll_attempts,
+                        progress_callback=progress_callback,
+                    ) or []
+                    added = 0
+                    for entry in browser_entries:
+                        if max_videos > 0 and len(entries) >= max_videos:
+                            break
+                        url_value = entry.get('url')
+                        if not url_value:
+                            continue
+                        normalized = _normalize_url(url_value)
+                        if normalized in seen_normalized:
+                            continue
+                        seen_normalized.add(normalized)
+                        entries.append(entry)
+                        added += 1
+                    meta["attempt_reports"].append({
+                        "stage": "browser_session_extraction",
+                        "method_id": "managed_browser_session",
+                        "auth_source": (_auth_ticket or {}).get("source_kind") or "managed_browser",
+                        "result": "success" if added > 0 else "failed",
+                        "failure_type": "" if added > 0 else "auth_missing",
+                        "links_added": added,
+                        "retry_used": False,
+                    })
+                    if added > 0:
+                        pre_successful_method = "Managed Browser Session"
+                        successful_method_id = "managed_browser_session"
+                        meta["status_code"] = "success"
+                        meta["stage_failed"] = ""
+                        meta["failure_type"] = ""
+                elif not _allow_public_methods:
+                    meta["stage_failed"] = meta.get("stage_failed") or "browser_session_extraction"
+                    meta["failure_type"] = meta.get("failure_type") or "auth_missing"
+            except Exception as _managed_browser_err:
+                logging.debug("[ManagedBrowser] extraction failed: %s", _managed_browser_err)
+
+        if managed_profile_only and not entries and not cookie_file and not _allow_public_methods:
+            if progress_callback:
+                progress_callback("Managed mode: authenticated link extraction not available yet.")
+            for temp_cookie_file in temp_cookie_files:
+                if temp_cookie_file and os.path.exists(temp_cookie_file):
+                    try:
+                        os.unlink(temp_cookie_file)
+                    except Exception:
+                        pass
+            meta["status_code"] = "failed_auth"
+            meta["stage_failed"] = meta.get("stage_failed") or "auth_ready"
+            meta["failure_type"] = meta.get("failure_type") or "auth_missing"
+            meta["auth_ticket"] = dict(_auth_ticket or meta.get("auth_ticket") or {})
+            if include_meta:
+                return [], creator, meta
+            return [], creator
+
         # Define all available methods
         # PRIORITY ORDER: Fast API methods first, browser methods as fallback
         # Stable method-id -> number mapping for debug logs.
@@ -4444,7 +4574,10 @@ def extract_links_intelligent(
             ("Method D: Attach Selenium to running Chrome (CDP port)",
              lambda: _method_selenium_cdp_attach(url, platform_key, max_videos, progress_callback, expected_count or 0),
              "selenium_cdp_attach",
-             (platform_key in {'instagram', 'facebook', 'tiktok', 'youtube'}) and (not managed_profile_only)),
+             # CDP attach is always safe: it attaches to an already-running Chrome and returns []
+             # immediately when no debug-port Chrome is found. managed_profile_only does NOT
+             # apply here because we never create or touch a browser profile.
+             platform_key in {'instagram', 'facebook', 'tiktok', 'youtube'}),
 
             ("Method A: Selenium (Chrome user-data-dir profile)",
              lambda: _method_selenium_profile(url, platform_key, cookies_dir, max_videos, progress_callback),
@@ -4464,6 +4597,8 @@ def extract_links_intelligent(
 
         # Filter allowed methods
         available_methods = [(name, func, mid) for name, func, mid, allowed in all_methods if allowed]
+        if managed_profile_only and not cookie_file and not _allow_public_methods and not entries:
+            available_methods = []
 
         # INTELLIGENCE: Check if we have learning data for this creator
         best_method_id = None
@@ -4637,10 +4772,22 @@ def extract_links_intelligent(
                     time_taken,
                     error_msg
                 )
+            meta["attempt_reports"].append({
+                "stage": "authenticated_extractors" if cookie_file else "public_fallback",
+                "method_id": method_id,
+                "auth_source": (_auth_ticket or {}).get("source_kind") or (_auth_source_id or ("browser_profile" if cookie_file else "none")),
+                "result": "success" if added > 0 else "failed",
+                "failure_type": "" if added > 0 else (error_msg or "no_links"),
+                "links_added": added,
+                "retry_used": False,
+            })
 
             if added > 0:
                 successful_method = method_name
                 successful_method_id = method_id
+                meta["status_code"] = "success"
+                meta["stage_failed"] = ""
+                meta["failure_type"] = ""
                 if progress_callback:
                     progress_callback(f"{_lg_tag} Found {added} links")
 
@@ -4652,6 +4799,11 @@ def extract_links_intelligent(
                 if not exhaustive_mode:
                     break  # Stop on first success
             else:
+                meta["stage_failed"] = meta.get("stage_failed") or (
+                    "authenticated_extractors" if cookie_file else "public_fallback"
+                )
+                if not meta.get("failure_type"):
+                    meta["failure_type"] = error_msg or "no_links"
                 if progress_callback:
                     progress_callback(f"Ã¢Å¡Â Ã¯Â¸Â {_lg_tag} Ã¢â€ â€™ 0 links")
 
@@ -5043,18 +5195,23 @@ def extract_links_intelligent(
             # Limit if needed
             if max_videos > 0:
                 entries = entries[:max_videos]
+            meta["status_code"] = "success"
+            meta["stage_failed"] = ""
+            meta["failure_type"] = ""
+            meta["auth_ticket"] = dict(_auth_ticket or meta.get("auth_ticket") or {})
 
             # Attach _meta to each entry for downstream consumers
             _meta = {
                 'creator': creator,
                 'platform': platform_key,
                 'extraction_method_id': successful_method_id or '',
-                'auth_source': 'browser_profile' if cookie_file else 'none',
+                'auth_source': (_auth_ticket or {}).get('source_kind') or (_auth_source_id or ('browser_profile' if cookie_file else 'none')),
                 'browser_session_used': bool(successful_method and any(
                     t in (successful_method or '').lower()
                     for t in ['chromium', 'selenium', 'browser', 'interactive', 'cdp', 'playwright', 'recovery']
                 )),
                 'fresh_cookie_exported': bool(cookie_file),
+                'attempt_reports': list(meta.get('attempt_reports', []) or []),
             }
             for entry in entries:
                 entry['_meta'] = _meta
@@ -5069,6 +5226,8 @@ def extract_links_intelligent(
                     progress_callback(f"   Ã¢â‚¬Â¢ Proxy Used: {active_proxy}")
                 progress_callback(f"Ã¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€Â")
         else:
+            meta["status_code"] = "link_grab_failed" if meta.get("stage_failed") != "auth_ready" else "failed_auth"
+            meta["auth_ticket"] = dict(_auth_ticket or meta.get("auth_ticket") or {})
             if progress_callback:
                 progress_callback(f"Ã¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€ÂÃ¢â€Â")
                 progress_callback(f"Ã¢ÂÅ’ No links found after trying all methods")
@@ -5082,15 +5241,31 @@ def extract_links_intelligent(
         if entries and _auth_source_id and managed_profile_only:
             try:
                 from modules.shared.session_authority import AuthFallbackChain
-                AuthFallbackChain().record_success(creator, platform_key, _auth_source_id)
+                AuthFallbackChain().record_success(
+                    creator,
+                    platform_key,
+                    _auth_source_id,
+                    creator_url=url,
+                )
             except Exception:
                 pass
 
+        if include_meta:
+            return entries, creator, meta
         return entries, creator
 
     except Exception as e:
         if progress_callback:
             progress_callback(f"Ã¢ÂÅ’ Critical error: {str(e)[:200]}")
+        error_meta = {
+            "attempt_reports": [],
+            "status_code": "link_grab_failed",
+            "failure_type": "critical_error",
+            "stage_failed": "exception",
+            "auth_ticket": dict(provided_auth_ticket or {}),
+        }
+        if include_meta:
+            return [], "unknown", error_meta
         return [], "unknown"
 
 

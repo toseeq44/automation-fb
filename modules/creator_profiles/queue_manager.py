@@ -12,12 +12,15 @@ Features:
 """
 
 import json
+import logging
 import random
 import time
 import uuid
 import threading
 from pathlib import Path
 from typing import List, Optional
+
+logger = logging.getLogger(__name__)
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
@@ -63,7 +66,7 @@ class CreatorQueueManager(QThread):
 
     queue_progress       = pyqtSignal(str)
     creator_started      = pyqtSignal(str)
-    creator_finished     = pyqtSignal(str, bool)
+    creator_finished     = pyqtSignal(str, bool, object)
     creator_progress_msg = pyqtSignal(str, str)   # folder_name, raw progress text
     creator_progress_pct = pyqtSignal(str, int)   # folder_name, percent (0-100)
     queue_finished       = pyqtSignal()
@@ -78,34 +81,42 @@ class CreatorQueueManager(QThread):
 
         self._pause_flag = False
         self._stop_flag = False
+        self._pause_lock = threading.Lock()
         self._resume_event = threading.Event()
         self._resume_event.set()   # not paused initially
 
         self._current_worker: Optional[CreatorDownloadWorker] = None
         self._worker_done_event = threading.Event()
         self._total_videos_downloaded: int = 0
+        self._last_result: dict = {}
 
     # ── Public API ────────────────────────────────────────────────────────
 
     def start_queue(self, folders: List[Path]):
         """Run All — always starts fresh from index 0."""
+        # Safety: do not reset state if the thread is still running.
+        # Caller (_on_run_all) should guard against this, but double-protect here.
+        if self.isRunning():
+            logger.warning("[CreatorQueueManager] start_queue called while already running — ignored")
+            return
         self._queue = list(folders)
         self._current_index = 0
         self._session_id = str(uuid.uuid4())
         self._pause_flag = False
         self._stop_flag = False
         self._total_videos_downloaded = 0
+        self._last_result = {}
         self._resume_event.set()
         self._delete_state()
-        if not self.isRunning():
-            self.start()
+        self.start()
 
     def pause(self):
         """Pause after current video download finishes."""
         if not self.isRunning():
             return
-        self._pause_flag = True
-        self._resume_event.clear()
+        with self._pause_lock:
+            self._pause_flag = True
+            self._resume_event.clear()
         # Also pause the active worker (between videos)
         if self._current_worker:
             self._current_worker.pause()
@@ -113,8 +124,9 @@ class CreatorQueueManager(QThread):
 
     def resume(self):
         """Resume from exactly where paused."""
-        self._pause_flag = False
-        self._resume_event.set()
+        with self._pause_lock:
+            self._pause_flag = False
+            self._resume_event.set()
         # Resume active worker if it's waiting
         if self._current_worker:
             self._current_worker.resume()
@@ -197,8 +209,10 @@ class CreatorQueueManager(QThread):
         )
 
         while self._current_index < total:
-            # Check pause at top of each creator iteration
-            if self._pause_flag:
+            # Check pause at top of each creator iteration (lock ensures flag+event are consistent)
+            with self._pause_lock:
+                should_pause = self._pause_flag
+            if should_pause:
                 self._save_state()
                 self.paused.emit()
                 self.queue_progress.emit(
@@ -237,8 +251,11 @@ class CreatorQueueManager(QThread):
             if self._stop_flag:
                 break
 
-            # If failed, check if it was due to network loss
-            if not success and not _is_network_available():
+            # If failed, only retry for network-related failures.
+            # Auth/config failures should not trigger network retry loop.
+            _NON_NETWORK_CODES = {"failed_auth", "no_url_configured", "runtime_unavailable"}
+            last_status = str(self._last_result.get("status_code", "") or "")
+            if not success and last_status not in _NON_NETWORK_CODES and not _is_network_available():
                 self._save_state()
                 self.queue_progress.emit("Queue: Network lost during download — waiting...")
                 self.paused.emit()
@@ -253,7 +270,11 @@ class CreatorQueueManager(QThread):
                 # Retry the same creator (don't increment index)
                 continue
 
-            self.creator_finished.emit(creator_name, success)
+            self.creator_finished.emit(
+                creator_name,
+                success,
+                dict(self._last_result or {}),
+            )
             self._current_index += 1
 
             # Random cooldown between creators (1-4s) for browser stability + anti-spam
@@ -279,6 +300,7 @@ class CreatorQueueManager(QThread):
         """
         from .config_manager import CreatorConfig
 
+        self._last_result = {}
         config = CreatorConfig(folder)
         creator_url = (config.creator_url or "").strip()
 
@@ -288,6 +310,11 @@ class CreatorQueueManager(QThread):
 
         if not creator_url:
             self.queue_progress.emit(f"Skipped {folder.name}: no URL configured")
+            self._last_result = {
+                "success": False,
+                "status_code": "no_url_configured",
+                "error": "No creator URL configured",
+            }
             return False
 
         self._worker_done_event.clear()
@@ -352,13 +379,21 @@ class CreatorQueueManager(QThread):
         # Read result directly from worker attribute (avoids cross-thread signal issues)
         final_result = getattr(worker, '_result', None) or result_holder[0]
         result_holder[0] = final_result
+        self._last_result = dict(final_result or {})
 
-        # Cleanup
-        try:
-            worker.progress.disconnect(_on_progress)
-            worker.finished.disconnect(_on_finished)
-        except Exception:
-            pass
+        # Cleanup — disconnect ALL connected signals to prevent memory leaks
+        for sig, slot in [
+            (worker.progress,        _on_progress),
+            (worker.download_speed,  _on_speed),
+            (worker.eta,             _on_eta),
+            (worker.progress_percent, _on_pct),
+            (worker.finished,        _on_finished),
+            (worker.paused,          self._on_worker_paused),
+        ]:
+            try:
+                sig.disconnect(slot)
+            except Exception:
+                pass
         self._current_worker = None
 
         # Track total videos downloaded across entire queue for anti-spam
@@ -377,8 +412,13 @@ class CreatorQueueManager(QThread):
                 time.sleep(delay)
 
         success = result_holder[0].get("success", False)
-        print(f"[CreatorProfile] _run_one '{folder.name}' -> success={success}, downloaded={result_holder[0].get('downloaded', 0)}")
-        return success
+        downloaded_in_run = int(result_holder[0].get("downloaded", 0) or 0)
+        logger.debug(
+            "[CreatorProfile] _run_one '%s' -> success=%s, downloaded=%d",
+            folder.name, success, downloaded_in_run,
+        )
+        # Treat partial downloads as successful enough to move the queue forward
+        return success or downloaded_in_run > 0
 
     def _on_worker_paused(self):
         """Worker emitted paused signal — propagate to queue level."""

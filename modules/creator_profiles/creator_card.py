@@ -884,10 +884,11 @@ class CreatorCard(QFrame):
                 if filtered is None:
                     return
                 m = filtered
-            except ImportError:
-                pass
+            except Exception:
+                pass  # use original message if filter unavailable or raises
             self._set_state("running", m)
-        self.worker.progress.connect(_filter_card_progress)
+        self._progress_cb = _filter_card_progress  # keep ref for disconnect
+        self.worker.progress.connect(self._progress_cb)
         self.worker.download_speed.connect(self._on_download_speed)
         self.worker.progress_percent.connect(self._on_progress_percent)
         self.worker.paused.connect(self._on_worker_paused)
@@ -924,17 +925,41 @@ class CreatorCard(QFrame):
         )
 
     def _on_finished(self, result: dict):
+        # Disconnect all signals to prevent memory leak on repeated runs
+        if self.worker:
+            for sig, slot in [
+                (self.worker.progress,          getattr(self, '_progress_cb', None)),
+                (self.worker.download_speed,    self._on_download_speed),
+                (self.worker.progress_percent,  self._on_progress_percent),
+                (self.worker.paused,            self._on_worker_paused),
+                (self.worker.finished,          self._on_finished),
+                (self.worker.login_required,    self._on_login_required),
+            ]:
+                if slot is not None:
+                    try:
+                        sig.disconnect(slot)
+                    except Exception:
+                        pass
         self.config = CreatorConfig(self.folder)
         self._refresh_activity()
         self._refresh_header()
+        status_code = str(result.get("status_code", "") or "")
         downloaded = int(result.get("downloaded", 0) or 0)
         target = int(result.get("target", 0) or 0)
-        if result.get("success"):
+        if status_code == "success" or result.get("success") and downloaded >= target:
             self._set_state("done", "Done")
-        elif downloaded > 0 and target > 0:
+            self._set_completion_progress(downloaded, target, "done")
+        elif status_code == "partial_download" or (downloaded > 0 and target > 0):
             self._set_state("partial", "Partial")
+            self._set_completion_progress(downloaded, target, "partial")
         else:
-            self._set_state("error", "Failed")
+            label = {
+                "failed_auth": "Auth required",
+                "link_grab_failed": "No links found",
+                "download_failed": "Download failed",
+                "runtime_unavailable": "Runtime issue",
+            }.get(status_code, "Failed")
+            self._set_state("error", label)
         self._set_run_button_state(False)
         if self._manual_run_active:
             self._manual_run_active = False
@@ -953,6 +978,23 @@ class CreatorCard(QFrame):
             self.progress_bar.setFormat(f"%p%  |  {self._current_speed}")
         else:
             self.progress_bar.setFormat("%p%")
+
+    def _set_completion_progress(self, downloaded: int, target: int, state: str) -> None:
+        """Set final completion percentage from downloaded vs target."""
+        try:
+            downloaded_i = max(0, int(downloaded or 0))
+            target_i = max(0, int(target or 0))
+        except Exception:
+            return
+
+        if state == "done":
+            pct = 100
+        elif target_i > 0:
+            pct = int(round((downloaded_i / target_i) * 100))
+        else:
+            return
+
+        self.progress_bar.setValue(max(0, min(100, pct)))
 
     def _set_state(self, state: str, msg: str):
         self._state = state
@@ -1107,7 +1149,9 @@ class CreatorCard(QFrame):
     def stop_worker(self):
         if self.worker and self.worker.isRunning():
             self.worker.stop()
-            self.worker.wait(3000)
+            finished = self.worker.wait(3000)
+            if not finished:
+                self.worker.terminate()  # force-kill if still running after 3s
             if self._manual_run_active:
                 self._manual_run_active = False
                 self.run_finished.emit(self.folder)

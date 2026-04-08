@@ -16,6 +16,58 @@ from typing import Callable, Optional, Sequence
 from .config_manager import merge_split_edit_settings
 
 
+def _run_subprocess_safe(cmd, timeout=None, **kwargs):
+    import os, signal, sys, subprocess
+    flags = kwargs.pop("creationflags", 0)
+    preexec_fn = kwargs.pop("preexec_fn", None)
+    
+    if sys.platform == "win32":
+        flags |= subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+    else:
+        if preexec_fn is None:
+            preexec_fn = os.setsid
+            
+    capture_output = kwargs.pop("capture_output", False)
+    text_mode = kwargs.get("text", False) or kwargs.get("universal_newlines", False)
+    if capture_output:
+        kwargs.setdefault("stdout", subprocess.PIPE)
+        kwargs.setdefault("stderr", subprocess.PIPE)
+
+    p = subprocess.Popen(cmd, creationflags=flags, preexec_fn=preexec_fn, **kwargs)
+    try:
+        stdout, stderr = p.communicate(timeout=timeout)
+        retcode = p.poll()
+        return subprocess.CompletedProcess(p.args, retcode, stdout, stderr)
+    except subprocess.TimeoutExpired:
+        if sys.platform == "win32":
+            try:
+                os.kill(p.pid, signal.CTRL_BREAK_EVENT)
+            except Exception:
+                pass
+        else:
+            try:
+                os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+            except Exception:
+                pass
+        raise
+    finally:
+        if p.poll() is None:
+            if sys.platform == "win32":
+                try: os.kill(p.pid, signal.CTRL_BREAK_EVENT)
+                except Exception: pass
+            else:
+                try: os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+                except Exception: pass
+        try:
+            p.kill()
+        except Exception:
+            pass
+        try:
+            p.communicate()
+        except Exception:
+            pass
+        p.wait()
+
 _DEMUCS_CACHE_UNSET = object()
 _DEMUCS_COMMAND_CACHE: object = _DEMUCS_CACHE_UNSET
 _DEFAULT_DEMUCS_MODEL = "htdemucs"
@@ -30,6 +82,16 @@ def _creationflags() -> int:
     return subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 
+def _is_frozen_executable_launcher() -> bool:
+    """Return True when sys.executable points to the bundled GUI app.
+
+    In a frozen Windows build, launching `sys.executable -m ...` does not run a
+    Python module runner. It starts the GUI EXE again, which creates a second
+    app window. Split+Edit must never use that launcher for helper processes.
+    """
+    return bool(getattr(sys, "frozen", False))
+
+
 def _ffprobe_path(ffmpeg_path: str) -> str:
     ffmpeg = Path(ffmpeg_path)
     probe_name = "ffprobe.exe" if ffmpeg.suffix.lower() == ".exe" else "ffprobe"
@@ -41,7 +103,7 @@ def _has_audio_stream(input_path: Path, ffmpeg_path: str) -> bool:
     ffprobe = _ffprobe_path(ffmpeg_path)
     flags = _creationflags()
     try:
-        result = subprocess.run(
+        result = _run_subprocess_safe(
             [
                 ffprobe,
                 "-v",
@@ -65,7 +127,7 @@ def _has_audio_stream(input_path: Path, ffmpeg_path: str) -> bool:
         pass
 
     try:
-        result = subprocess.run(
+        result = _run_subprocess_safe(
             [ffmpeg_path, "-hide_banner", "-i", str(input_path)],
             capture_output=True,
             text=True,
@@ -111,7 +173,7 @@ def _build_demucs_candidates() -> list[list[str]]:
     if demucs_exe.exists():
         candidates.append([str(demucs_exe)])
 
-    if sys.executable:
+    if sys.executable and not _is_frozen_executable_launcher():
         candidates.append([sys.executable, "-m", "demucs"])
 
     py_launcher = shutil.which("py")
@@ -138,7 +200,7 @@ def _detect_demucs_command() -> Optional[list[str]]:
     flags = _creationflags()
     for candidate in _build_demucs_candidates():
         try:
-            result = subprocess.run(
+            result = _run_subprocess_safe(
                 candidate + ["--help"],
                 capture_output=True,
                 text=True,
@@ -245,13 +307,13 @@ def _run_demucs_helper(
     venv_python = repo_root / ".venv" / "Scripts" / "python.exe"
     if venv_python.exists():
         candidates.append([str(venv_python), "-m", helper_module])
-    if sys.executable:
+    if sys.executable and not _is_frozen_executable_launcher():
         candidates.append([sys.executable, "-m", helper_module])
 
     flags = _creationflags()
     for candidate in candidates:
         try:
-            result = subprocess.run(
+            result = _run_subprocess_safe(
                 candidate + [
                     "--input",
                     str(helper_input),
@@ -287,7 +349,7 @@ def _run_demucs_helper(
 def _extract_audio_to_wav(input_path: Path, output_wav: Path, ffmpeg_path: str) -> bool:
     flags = _creationflags()
     try:
-        result = subprocess.run(
+        result = _run_subprocess_safe(
             [
                 ffmpeg_path,
                 "-hide_banner",
@@ -477,7 +539,7 @@ def _separate_vocals_with_demucs(
 
     flags = _creationflags()
     try:
-        result = subprocess.run(
+        result = _run_subprocess_safe(
             cmd,
             capture_output=True,
             text=True,
@@ -725,7 +787,7 @@ def apply_split_edit_to_clip(
     cmd.extend(["-movflags", "+faststart", str(output_path)])
 
     try:
-        result = subprocess.run(
+        result = _run_subprocess_safe(
             cmd,
             capture_output=True,
             text=True,

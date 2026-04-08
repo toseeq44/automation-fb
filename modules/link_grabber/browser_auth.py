@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -213,6 +215,163 @@ class ChromiumAuthManager:
                 pass
         return active
 
+    def _normalize_managed_profile_path(
+        self,
+        path: Optional[Union[str, Path]] = None,
+    ) -> str:
+        """Return a lowercase normalized path for managed-profile matching."""
+        raw = Path(path or self.profile_dir)
+        try:
+            raw = raw.resolve()
+        except Exception:
+            pass
+        return str(raw).replace("/", "\\").rstrip("\\").lower()
+
+    def _cmdline_uses_managed_profile(
+        self,
+        cmdline: Optional[Union[str, Sequence[str]]],
+    ) -> bool:
+        """True when a browser command line points at this manager's profile."""
+        if not cmdline:
+            return False
+
+        if isinstance(cmdline, str):
+            joined = cmdline
+        else:
+            joined = " ".join(str(part) for part in cmdline if part is not None)
+
+        lowered = joined.replace("/", "\\").lower()
+        if "--user-data-dir" not in lowered:
+            return False
+
+        raw_target = str(self.profile_dir).replace("/", "\\").rstrip("\\").lower()
+        resolved_target = self._normalize_managed_profile_path()
+        variants = set()
+        for target in {raw_target, resolved_target}:
+            if not target:
+                continue
+            variants.update({
+                target,
+                f"\"{target}\"",
+                f"--user-data-dir={target}",
+                f"--user-data-dir=\"{target}\"",
+            })
+        return any(variant in lowered for variant in variants)
+
+    def _list_managed_profile_browser_processes(self) -> List[Tuple[int, str]]:
+        """Return browser PIDs currently using the app-managed browser profile."""
+        matches: Dict[int, str] = {}
+        browser_names = {"chrome.exe", "chromium.exe", "msedge.exe", "brave.exe"}
+
+        try:
+            import psutil  # type: ignore
+        except Exception:
+            psutil = None  # type: ignore
+
+        if psutil is not None:
+            try:
+                for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+                    info = proc.info
+                    name = str(info.get("name") or "").lower()
+                    if name not in browser_names:
+                        continue
+                    if self._cmdline_uses_managed_profile(info.get("cmdline")):
+                        matches[int(info["pid"])] = name
+            except Exception as exc:
+                logging.debug("[ReLogin] psutil profile-process scan failed: %s", exc)
+
+        if matches:
+            return sorted(matches.items())
+
+        ps_cmd = (
+            "Get-CimInstance Win32_Process | "
+            "Where-Object { $_.Name -match '^(chrome|chromium|msedge|brave)\\.exe$' } | "
+            "Select-Object ProcessId,Name,CommandLine | ConvertTo-Json -Compress"
+        )
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps_cmd],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            payload = (result.stdout or "").strip()
+            if payload:
+                rows = json.loads(payload)
+                if isinstance(rows, dict):
+                    rows = [rows]
+                for row in rows:
+                    name = str(row.get("Name") or "").lower()
+                    pid = int(row.get("ProcessId") or 0)
+                    if name not in browser_names or pid <= 0:
+                        continue
+                    if self._cmdline_uses_managed_profile(row.get("CommandLine")):
+                        matches[pid] = name
+        except Exception as exc:
+            logging.debug("[ReLogin] PowerShell profile-process scan failed: %s", exc)
+
+        return sorted(matches.items())
+
+    def _wait_for_managed_profile_browser_start(
+        self,
+        timeout: float = 5.0,
+    ) -> List[Tuple[int, str]]:
+        """Wait until a browser process is really holding the managed profile."""
+        deadline = time.time() + max(0.1, float(timeout))
+        while time.time() < deadline:
+            matches = self._list_managed_profile_browser_processes()
+            if matches:
+                return matches
+            time.sleep(0.25)
+        return []
+
+    def _clear_profile_lock_files(self) -> None:
+        """Best-effort cleanup for stale Chromium profile lock artifacts."""
+        for lock_file in [
+            self.profile_dir / "SingletonLock",
+            self.profile_dir / "SingletonCookie",
+            self.profile_dir / "SingletonSocket",
+            self.profile_dir / "parent.lock",
+            self.profile_dir / "lock",
+            self.profile_dir / ".singleton_test",
+        ]:
+            try:
+                lock_file.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    def _terminate_lingering_profile_browsers(self) -> int:
+        """Kill leftover browser processes that still use the managed profile."""
+        matches = self._list_managed_profile_browser_processes()
+        if not matches:
+            return 0
+
+        for pid, name in matches:
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                logging.warning(
+                    "[ReLogin] Terminated lingering managed-profile browser: pid=%s name=%s",
+                    pid, name,
+                )
+            except Exception as exc:
+                logging.warning(
+                    "[ReLogin] Failed terminating lingering browser pid=%s (%s): %s",
+                    pid, name, exc,
+                )
+
+        deadline = time.time() + 8.0
+        while time.time() < deadline:
+            if not self._list_managed_profile_browser_processes():
+                break
+            time.sleep(0.25)
+
+        return len(matches)
+
     # Lock/junk file names that do NOT indicate a real Chromium profile.
     # Must stay consistent with SessionAuthority._PROFILE_JUNK_NAMES.
     _PROFILE_JUNK_NAMES = frozenset({
@@ -337,12 +496,12 @@ class ChromiumAuthManager:
           5. User closes Chrome
           6. Playwright headless reads cookies for status + export
         """
-        import subprocess
-        import os
-
         self._last_login_status = {}
 
-        # ── Close managed CDP Chrome if running (avoid profile conflict) ──
+        # ── Close managed CDP Chrome (always, not just when is_running()) ───
+        # is_running() can return False when Chrome is still alive but the CDP
+        # port check fails momentarily.  Always calling graceful_close() is
+        # safe — it kills by self._chrome_process AND by PID from lock file.
         try:
             from modules.shared.managed_chrome_session import (
                 MANAGED_CDP_ATTACH_FIRST,
@@ -350,13 +509,16 @@ class ChromiumAuthManager:
             )
             if MANAGED_CDP_ATTACH_FIRST:
                 mgr = get_managed_chrome_session()
-                if mgr.is_running():
-                    logging.info(
-                        "[ReLogin] Closing managed CDP Chrome before launching Re-login browser"
-                    )
-                    mgr.graceful_close()
+                was = mgr.graceful_close()   # always attempt, regardless of is_running()
+                if was:
+                    logging.info("[ReLogin] Closed managed CDP Chrome before Re-login")
                     if callback:
                         callback("system", "Closed automated session to open login browser.")
+                else:
+                    logging.debug("[ReLogin] Managed Chrome was not running — no close needed")
+                # Give Chrome time to fully release file handles before we open
+                # either the pre-check Playwright or real Chrome.
+                time.sleep(2.0)
         except ImportError:
             pass
         except Exception as _cdp_close_err:
@@ -379,23 +541,19 @@ class ChromiumAuthManager:
             # Still usable but less trusted by platforms
             logging.warning("[ReLogin] Using bundled Chromium — real Chrome preferred")
 
-        # ── Check existing sessions via headless Playwright ───────────────
+        # ── Check existing sessions via SQLite (no Chromium subprocess) ──────
+        # Using Playwright here would open a headless Chromium that holds the
+        # profile lock.  When we later launch real Chrome with the same
+        # --user-data-dir, Chrome sees the profile is in use → exits with
+        # code 21 and no window appears.  Reading the cookie SQLite DB directly
+        # is lock-free and just as accurate for presence checks.
         pre_status: Dict[str, bool] = {p: False for p in self.platforms}
-        if sync_playwright is not None and self._has_real_profile_content():
-            try:
-                pw_pre, ctx_pre = self._start_persistent_context(headless=True)
-                if ctx_pre is not None:
-                    try:
-                        pre_cookies = ctx_pre.cookies()
-                        for platform in self.platforms:
-                            pre_status[platform] = self.has_platform_session(
-                                pre_cookies, platform)
-                    except Exception:
-                        pass
-                    finally:
-                        self._close_started_context(pw_pre, ctx_pre)
-            except Exception:
-                pass
+        if self._has_real_profile_content():
+            pre_cookies_sqlite = self._read_profile_cookies_sqlite()
+            if pre_cookies_sqlite is not None:
+                for platform in self.platforms:
+                    pre_status[platform] = self.has_platform_session(
+                        pre_cookies_sqlite, platform)
 
         # Report already-logged-in platforms
         for platform, ok in pre_status.items():
@@ -456,6 +614,24 @@ class ChromiumAuthManager:
                 self._post_login_sync(pre_status, callback)
                 return True
 
+        # ── Release any lingering profile locks before launching Chrome ──────
+        # Playwright / managed-CDP Chromium may hold SingletonLock for a brief
+        # moment after .close()/.stop() returns.  Deleting stale lock files
+        # prevents real Chrome from immediately exiting (profile-in-use crash).
+        lingering = self._terminate_lingering_profile_browsers()
+        if lingering:
+            logging.warning(
+                "[ReLogin] Cleared %d lingering browser process(es) on managed profile",
+                lingering,
+            )
+            if callback:
+                callback(
+                    "system",
+                    f"Closed {lingering} lingering browser session(s) using the app profile.",
+                )
+        self._clear_profile_lock_files()
+        time.sleep(1.5)   # extra safety: let OS release file handles
+
         # ── Build Chrome launch command ───────────────────────────────────
         # Open HOME pages, not login pages.  If the user is already logged
         # in, the home page preserves the session.  If not, the platform
@@ -472,6 +648,8 @@ class ChromiumAuthManager:
             f"--user-data-dir={self.profile_dir}",
             "--no-first-run",
             "--no-default-browser-check",
+            "--new-window",          # force a new visible window (not reuse existing)
+            "--disable-features=TranslateUI",   # suppress popup noise
         ]
         cmd.extend(urls_to_open)
 
@@ -493,6 +671,8 @@ class ChromiumAuthManager:
                 "[ReLogin] Launching real Chrome: %s (profile=%s, urls=%d)",
                 Path(chrome_exe).name, self.profile_dir, len(urls_to_open),
             )
+            launch_failure_reported = False
+            # launch handled below with startup verification
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.DEVNULL,
@@ -500,18 +680,72 @@ class ChromiumAuthManager:
                 creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
             )
 
-            if callback:
+            active_profile_procs = self._wait_for_managed_profile_browser_start(timeout=5.0)
+            if not active_profile_procs:
+                exit_code = proc.poll()
+                logging.warning(
+                    "[ReLogin] Launch attempt 1 did not produce an active managed-profile browser (exit=%s)",
+                    exit_code,
+                )
+                lingering = self._terminate_lingering_profile_browsers()
+                self._clear_profile_lock_files()
+                time.sleep(1.5)
+                if callback:
+                    extra = f" (closed {lingering} lingering session(s))" if lingering else ""
+                    callback(
+                        "system",
+                        f"Browser launch conflicted{extra}. Retrying with a clean app profile lock...",
+                    )
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+                )
+                active_profile_procs = self._wait_for_managed_profile_browser_start(timeout=5.0)
+                if not active_profile_procs:
+                    exit_code = proc.poll()
+                    logging.info(
+                        "[ReLogin] Chrome failed to start an interactive managed-profile window (exit=%s)",
+                        exit_code,
+                    )
+                    if callback:
+                        callback(
+                            "system",
+                            f"Browser exited immediately (code {exit_code}) - may be a profile conflict. Retrying detection...",
+                        )
+                    launch_failure_reported = True
+                elif active_profile_procs:
+                    logging.info(
+                        "[ReLogin] Managed-profile browser confirmed after retry: %s",
+                        active_profile_procs,
+                    )
+            else:
+                logging.info(
+                    "[ReLogin] Managed-profile browser confirmed: %s",
+                    active_profile_procs,
+                )
+
+            if callback and active_profile_procs:
                 for platform in need_login:
                     callback(platform, "opened (real Chrome)")
 
             # ── Wait for the user to close Chrome ─────────────────────────
             # Poll the process — when Chrome exits, the user is done.
-            while proc.poll() is None:
+            while self._list_managed_profile_browser_processes():
                 time.sleep(1.0)
 
-            logging.info("[ReLogin] Chrome closed (exit code %s)", proc.returncode)
+            exit_code = proc.poll()
+            logging.info("[ReLogin] Chrome closed (exit code %s)", exit_code)
             if callback:
-                callback("system", "Browser closed. Detecting login status...")
+                if not active_profile_procs and not launch_failure_reported:
+                    # Non-zero exit right after open = profile conflict or crash.
+                    # Warn user so they know Chrome didn't open properly.
+                    callback("system",
+                             f"Browser exited immediately (code {exit_code}) — "
+                             "may be a profile conflict. Retrying detection...")
+                elif active_profile_procs:
+                    callback("system", "Browser closed. Detecting login status...")
 
         except FileNotFoundError:
             if callback:
@@ -526,8 +760,10 @@ class ChromiumAuthManager:
             return False
 
         # ── Post-login: Headless status detection & cookie export ─────────
-        # Small delay to let Chrome fully release the profile lock
-        time.sleep(1.5)
+        # Wait for Chrome to fully release the profile lock, then clean stale
+        # lock files so Playwright can open the same profile cleanly.
+        time.sleep(2.0)
+        self._clear_profile_lock_files()
 
         final_status: Dict[str, bool] = {p: False for p in self.platforms}
 
@@ -557,13 +793,31 @@ class ChromiumAuthManager:
                         logging.exception("Failed to read post-login cookies")
                     finally:
                         self._close_started_context(pw_post, ctx_post)
+                else:
+                    # Playwright failed to open the profile — fall back to
+                    # reading the Chrome cookie SQLite DB directly.
+                    logging.warning(
+                        "[ReLogin] Playwright context unavailable for post-check; "
+                        "falling back to SQLite cookie read"
+                    )
+                    if callback:
+                        callback("system", "Checking sessions via cookie database...")
+                    sqlite_cookies = self._read_profile_cookies_sqlite()
+                    if sqlite_cookies is not None:
+                        for platform in self.platforms:
+                            final_status[platform] = self.has_platform_session(
+                                sqlite_cookies, platform)
             except Exception:
                 logging.exception("Post-login headless check failed")
         else:
             if callback:
                 callback("system",
-                         "Playwright not available for status check. "
-                         "Cookie export will happen on next backend operation.")
+                         "Playwright not available — checking via cookie database...")
+            sqlite_cookies = self._read_profile_cookies_sqlite()
+            if sqlite_cookies is not None:
+                for platform in self.platforms:
+                    final_status[platform] = self.has_platform_session(
+                        sqlite_cookies, platform)
 
         # ── Clear cooldowns for platforms that are now logged in ─────────
         for platform, ok in final_status.items():
@@ -573,6 +827,76 @@ class ChromiumAuthManager:
         self._last_login_status = dict(final_status)
         self._post_login_sync(final_status, callback)
         return any(final_status.values())
+
+    def _read_profile_cookies_sqlite(self) -> Optional[List[dict]]:
+        """
+        Read cookies directly from Chrome's SQLite cookie database.
+        Used as fallback when Playwright cannot open the profile.
+        Returns a list of cookie dicts (same shape as Playwright's ctx.cookies()),
+        or None if the database cannot be read.
+        """
+        import sqlite3
+        import shutil
+        import tempfile
+
+        # Chrome writes cookies to Default/Network/Cookies (Chrome 96+)
+        # or Default/Cookies (older builds)
+        candidates = [
+            self.profile_dir / "Default" / "Network" / "Cookies",
+            self.profile_dir / "Default" / "Cookies",
+        ]
+        db_path = next((p for p in candidates if p.exists()), None)
+        if db_path is None:
+            logging.warning("[ReLogin] No Chrome cookie DB found at %s", self.profile_dir)
+            return None
+
+        # Copy to a temp file so SQLite doesn't complain about WAL locks
+        try:
+            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".db")
+            import os
+            os.close(tmp_fd)
+            shutil.copy2(str(db_path), tmp_path)
+        except Exception as exc:
+            logging.warning("[ReLogin] Could not copy cookie DB: %s", exc)
+            return None
+
+        try:
+            conn = sqlite3.connect(f"file:{tmp_path}?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT host_key, name, value, path, expires_utc, is_secure "
+                "FROM cookies"
+            )
+            rows = cur.fetchall()
+            conn.close()
+        except Exception as exc:
+            logging.warning("[ReLogin] SQLite read failed: %s", exc)
+            try:
+                import os
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+            return None
+
+        try:
+            import os
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+        cookies = []
+        for row in rows:
+            cookies.append({
+                "domain": row["host_key"],
+                "name":   row["name"],
+                "value":  row["value"],
+                "path":   row["path"],
+                "expires": row["expires_utc"],
+                "secure": bool(row["is_secure"]),
+            })
+        logging.info("[ReLogin] SQLite fallback: read %d cookies from %s", len(cookies), db_path)
+        return cookies
 
     def _post_login_sync(
         self,
@@ -707,6 +1031,26 @@ class ChromiumAuthManager:
         """
         canonical_path = get_cookies_dir() / f"{platform_key}.txt"
         has_auth = self._export_has_auth_cookies(cookies, platform_key)
+
+        # Preserve legacy/manual canonical files so browser exports never
+        # overwrite a user-pinned cookie. Fresh exports remain available in
+        # browser_cookies/ as source-specific staging files.
+        if canonical_path.exists() and canonical_path.stat().st_size > 10:
+            try:
+                header = canonical_path.read_text(encoding="utf-8", errors="ignore")[:256]
+                exported_markers = (
+                    "Exported from persistent Chromium profile",
+                    "Exported from IXBrowser profile",
+                )
+                if not any(marker in header for marker in exported_markers):
+                    logging.info(
+                        "[CookieGuard] Preserving manual canonical file %s; leaving fresh export in %s",
+                        canonical_path.name,
+                        staging_path.name,
+                    )
+                    return
+            except Exception:
+                pass
 
         if has_auth:
             # New export has auth -> always write

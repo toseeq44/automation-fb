@@ -777,7 +777,10 @@ class IXSessionManager:
 
             if self._driver:
                 try:
-                    self._driver.quit()
+                    if len(self._driver.window_handles) > 1:
+                        self._driver.close()
+                    else:
+                        self._driver.get("about:blank")
                     _log("[IX-Session] Selenium driver closed", progress_cb)
                 except Exception as e:
                     _log(f"[IX-Session] Driver close error: {e}", progress_cb)

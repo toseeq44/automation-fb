@@ -208,6 +208,29 @@ class CreatorQueueManager(QThread):
             f"Queue: pacing profile {user_plan.upper()} ({delay_multiplier:.1f}x delays)"
         )
 
+        # ── Managed Chrome: start once, keep alive for entire queue ──────────
+        # Chrome must be running before any creator starts so CDP attach-first
+        # works for every creator without per-creator open/close overhead.
+        try:
+            from modules.shared.managed_chrome_session import get_managed_chrome_session
+            _mgr = get_managed_chrome_session()
+            if _mgr.is_running():
+                print("[Queue][Browser] Managed Chrome already running — attaching", flush=True)
+                self.queue_progress.emit("Queue: Browser session already active")
+            else:
+                print("[Queue][Browser] Starting managed Chrome for link grabbing...", flush=True)
+                self.queue_progress.emit("Queue: Starting browser session...")
+                ok, reason = _mgr.ensure_running()
+                if ok:
+                    print("[Queue][Browser] Managed Chrome ready (port 9250) — stays open for entire queue", flush=True)
+                    self.queue_progress.emit("Queue: Browser session ready")
+                else:
+                    print(f"[Queue][Browser] Chrome could not start ({reason}) — using fallback extraction", flush=True)
+                    self.queue_progress.emit(f"Queue: Browser unavailable ({reason}) — using fallback methods")
+        except Exception as _ce:
+            print(f"[Queue][Browser] Browser init skipped: {_ce}", flush=True)
+        # Chrome is intentionally NOT closed at queue end — stays open until app exits.
+
         while self._current_index < total:
             # Check pause at top of each creator iteration (lock ensures flag+event are consistent)
             with self._pause_lock:
@@ -247,7 +270,27 @@ class CreatorQueueManager(QThread):
             self.creator_started.emit(creator_name)
             self._save_state()
 
-            success = self._run_one(folder)
+            # Pop the browser window into view when starting a creator
+            try:
+                from modules.shared.managed_chrome_session import get_managed_chrome_session
+                _mgr_inst = get_managed_chrome_session()
+                if _mgr_inst.is_running():
+                    _mgr_inst.maximize_window()
+            except Exception as e:
+                print(f"[Queue][Browser] Failed to maximize window: {e}", flush=True)
+
+            try:
+                success = self._run_one(folder)
+            finally:
+                # Minimize the browser to the background whether success or fail to unblock the user's screen
+                try:
+                    from modules.shared.managed_chrome_session import get_managed_chrome_session
+                    _mgr_inst = get_managed_chrome_session()
+                    if _mgr_inst.is_running():
+                        _mgr_inst.minimize_window()
+                except Exception as e:
+                    print(f"[Queue][Browser] Failed to minimize window: {e}", flush=True)
+
             if self._stop_flag:
                 break
 
@@ -340,6 +383,16 @@ class CreatorQueueManager(QThread):
             self.queue_progress.emit(txt)
 
         def _on_progress(msg: str):
+            # Echo link-grabbing + download steps to console for terminal visibility.
+            # Skip pure noise (speed bars, percentage ticks, tiny pacing lines).
+            _m = str(msg or "").strip()
+            _skip = (
+                not _m
+                or _m.startswith(("━", "%|", "  ETA:", "  [ETA"))
+                or (_m.startswith("Pacing") and "delay" in _m.lower())
+            )
+            if not _skip:
+                print(f"[Queue][{creator_display}] {_m}", flush=True)
             self.creator_progress_msg.emit(folder.name, msg)
             status_state["msg"] = msg
             _update_combined_status()

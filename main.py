@@ -3,6 +3,22 @@ main.py
 Main application to launch OneSoul.
 """
 import sys
+import os
+
+# --- PyInstaller Playwright Bundling Fix ---
+if getattr(sys, 'frozen', False):
+    base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+    os.environ['PLAYWRIGHT_BROWSERS_PATH'] = os.path.join(base_path, 'playwright_browsers')
+# -------------------------------------------
+
+# --- Initialize Root Logger FIRST ---
+try:
+    from modules.config.debug_logger import setup_debug_logger
+    setup_debug_logger()
+except Exception as e:
+    print(f"Failed to setup debug logger at startup: {e}")
+# ------------------------------------
+
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
 # Choose UI version (set USE_MODERN_UI = True for new OneSoul design)
@@ -22,6 +38,19 @@ from modules.ui import LicenseActivationDialog
 import os
 import shutil
 from pathlib import Path
+
+
+def _should_block_frozen_helper_invocation() -> bool:
+    """Prevent the frozen GUI EXE from relaunching itself as a fake Python helper."""
+    if not getattr(sys, "frozen", False):
+        return False
+
+    argv = [str(arg or "").strip().lower() for arg in sys.argv[1:]]
+    if len(argv) >= 2 and argv[0] == "-m":
+        helper = argv[1]
+        if helper in {"demucs", "modules.creator_profiles.demucs_runner"}:
+            return True
+    return False
 
 def restore_bundled_configs():
     """
@@ -89,6 +118,10 @@ def restore_bundled_configs():
 
 def main():
     """Launch the OneSoul application"""
+    if _should_block_frozen_helper_invocation():
+        print("OneSoul helper invocation blocked: bundled EXE cannot run Python modules.")
+        sys.exit(2)
+
     # Attempt to restore configs first
     restore_bundled_configs()
 
@@ -177,9 +210,25 @@ def main():
                 "Please renew your subscription to continue using OneSoul."
             )
 
+    
     # Sync user plan across all modules
     logger.info("Syncing user plan across modules...", "App")
     sync_all_plans(license_manager)
+
+    # Browser Singleton Teardown Hook
+    def cleanup_browsers():
+        logger.info("Application shutting down: cleaning up managed browsers", "App")
+        try:
+            from modules.shared.managed_chrome_session import get_managed_chrome_session
+            get_managed_chrome_session().graceful_close()
+        except Exception:
+            pass
+        try:
+            from modules.creator_profiles.ix_link_grabber import get_ix_session
+            get_ix_session().close_session()
+        except Exception:
+            pass
+    app.aboutToQuit.connect(cleanup_browsers)
 
     # Launch main window
     logger.info("Launching main window", "App")

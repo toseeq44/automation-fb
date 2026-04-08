@@ -37,6 +37,58 @@ from modules.video_downloader.core import VideoDownloaderThread
 ENABLE_IXBROWSER_FALLBACK = True
 
 
+def _run_subprocess_safe(cmd, timeout=None, **kwargs):
+    import os, signal, sys, subprocess
+    flags = kwargs.pop("creationflags", 0)
+    preexec_fn = kwargs.pop("preexec_fn", None)
+    
+    if sys.platform == "win32":
+        flags |= subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+    else:
+        if preexec_fn is None:
+            preexec_fn = os.setsid
+            
+    capture_output = kwargs.pop("capture_output", False)
+    text_mode = kwargs.get("text", False) or kwargs.get("universal_newlines", False)
+    if capture_output:
+        kwargs.setdefault("stdout", subprocess.PIPE)
+        kwargs.setdefault("stderr", subprocess.PIPE)
+
+    p = subprocess.Popen(cmd, creationflags=flags, preexec_fn=preexec_fn, **kwargs)
+    try:
+        stdout, stderr = p.communicate(timeout=timeout)
+        retcode = p.poll()
+        return subprocess.CompletedProcess(p.args, retcode, stdout, stderr)
+    except subprocess.TimeoutExpired:
+        if sys.platform == "win32":
+            try:
+                os.kill(p.pid, signal.CTRL_BREAK_EVENT)
+            except Exception:
+                pass
+        else:
+            try:
+                os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+            except Exception:
+                pass
+        raise
+    finally:
+        if p.poll() is None:
+            if sys.platform == "win32":
+                try: os.kill(p.pid, signal.CTRL_BREAK_EVENT)
+                except Exception: pass
+            else:
+                try: os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+                except Exception: pass
+        try:
+            p.kill()
+        except Exception:
+            pass
+        try:
+            p.communicate()
+        except Exception:
+            pass
+        p.wait()
+
 _SCOPED_LIBRARY_LOG_MARKERS = (
     "modules/link_grabber/",
     "modules\\link_grabber\\",
@@ -600,6 +652,46 @@ def download_video(
 
     ffmpeg_available = _ffmpeg_ok()
     cookie_pool = _normalize_cookie_candidates(cookiefile, cookie_candidates)
+    primary_cookie = cookie_pool[0] if cookie_pool else None
+    _logged_cookie_debug: set = set()
+
+    def _cookie_debug_key(cookie: str = None) -> str:
+        value = str(cookie or "").strip()
+        if not value:
+            return "<none>"
+        try:
+            return str(Path(value).resolve()).lower()
+        except Exception:
+            return value.lower()
+
+    def _cookie_debug_path(cookie: str = None) -> str:
+        value = str(cookie or "").strip()
+        if not value:
+            return "<none>"
+        try:
+            return str(Path(value).resolve())
+        except Exception:
+            return value
+
+    if progress_cb:
+        if primary_cookie:
+            progress_cb(f"  [DL] Download primary cookie = {_cookie_debug_path(primary_cookie)}")
+            _logged_cookie_debug.add(_cookie_debug_key(primary_cookie))
+        else:
+            progress_cb("  [DL] Download primary cookie = <none>")
+            _logged_cookie_debug.add("<none>")
+
+    def _log_download_cookie_attempt(cookie: str = None) -> None:
+        if not progress_cb:
+            return
+        key = _cookie_debug_key(cookie)
+        if key in _logged_cookie_debug:
+            return
+        _logged_cookie_debug.add(key)
+        if cookie:
+            progress_cb(f"  [DL] Download fallback cookie tried = {_cookie_debug_path(cookie)}")
+        else:
+            progress_cb("  [DL] Download fallback cookie tried = <none>")
 
     def _base_opts(fmt: str, cookie: str = None, proxy: str = None, extractor_args: dict = None) -> dict:
         user_agent = _get_random_user_agent()
@@ -638,6 +730,7 @@ def download_video(
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.download([url])
         except Exception as e:
+            logging.error(f"[DownloadEngine] _try_opts failed for {url}", exc_info=True)
             if cancel_event and cancel_event.is_set():
                 cancelled[0] = True
             err = str(e)
@@ -688,7 +781,7 @@ def download_video(
         cmd.append(url)
 
         try:
-            run = subprocess.run(
+            run = _run_subprocess_safe(
                 cmd,
                 capture_output=True,
                 text=True,
@@ -701,6 +794,7 @@ def download_video(
             _set_error(err)
             return False, err
         except Exception as e:
+            logging.error(f"[DownloadEngine] _try_cli failed for {url}", exc_info=True)
             err = str(e)
             _set_error(err)
             return False, err
@@ -728,6 +822,7 @@ def download_video(
         player_client: str = None,
         force_cli: bool = False,
     ):
+        _log_download_cookie_attempt(cookie)
         if force_cli:
             return _try_cli(fmt, cookie, proxy, player_client)
 
@@ -884,6 +979,53 @@ def download_video(
             progress_cb(f"  [IG] Final error: {last_error[0]}")
         return _pick_fresh_video()
 
+    if platform == "tiktok":
+        # TikTok pre-muxes video+audio — bestvideo+bestaudio always fails.
+        # API hostname bypass helps when the standard API endpoint is geo/rate blocked.
+        _tt_extractor_args = {
+            "tiktok": {"api_hostname": "api22-normal-c-useast1a.tiktokv.com"}
+        }
+        tt_formats = ["best[ext=mp4]/best", "best"]
+
+        tt_attempts = []
+        for ck in cookie_pool:
+            for fmt in tt_formats:
+                tt_attempts.append((fmt, ck, proxy_url, _tt_extractor_args, "cookie+bypass"))
+                tt_attempts.append((fmt, ck, None, _tt_extractor_args, "cookie+bypass/no-proxy"))
+                tt_attempts.append((fmt, ck, None, None, "cookie/direct"))
+        for fmt in tt_formats:
+            tt_attempts.append((fmt, None, proxy_url, _tt_extractor_args, "bypass/no-cookie"))
+            tt_attempts.append((fmt, None, None, _tt_extractor_args, "bypass/no-cookie/no-proxy"))
+            tt_attempts.append((fmt, None, None, None, "no-cookie/direct"))
+
+        seen_tt: set = set()
+        unique_tt = []
+        for fmt, ck, px, ea, label in tt_attempts:
+            key = (fmt, ck or "", px or "", bool(ea))
+            if key in seen_tt:
+                continue
+            seen_tt.add(key)
+            unique_tt.append((fmt, ck, px, ea, label))
+
+        for fmt, ck, px, ea, label in unique_tt:
+            if cancelled[0]:
+                break
+            if progress_cb:
+                ck_label = Path(ck).name if ck else "no-cookie"
+                progress_cb(f"  [TT] {label} | {ck_label}")
+            ok, err = _attempt_download(fmt=fmt, cookie=ck, proxy=px, extractor_args=ea)
+            if ok:
+                return result_path[0] or _pick_fresh_video()
+            err_low = (err or "").lower()
+            if any(x in err_low for x in ("login", "sign in", "auth", "private", "not available")):
+                if progress_cb:
+                    progress_cb(f"  [TT] Auth/unavailable, trying next")
+                continue
+
+        if progress_cb and last_error[0]:
+            progress_cb(f"  [TT] Final error: {last_error[0]}")
+        return _pick_fresh_video()
+
     # Facebook serves pre-muxed streams — bestvideo+bestaudio often fails.
     # Use a wider ladder that tries pre-muxed HD/SD before the smart merge format.
     if platform == "facebook":
@@ -968,7 +1110,7 @@ def _probe_duration_seconds(input_path: Path, ffmpeg: str = "ffmpeg") -> float:
             ],
         ]
         for cmd in probe_cmds:
-            r = subprocess.run(
+            r = _run_subprocess_safe(
                 cmd,
                 capture_output=True,
                 text=True,
@@ -987,7 +1129,7 @@ def _probe_duration_seconds(input_path: Path, ffmpeg: str = "ffmpeg") -> float:
     except Exception:
         pass
     try:
-        r = subprocess.run(
+        r = _run_subprocess_safe(
             [ffmpeg, "-i", str(input_path)],
             capture_output=True, text=True, timeout=30,
             creationflags=flags,
@@ -1019,7 +1161,7 @@ def _probe_duration_with_retry(
 def _can_decode_media(input_path: Path, ffmpeg: str = "ffmpeg") -> bool:
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     try:
-        result = subprocess.run(
+        result = _run_subprocess_safe(
             [
                 ffmpeg,
                 "-hide_banner",
@@ -1108,15 +1250,15 @@ def split_video(
         ]
 
         def _run_safe(command: List[str]) -> Tuple[int, str]:
-            flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-            p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=flags)
             try:
-                stdout, stderr = p.communicate(timeout=1800)
-                text = ((stderr or b"") + b"\n" + (stdout or b"")).decode(errors="ignore")
-                return p.returncode, re.sub(r"\s+", " ", text).strip()
+                res = _run_subprocess_safe(command, timeout=1800, capture_output=True)
+                stdout = res.stdout if res.stdout else b""
+                stderr = res.stderr if res.stderr else b""
+                if isinstance(stdout, str): stdout = stdout.encode(errors="ignore")
+                if isinstance(stderr, str): stderr = stderr.encode(errors="ignore")
+                text = (stderr + b"\n" + stdout).decode(errors="ignore")
+                return res.returncode, re.sub(r"\s+", " ", text).strip()
             except Exception:
-                p.kill()
-                p.wait()
                 return -1, "ffmpeg process timed out or was terminated"
 
         try:
@@ -1215,16 +1357,11 @@ def apply_preset(
     )
     cmd = [ffmpeg, "-i", str(input_path), "-vf", vf, "-c:a", "copy", str(out), "-y"]
     
-    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     try:
-        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=flags)
-        p.communicate(timeout=600)
-        if p.returncode == 0 and out.exists():
+        res = _run_subprocess_safe(cmd, timeout=600, capture_output=True)
+        if res.returncode == 0 and out.exists():
             return out
     except Exception:
-        if 'p' in locals():
-            p.kill()
-            p.wait()
         pass
     return None
 
@@ -1410,8 +1547,10 @@ class CreatorDownloadWorker(QThread):
             )
             if best_cookie:
                 self._cookie_sync_info[platform_key] = best_cookie
-                dest_name = Path(best_cookie).name
-                self.progress.emit(f"  Cookie sync: {platform_key} -> {dest_name}")
+                source_label = str(source_id or "unknown").strip() or "unknown"
+                self.progress.emit(
+                    f"  Cookie sync: {platform_key} -> {source_label} -> {best_cookie}"
+                )
                 return best_cookie
 
             return None
@@ -1916,6 +2055,25 @@ class CreatorDownloadWorker(QThread):
 
         platform_key = _detect_platform(creator_url)
         self._attempt_summary = []
+
+        # ── Ensure managed Chrome is running (single-card run path) ──────────
+        # Queue runs handle this in run() before the loop.  Single-card runs
+        # (manual "Run" on one creator) must also ensure Chrome is available.
+        try:
+            from modules.shared.managed_chrome_session import get_managed_chrome_session
+            _mgr = get_managed_chrome_session()
+            if not _mgr.is_running():
+                self._terminal_log("Browser", "Starting managed Chrome for link grabbing...")
+                ok, reason = _mgr.ensure_running()
+                if ok:
+                    self._terminal_log("Browser", "Managed Chrome ready (port 9250)")
+                else:
+                    self._terminal_log("Browser", f"Chrome could not start ({reason}) — using fallback methods")
+            else:
+                self._terminal_log("Browser", "Managed Chrome already running — attaching")
+        except Exception as _bex:
+            self._terminal_log("Browser", f"Browser session init skipped: {_bex}")
+
         try:
             from modules.shared.runtime_readiness import get_runtime_readiness
             self._runtime_readiness = get_runtime_readiness(platform_key)
@@ -2000,7 +2158,43 @@ class CreatorDownloadWorker(QThread):
         if platform_key in {"instagram", "tiktok", "youtube", "facebook", "twitter"}:
             synced_cookie = self._maybe_sync_profile_cookies(platform_key, force=True)
             if synced_cookie:
-                self.progress.emit(f"  Auth: Synced managed profile cookies for {platform_key}")
+                self.progress.emit(f"  Auth: Cookie sync ready for {platform_key}")
+                if self._current_auth_ticket is not None:
+                    current_cookie = str(self._current_auth_ticket.get("cookie_path") or "").strip()
+                    current_source = str(self._current_auth_ticket.get("source_kind") or "").strip()
+                    candidates = [
+                        str(path).strip()
+                        for path in (self._current_auth_ticket.get("candidate_paths") or [])
+                        if str(path).strip()
+                    ]
+                    if current_cookie and current_cookie not in candidates:
+                        candidates.insert(0, current_cookie)
+
+                    preserve_primary = current_source in {
+                        "manual_cookie",
+                        "ix_browser",
+                        "last_known_good",
+                    } and current_cookie
+
+                    if synced_cookie not in candidates:
+                        if preserve_primary:
+                            insert_at = 1 if candidates else 0
+                            candidates.insert(insert_at, synced_cookie)
+                        else:
+                            candidates.insert(0, synced_cookie)
+
+                    if not preserve_primary:
+                        # Keep browser-auth first when it is the active source,
+                        # but do not force-overwrite a manual cookie that the
+                        # caller intentionally selected as primary.
+                        self._current_auth_ticket["cookie_path"] = synced_cookie
+                        self._current_auth_ticket["source_kind"] = "managed_browser"
+                        self._current_auth_ticket["source_id"] = (
+                            self._current_auth_ticket.get("source_id")
+                            or "managed_browser"
+                        )
+
+                    self._current_auth_ticket["candidate_paths"] = candidates
 
         downloads: List[Path] = []
         failed_downloads: int = 0
@@ -2810,6 +3004,16 @@ class CreatorDownloadWorker(QThread):
 
         if selected:
             self.progress.emit(f"Selected {len(selected)} videos. Preparing downloads...")
+            
+            # Immediately minimize browser so the screen is free during the heavy downloading phase
+            try:
+                from modules.shared.managed_chrome_session import get_managed_chrome_session
+                _mgr = get_managed_chrome_session()
+                if _mgr.is_running():
+                    _mgr.minimize_window()
+            except Exception as e:
+                logging.debug("Failed to minimize window early: %s", e)
+                
             # Stagger between link-grab phase and download phase to reduce rush.
             pre_download_wait = _pacer.scale_delay(random.uniform(1.5, 3.5))
             time.sleep(pre_download_wait)
@@ -2856,7 +3060,7 @@ class CreatorDownloadWorker(QThread):
 
         # IXBrowser is a fallback stage only. We try it after the legacy
         # link-grabbing + downloading queue has already been attempted.
-        if ENABLE_IXBROWSER_FALLBACK and len(downloads) < n_target:
+        if ENABLE_IXBROWSER_FALLBACK and len(downloads) < n_target and not self._check_pause():
             remaining_needed = max(1, n_target - len(downloads))
             self._terminal_log(
                 "IX",
@@ -2890,6 +3094,7 @@ class CreatorDownloadWorker(QThread):
                     platform_key == "youtube"
                     and ix_direct_retry_candidates
                     and len(downloads) < n_target
+                    and not self._check_pause()
                 ):
                     same_url_retry_count = min(len(ix_direct_retry_candidates), remaining_needed)
                     self._terminal_log(
@@ -2906,7 +3111,7 @@ class CreatorDownloadWorker(QThread):
                         retry_entries=True,
                     )
 
-                if len(downloads) < n_target:
+                if len(downloads) < n_target and not self._check_pause():
                     fetch_count = (
                         remaining_needed * 2 if use_popular_fallback else remaining_needed + 5
                     )
@@ -3022,7 +3227,7 @@ class CreatorDownloadWorker(QThread):
                 retry_used=False,
                 detail=creator_url[:240],
             )
-            if ix_selected_count or ix_backup_count:
+            if (ix_selected_count or ix_backup_count) and not self._check_pause():
                 self.progress.emit(
                     f"[IX] Queue ready: {ix_selected_count} selected + {ix_backup_count} backup link(s)."
                 )
@@ -3037,60 +3242,74 @@ class CreatorDownloadWorker(QThread):
         # ── Instaloader Fallback (Instagram only) ─────────────────────────────
         # yt-dlp's instagram:user extractor is officially broken.
         # instaloader is the purpose-built library for Instagram profile scraping.
-        if platform_key == "instagram" and len(downloads) < n_target:
+        if platform_key == "instagram" and len(downloads) < n_target and not self._check_pause():
             remaining_needed = max(1, n_target - len(downloads))
             self._terminal_log(
                 "Instaloader",
                 f"entering fallback because total delivered={len(downloads)}/{n_target}; remaining_needed={remaining_needed}",
             )
             try:
-                from .instaloader_grabber import grab_instagram_links_instaloader, is_session_available
-                if is_session_available():
-                    il_raw = grab_instagram_links_instaloader(
-                        profile_url=creator_url,
-                        max_videos=remaining_needed + 5,
-                        progress_cb=self.progress.emit,
+                from .instaloader_grabber import grab_instagram_links_instaloader
+
+                auth_ticket = dict(self._current_auth_ticket or {})
+                ticket_cookie = str(auth_ticket.get("cookie_path") or "").strip() or None
+                ticket_candidates = []
+                seen_candidates = set()
+                for raw_path in [ticket_cookie, *(auth_ticket.get("candidate_paths") or [])]:
+                    path = str(raw_path or "").strip()
+                    if not path:
+                        continue
+                    key = path.lower()
+                    if key in seen_candidates:
+                        continue
+                    seen_candidates.add(key)
+                    ticket_candidates.append(path)
+
+                il_raw = grab_instagram_links_instaloader(
+                    profile_url=creator_url,
+                    max_videos=remaining_needed + 5,
+                    progress_cb=self.progress.emit,
+                    cookie_file=ticket_cookie,
+                    cookie_candidates=ticket_candidates,
+                )
+                if il_raw:
+                    for e in il_raw:
+                        if not e.get("id"):
+                            e["id"] = _safe_id_from_url(e.get("url", ""))
+                        e.setdefault("platform", platform_key)
+                        e.setdefault("creator", creator_name or self.creator_folder.name)
+                    il_annotated = [
+                        normalise_entry(e)
+                        for e in il_raw
+                        if isinstance(e, dict) and e.get("url")
+                    ]
+                    il_selected, il_debug = select_videos(
+                        entries=il_annotated,
+                        n_videos=remaining_needed,
+                        skip_downloaded=effective_skip_downloaded,
+                        popular_enabled=use_popular_fallback,
+                        random_enabled=randomize_links,
+                        already_downloaded=already_downloaded,
+                        platform=platform_key,
+                        yt_content_type=yt_content_type,
                     )
-                    if il_raw:
-                        for e in il_raw:
-                            if not e.get("id"):
-                                e["id"] = _safe_id_from_url(e.get("url", ""))
-                            e.setdefault("platform", platform_key)
-                            e.setdefault("creator", creator_name or self.creator_folder.name)
-                        il_annotated = [
-                            normalise_entry(e)
-                            for e in il_raw
-                            if isinstance(e, dict) and e.get("url")
-                        ]
-                        il_selected, il_debug = select_videos(
-                            entries=il_annotated,
-                            n_videos=remaining_needed,
-                            skip_downloaded=effective_skip_downloaded,
-                            popular_enabled=use_popular_fallback,
-                            random_enabled=randomize_links,
-                            already_downloaded=already_downloaded,
-                            platform=platform_key,
-                            yt_content_type=yt_content_type,
-                        )
-                        il_selected = [
-                            e for e in il_selected
-                            if (_key(e) not in session_ids and _key(e) not in attempted_ids)
-                        ]
-                        for d in il_debug:
-                            self._terminal_log("SelectionDebugIL", json.dumps(d, ensure_ascii=False))
-                        self._terminal_log(
-                            "Instaloader",
-                            f"selected_count={len(il_selected)} extracted={len(il_annotated)}",
-                        )
-                        il_queue_start = len(download_queue)
-                        _queue_entries(il_selected, "Instaloader Selected", skip_downloaded=dup_ctrl)
-                        _queue_entries(il_annotated, "Instaloader Backup", supported_only=True, skip_downloaded=dup_ctrl)
-                        if len(download_queue) > il_queue_start:
-                            _download_entries(download_queue[il_queue_start:], "Instaloader", allow_ix_retry=False)
-                    else:
-                        self._terminal_log("Instaloader", "no video links extracted")
+                    il_selected = [
+                        e for e in il_selected
+                        if (_key(e) not in session_ids and _key(e) not in attempted_ids)
+                    ]
+                    for d in il_debug:
+                        self._terminal_log("SelectionDebugIL", json.dumps(d, ensure_ascii=False))
+                    self._terminal_log(
+                        "Instaloader",
+                        f"selected_count={len(il_selected)} extracted={len(il_annotated)}",
+                    )
+                    il_queue_start = len(download_queue)
+                    _queue_entries(il_selected, "Instaloader Selected", skip_downloaded=dup_ctrl)
+                    _queue_entries(il_annotated, "Instaloader Backup", supported_only=True, skip_downloaded=dup_ctrl)
+                    if len(download_queue) > il_queue_start and not self._check_pause():
+                        _download_entries(download_queue[il_queue_start:], "Instaloader", allow_ix_retry=False)
                 else:
-                    self._terminal_log("Instaloader", "no session file — skipping (run: python -m instaloader --login=username)")
+                    self._terminal_log("Instaloader", "no video links extracted")
             except Exception as _il_exc:
                 self._terminal_log("Instaloader", f"fallback error: {_il_exc}")
 
@@ -3105,6 +3324,7 @@ class CreatorDownloadWorker(QThread):
             and (self._current_auth_ticket or {}).get("can_use_public_fallback")
             and extract_links_intelligent is not None
             and get_cookies_dir is not None
+            and not self._check_pause()
         ):
             remaining_needed = max(1, n_target - len(downloads))
             self.progress.emit("[Public] Auth paths exhausted. Trying limited public fallback...")
@@ -3188,7 +3408,7 @@ class CreatorDownloadWorker(QThread):
                         supported_only=True,
                         skip_downloaded=dup_ctrl,
                     )
-                    if public_added:
+                    if public_added and not self._check_pause():
                         _download_entries(
                             download_queue[public_queue_start:],
                             "Public",
@@ -3197,8 +3417,12 @@ class CreatorDownloadWorker(QThread):
             except Exception as exc:
                 self._terminal_log("PublicFallback", f"failed: {exc}")
 
-        # History stays the last fallback, only after both legacy and IX paths.
-        if len(downloads) < n_target:
+        # History fallback — absolute last resort after legacy + IX + public.
+        # Only activates when downloads are still short after ALL other methods.
+        # skip_downloaded is intentionally bypassed here: we are in last-resort
+        # mode and the user needs something rather than nothing.  Previously
+        # downloaded URLs are still valid video links from this creator.
+        if len(downloads) < n_target and not self._check_pause():
             remaining_needed = max(1, n_target - len(downloads))
             self._terminal_log(
                 "History",
@@ -3232,27 +3456,25 @@ class CreatorDownloadWorker(QThread):
                         for h in platform_history
                     ]
                     random.shuffle(late_history_candidates)
-                    late_history_candidates = late_history_candidates[
-                        : min(3, len(late_history_candidates), remaining_needed)
-                    ]
+                    # Take as many as needed — no artificial cap.
+                    # If fewer history entries exist than needed, use all of them.
+                    late_history_candidates = late_history_candidates[:remaining_needed]
                     self.progress.emit(
-                        f"[History] Old + IX flow still short. Trying {len(late_history_candidates)} from download history."
+                        f"[History] All methods exhausted. Re-downloading {len(late_history_candidates)} from history."
                     )
-                    logging.info(
-                        "[HistoryFallback] Picking %d from %d history entries for %s",
-                        len(late_history_candidates),
-                        len(platform_history),
-                        platform_key,
+                    self._terminal_log(
+                        "History",
+                        f"picking {len(late_history_candidates)} from {len(platform_history)} history entries",
                     )
 
-            if late_history_candidates:
+            if late_history_candidates and not self._check_pause():
                 history_queue_start = len(download_queue)
                 history_added = _queue_entries(
                     late_history_candidates,
                     "History",
-                    skip_downloaded=dup_ctrl,
+                    skip_downloaded=False,  # last resort: bypass dup_ctrl
                 )
-                if history_added:
+                if history_added and not self._check_pause():
                     _download_entries(
                         download_queue[history_queue_start:],
                         "History",
@@ -3260,7 +3482,7 @@ class CreatorDownloadWorker(QThread):
                     )
 
         # â"€â"€ Post-processing (edit + watermark) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-        if dup_ctrl and len(downloads) < n_target:
+        if dup_ctrl and len(downloads) < n_target and not self._check_pause():
             duplicate_candidates: List[Dict] = []
             duplicate_seen: set = set()
 
@@ -3287,7 +3509,7 @@ class CreatorDownloadWorker(QThread):
             _append_duplicate_candidates(ix_annotated, "IX Duplicate")
             _append_duplicate_candidates(late_history_candidates, "History Duplicate")
 
-            if duplicate_candidates:
+            if duplicate_candidates and not self._check_pause():
                 random.shuffle(duplicate_candidates)
                 duplicate_queue_start = len(download_queue)
                 duplicate_added = _queue_entries(
@@ -3296,7 +3518,7 @@ class CreatorDownloadWorker(QThread):
                     supported_only=True,
                     skip_downloaded=False,
                 )
-                if duplicate_added:
+                if duplicate_added and not self._check_pause():
                     self.progress.emit(
                         f"[Duplicate] Unique links exhausted. Re-trying {duplicate_added} previously downloaded link(s)."
                     )
@@ -3306,7 +3528,7 @@ class CreatorDownloadWorker(QThread):
                         allow_ix_retry=False,
                     )
 
-        if downloads and not self._stop:
+        if downloads and not self._stop and not self._check_pause():
             self._terminal_log(
                 "Post",
                 f"download phase complete ({len(downloads)} videos). Starting post-processing...",
@@ -3316,7 +3538,7 @@ class CreatorDownloadWorker(QThread):
             from modules.video_editor.utils import check_ffmpeg, get_ffmpeg_path
             ffmpeg_ok = False
             try:
-                subprocess.run(
+                _run_subprocess_safe(
                     [self.ffmpeg, "-version"],
                     capture_output=True, timeout=5,
                 )
@@ -3491,8 +3713,12 @@ class CreatorDownloadWorker(QThread):
 
         # Ã¢â€â‚¬Ã¢â€â‚¬ Finalize Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         count = len(downloads)
-        status_code = "success" if count >= n_target else ("partial_download" if count > 0 else "failed")
-        activity_status = "success" if count >= n_target else ("partial" if count > 0 else "failed")
+        if self._stop:
+            status_code = "stopped"
+            activity_status = "stopped"
+        else:
+            status_code = "success" if count >= n_target else ("partial_download" if count > 0 else "failed")
+            activity_status = "success" if count >= n_target else ("partial" if count > 0 else "failed")
         if not result.get("failure_type") and last_error_message:
             try:
                 from modules.shared.failure_classifier import classify_failure
@@ -3513,10 +3739,10 @@ class CreatorDownloadWorker(QThread):
         self.config.save()
 
         if count == 0 and not result.get("error"):
-            result["error"] = last_error_message or "No videos were downloaded"
+            result["error"] = "Stopped by user" if self._stop else (last_error_message or "No videos were downloaded")
             self._terminal_log("Run", f"fail reason: {result['error']}")
         elif 0 < count < n_target and not result.get("error"):
-            result["error"] = last_error_message or f"Only {count}/{n_target} downloaded"
+            result["error"] = "Stopped by user" if self._stop else (last_error_message or f"Only {count}/{n_target} downloaded")
             self._terminal_log("Run", f"partial: {result['error']}")
 
         result["success"] = status_code == "success"

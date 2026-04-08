@@ -464,6 +464,33 @@ class SessionAuthority:
         """Check if a process with the given PID is still running."""
         if not pid or pid <= 0:
             return False
+        if os.name == "nt":
+            # On Windows, os.kill(pid, 0) can surface as an asynchronous
+            # KeyboardInterrupt in GUI apps.  Use a direct WinAPI query instead.
+            try:
+                import ctypes
+                from ctypes import wintypes
+
+                PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+                STILL_ACTIVE = 259
+
+                kernel32 = ctypes.windll.kernel32
+                handle = kernel32.OpenProcess(
+                    PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid)
+                )
+                if not handle:
+                    return False
+                try:
+                    exit_code = wintypes.DWORD()
+                    if not kernel32.GetExitCodeProcess(
+                        wintypes.HANDLE(handle), ctypes.byref(exit_code)
+                    ):
+                        return False
+                    return int(exit_code.value) == STILL_ACTIVE
+                finally:
+                    kernel32.CloseHandle(wintypes.HANDLE(handle))
+            except Exception:
+                return False
         try:
             os.kill(pid, 0)
             return True
@@ -827,8 +854,11 @@ class SessionAuthority:
         Returns None if no file with real auth markers exists.
         """
         candidates = [
+            self._cookies_dir / "manual" / f"{platform}.txt",
             self._cookies_dir / f"{platform}.txt",
             self._cookies_dir / "browser_cookies" / f"{platform}_chromium_profile.txt",
+            self._cookies_dir / "browser_cookies" / f"{platform}_ixbrowser_profile.txt",
+            self._cookies_dir / "chrome_cookies.txt",
         ]
 
         for cookie_file in candidates:
@@ -857,26 +887,36 @@ class SessionAuthority:
         Get the best available cookie file for a platform.
 
         Decision order:
-          1. Fresh export from persistent browser profile
-          2. Existing per-platform cookie file (from prior export or user import)
-          3. Generic / legacy cookie files
+          1. Manual user cookie file
+          2. Fresh export from persistent browser profile
+          3. Browser refresh recovery
+          4. Last-known-good authenticated cookie
+          5. Generic / legacy fallback files
 
         This should be called instead of AuthNetworkHub.pick_cookie_file()
-        whenever profile-first auth is desired.
+        whenever shared auth priority is desired.
         """
         platform = platform.lower().strip()
 
-        # Step 1: Fresh export from profile
-        fresh = self.ensure_fresh_cookies(platform)
-        if fresh:
-            logger.info(
-                "[SessionAuthority] Best cookie for %s: fresh profile export (%s)",
-                platform,
-                Path(fresh).name,
+        try:
+            chain = AuthFallbackChain()
+            ticket = chain.resolve_ticket(
+                platform=platform,
+                allow_public_fallback=False,
             )
-            return fresh
+        except Exception:
+            ticket = None
 
-        # Step 2: Fall back to file scan via AuthNetworkHub
+        if ticket and ticket.cookie_path:
+            logger.info(
+                "[SessionAuthority] Best cookie for %s: auth chain (%s -> %s)",
+                platform,
+                ticket.source_kind or ticket.source_id or "unknown",
+                Path(ticket.cookie_path).name,
+            )
+            return ticket.cookie_path
+
+        # Final compatibility fallback: loose file scan via AuthNetworkHub.
         from modules.shared.auth_network_hub import AuthNetworkHub
 
         hub = AuthNetworkHub()
@@ -1159,19 +1199,18 @@ class AuthFallbackChain:
     """Auth chain with strict validation, source memory, and IX support.
 
     Priority:
-      1. remembered source  — last successful source for creator+platform
+      1. gui_user_cookie    — manual / user-provided platform cookies
       2. managed_profile    — fresh export from persistent browser profile
-      3. gui_user_cookie    — user-provided cookie file in cookies/ dir
-      4. browser_refresh    — live navigation refresh (if profile not busy)
-      5. ix_browser_cookie  — IXBrowser onesoul fresh export
-      6. last_known_good    — prior canonical cookie with valid auth markers
+      3. browser_refresh    — live navigation refresh (if profile not busy)
+      4. ix_browser_cookie  — IXBrowser onesoul fresh export
+      5. last_known_good    — prior authenticated cookie with valid auth markers
 
     Each source is strictly validated with platform-specific auth markers
     before being accepted.  The chain never overwrites authenticated
     canonical cookies with weaker/unauthenticated files.
 
-    Source memory persists the most recent successful source per
-    creator+platform so the preferred source is tried first next run.
+    Source memory is retained for diagnostics / future tuning, but it is not
+    allowed to override the fixed manual-first policy.
     """
 
     def __init__(self) -> None:
@@ -1210,7 +1249,7 @@ class AuthFallbackChain:
         platform: str,
         creator_url: str = "",
     ) -> Optional[str]:
-        """Return the preferred auth source for a creator+platform, or None."""
+        """Return the last recorded successful source for diagnostics."""
         creator_key = normalize_creator_key(
             creator,
             platform=platform,
@@ -1232,7 +1271,7 @@ class AuthFallbackChain:
         source: str,
         creator_url: str = "",
     ) -> None:
-        """Record that a source worked for a creator+platform."""
+        """Persist the last successful source for diagnostics and future analysis."""
         creator_key = normalize_creator_key(
             creator,
             platform=platform,
@@ -1242,7 +1281,7 @@ class AuthFallbackChain:
         self._memory[key] = {"source": source, "ts": time.time()}
         self._save_memory()
         logger.info(
-            "[AuthSourceMemory] recorded best_source=%s for %s",
+            "[AuthSourceMemory] recorded last_success_source=%s for %s",
             source, key,
         )
 
@@ -1264,7 +1303,13 @@ class AuthFallbackChain:
             header = cookie_path.read_text(encoding="utf-8", errors="ignore")[:256]
         except Exception:
             return False
-        return "Exported from persistent Chromium profile" in header
+        return any(
+            marker in header
+            for marker in (
+                "Exported from persistent Chromium profile",
+                "Exported from IXBrowser profile",
+            )
+        )
 
     @staticmethod
     def _source_kind(source_id: str) -> str:
@@ -1283,31 +1328,16 @@ class AuthFallbackChain:
         platform: str,
         creator_url: str = "",
     ) -> List[str]:
+        # Manual-first order is policy. Source memory is intentionally ignored
+        # here so previously successful browser sources never outrank a fresh
+        # user-provided cookie file on the next run.
         sources = [
-            AUTH_SRC_MANAGED,
             AUTH_SRC_GUI_COOKIE,
+            AUTH_SRC_MANAGED,
             AUTH_SRC_BROWSER_REFRESH,
             AUTH_SRC_IX_COOKIE,
             AUTH_SRC_LAST_KNOWN,
         ]
-        preferred = self.get_preferred_source(
-            creator,
-            platform,
-            creator_url=creator_url,
-        ) if creator or creator_url else None
-        if preferred and preferred in sources:
-            sources.remove(preferred)
-            sources.insert(0, preferred)
-            logger.info(
-                "[AuthSource] preferred=%s for %s|%s (from memory)",
-                preferred,
-                normalize_creator_key(
-                    creator,
-                    platform=platform,
-                    creator_url=creator_url,
-                ),
-                platform,
-            )
         return sources
 
     def resolve_ticket(
@@ -1337,6 +1367,7 @@ class AuthFallbackChain:
         )
         candidate_paths: List[str] = []
         prev_source = None
+        primary_source = ""
         for src in self._ordered_sources(
             creator,
             platform,
@@ -1360,15 +1391,34 @@ class AuthFallbackChain:
                     src, Path(cookie_path).name, platform, creator_key,
                 )
                 ticket.source_id = src
+                primary_source = src
                 ticket.source_kind = self._source_kind(src)
                 ticket.cookie_path = cookie_path
                 ticket.validated_at = time.time()
                 ticket.auth_strength = "authenticated"
-                ticket.candidate_paths = list(candidate_paths)
-                if progress_callback:
-                    progress_callback(f"Auth source ready: {ticket.source_kind}")
-                return ticket
+                break
             prev_source = src
+
+        if ticket.cookie_path:
+            for alt_src in (AUTH_SRC_GUI_COOKIE, AUTH_SRC_LAST_KNOWN):
+                if alt_src == primary_source:
+                    continue
+                alt_cookie_path = self._try_source(
+                    platform,
+                    alt_src,
+                    ix_cookie_provider=ix_cookie_provider,
+                )
+                if not alt_cookie_path or alt_cookie_path in candidate_paths:
+                    continue
+                candidate_paths.append(alt_cookie_path)
+                logger.info(
+                    "[AuthSource] alternative=%s cookie=%s platform=%s creator=%s",
+                    alt_src, Path(alt_cookie_path).name, platform, creator_key,
+                )
+            ticket.candidate_paths = list(candidate_paths)
+            if progress_callback:
+                progress_callback(f"Auth source ready: {ticket.source_kind}")
+            return ticket
 
         logger.warning(
             "[AuthSource] ALL sources exhausted for %s - no authenticated cookie",
@@ -1410,18 +1460,28 @@ class AuthFallbackChain:
         return None
 
     def _try_managed(self, platform: str) -> Optional[str]:
-        """Source 1: Fresh export from managed browser profile."""
-        # Check cooldown — if managed profile is in cooldown, skip silently
+        """Source 1: Fresh export from managed browser profile.
+
+        Cooldown only blocks launching a *new* browser session — it must NOT
+        prevent reading already-exported cookies.  ensure_fresh_cookies()
+        handles profile-busy state internally by falling back to the
+        last-known-good file, so we always let it run.
+        """
         try:
             from modules.link_grabber.browser_auth import ChromiumAuthManager
             auth = ChromiumAuthManager()
             cooldown_reason = auth.is_in_cooldown(platform)
             if cooldown_reason:
                 logger.info(
-                    "[AuthSource] managed_profile SKIPPED for %s — cooldown: %s",
+                    "[AuthSource] managed_profile cooldown for %s (%s) — "
+                    "reading last-known-good cookie instead of fresh export",
                     platform, cooldown_reason,
                 )
-                return None
+                # Use the cached last-known-good cookie directly — no browser launch
+                cookie_path = self._sa._last_known_good_cookie(platform)
+                if cookie_path and self._validate(cookie_path, platform):
+                    return cookie_path
+                # Last-known-good also failed; fall through to fresh export attempt
         except Exception:
             pass
 
@@ -1437,7 +1497,11 @@ class AuthFallbackChain:
         (e.g., instagram.txt, facebook.txt) and validates auth markers.
         Does NOT scan local browser profiles or browser_cookies staging files.
         """
-        candidates = [self._cookies_dir / f"{platform}.txt"]
+        candidates = [
+            self._cookies_dir / "manual" / f"{platform}.txt",
+            self._cookies_dir / f"{platform}.txt",
+            self._cookies_dir / "chrome_cookies.txt",
+        ]
         for c in candidates:
             if c.exists() and c.stat().st_size > 10:
                 if self._is_exported_cookie_file(c):

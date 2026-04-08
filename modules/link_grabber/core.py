@@ -1,4 +1,4 @@
-﻿"""
+"""
 modules/link_grabber/core.py
 INTELLIGENT LINK GRABBER - Smart & Self-Learning
 
@@ -2960,8 +2960,8 @@ def _method_playwright(url: str, platform_key: str, cookie_file: str = None, pro
                     full_url = href if href.startswith('http') else f"https://www.facebook.com{href}"
                     entries.append({'url': full_url, 'title': 'Facebook Video', 'date': '00000000'})
 
-            context.close()
-            browser.close()
+            pass # context.close() removed
+            pass # browser.close() removed
 
             if entries:
                 logging.debug(f"Ã¢Å“â€œ Playwright extracted {len(entries)} links")
@@ -3263,10 +3263,13 @@ def _method_selenium(
             progress_callback(f"Ã¢ÂÅ’ Selenium error: {str(e)[:100]}")
     finally:
         if driver:
-            try:
-                driver.quit()
-            except Exception:
-                pass
+                try:
+                    if len(driver.window_handles) > 1:
+                        driver.close()
+                    else:
+                        driver.get("about:blank")
+                except Exception:
+                    pass
 
     return []
 
@@ -3515,7 +3518,10 @@ def _method_selenium_profile(
             finally:
                 try:
                     if driver:
-                        driver.quit()
+                        if len(driver.window_handles) > 1:
+                            driver.close()
+                        else:
+                            driver.get("about:blank")
                 except Exception:
                     pass
 
@@ -3803,7 +3809,12 @@ def _method_selenium_cdp_attach(
     no headless, no cookies needed.  Uses Chrome exactly as the user sees it,
     fully logged in to all platforms.
 
-    NOTE: We deliberately do NOT call driver.quit() to avoid closing the user's
+    NOTE: We deliberately do NOT call try:
+            if len(driver.window_handles) > 1:
+                driver.close()
+            else:
+                driver.get("about:blank")
+        except Exception: pass to avoid closing the user's
     Chrome window.  We only stop the ChromeDriver service process.
     """
     import socket as _sock
@@ -3963,7 +3974,13 @@ def _method_interactive_browser_session(
     finally:
         try:
             if driver:
-                driver.quit()
+                try:
+                    if len(driver.window_handles) > 1:
+                        driver.close()
+                    else:
+                        driver.get("about:blank")
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -4023,6 +4040,72 @@ def extract_links_intelligent(
         _auth_source_id: typing.Optional[str] = None  # tracks which source provided cookies
         _auth_ticket = dict(provided_auth_ticket or {})
         _allow_public_methods = True
+        _cookie_debug_seen: typing.Set[str] = set()
+
+        def _cookie_debug_key(raw_cookie: typing.Optional[str]) -> str:
+            value = str(raw_cookie or "").strip()
+            if not value:
+                return "<none>"
+            try:
+                return str(Path(value).resolve()).lower()
+            except Exception:
+                return value.lower()
+
+        def _cookie_debug_path(raw_cookie: typing.Optional[str]) -> str:
+            value = str(raw_cookie or "").strip()
+            if not value:
+                return "<none>"
+            try:
+                return str(Path(value).resolve())
+            except Exception:
+                return value
+
+        def _emit_linkgrab_cookie_source(
+            source_kind: str = "",
+            raw_cookie: typing.Optional[str] = None,
+        ) -> None:
+            if not progress_callback:
+                return
+            source_label = str(source_kind or "unknown").strip() or "unknown"
+            key = f"source|{source_label}|{_cookie_debug_key(raw_cookie)}"
+            if key in _cookie_debug_seen:
+                return
+            _cookie_debug_seen.add(key)
+            progress_callback(
+                f"LinkGrab cookie source = {source_label} | {_cookie_debug_path(raw_cookie)}"
+            )
+
+        def _emit_linkgrab_cookie_try(
+            source_kind: str = "",
+            raw_cookie: typing.Optional[str] = None,
+        ) -> None:
+            if not progress_callback:
+                return
+            source_label = str(source_kind or "unknown").strip() or "unknown"
+            key = f"fallback|{source_label}|{_cookie_debug_key(raw_cookie)}"
+            if key in _cookie_debug_seen:
+                return
+            _cookie_debug_seen.add(key)
+            progress_callback(
+                f"LinkGrab fallback cookie tried = {source_label} | {_cookie_debug_path(raw_cookie)}"
+            )
+
+        def _assign_cookie_file(
+            new_cookie: typing.Optional[str],
+            source_kind: str = "",
+            *,
+            fallback: bool = False,
+        ) -> None:
+            nonlocal cookie_file
+            value = str(new_cookie or "").strip()
+            if not value:
+                return
+            previous = str(cookie_file or "").strip()
+            cookie_file = value
+            if fallback and value != previous:
+                _emit_linkgrab_cookie_try(source_kind, value)
+            else:
+                _emit_linkgrab_cookie_source(source_kind, value)
 
         # ── Managed-profile auth fallback chain ───────────────────────
         # When running in CreatorProfile mode (managed_profile_only),
@@ -4046,7 +4129,10 @@ def extract_links_intelligent(
                     creator_url=url,
                 )
                 meta["auth_ticket"] = dict(_auth_ticket)
-                cookie_file = _auth_ticket.get("cookie_path")
+                _assign_cookie_file(
+                    _auth_ticket.get("cookie_path"),
+                    _auth_ticket.get("source_kind") or _auth_ticket.get("source_id") or "unknown",
+                )
                 _auth_source_id = _auth_ticket.get("source_id") or None
                 if cookie_file and progress_callback:
                     progress_callback(f"Cookies ready ({Path(cookie_file).name})")
@@ -4083,7 +4169,7 @@ def extract_links_intelligent(
             extracted = _extract_browser_cookies(platform_key, cookie_browser)
             if extracted:
                 temp_cookie_files.append(extracted)
-                cookie_file = extracted
+                _assign_cookie_file(extracted, f"browser_{cookie_browser.lower()}")
             else:
                 browser_cookie_extract_failed = True
                 if progress_callback:
@@ -4093,7 +4179,11 @@ def extract_links_intelligent(
                 extracted = _extract_browser_cookies_db_copy(platform_key, preferred_browser=cookie_browser, cookies_dir=cookies_dir, progress_callback=progress_callback)
                 if extracted:
                     temp_cookie_files.append(extracted)
-                    cookie_file = extracted
+                    _assign_cookie_file(
+                        extracted,
+                        f"{cookie_browser.lower()}_db_copy",
+                        fallback=True,
+                    )
                     if progress_callback:
                         progress_callback("Cookie source: Chrome DB copy (bypassed lock)")
                 else:
@@ -4104,7 +4194,8 @@ def extract_links_intelligent(
                 cookie_browser = None
 
         if not cookie_file and not explicit_browser_mode and not managed_profile_only:
-            cookie_file = _find_cookie_file(cookies_dir, platform_key)
+            found_cookie = _find_cookie_file(cookies_dir, platform_key)
+            _assign_cookie_file(found_cookie, "saved_file")
             if cookie_file and progress_callback:
                 progress_callback(f"Cookie source: Saved file ({Path(cookie_file).name})")
 
@@ -4119,13 +4210,13 @@ def extract_links_intelligent(
             )
             if extracted:
                 temp_cookie_files.append(extracted)
-                cookie_file = extracted
+                _assign_cookie_file(extracted, "browser_db_copy_auto", fallback=True)
 
         if not cookie_file and not explicit_browser_mode and not managed_profile_only:
             extracted = _extract_browser_cookies(platform_key)
             if extracted:
                 temp_cookie_files.append(extracted)
-                cookie_file = extracted
+                _assign_cookie_file(extracted, "browser_auto_extract", fallback=True)
 
         if cookie_file and progress_callback:
             cookie_name = Path(cookie_file).name
@@ -4273,6 +4364,56 @@ def extract_links_intelligent(
                 progress_callback("   Enhancements: Enabled (Dual yt-dlp + UA Rotation)")
             progress_callback("-" * 32)
 
+        # ── Managed CDP attach-first path ──────────────────────────────
+        # When feature flag is ON, try extracting via the managed Chrome CDP
+        # session BEFORE the normal method chain.  This uses the real
+        # logged-in Chrome session and requires no cookies.
+        if not entries:
+            try:
+                from modules.shared.managed_chrome_session import (
+                    MANAGED_CDP_ATTACH_FIRST,
+                    extract_links_via_managed_cdp,
+                )
+                if MANAGED_CDP_ATTACH_FIRST:
+                    if platform_key == "tiktok":
+                        logging.info(
+                            "[TikTokPath] CDP attach-first: attempting attach-only "
+                            "(no browser launch) for %s", url[:80],
+                        )
+                    cdp_entries = extract_links_via_managed_cdp(
+                        url=url,
+                        platform_key=platform_key,
+                        max_videos=max_videos,
+                        progress_callback=progress_callback,
+                        expected_count=expected_count or 0,
+                    )
+                    if not cdp_entries and platform_key == "tiktok":
+                        logging.info(
+                            "[TikTokPath][ManagedCDP-Fallback] CDP returned 0 links "
+                            "— falling back to normal extraction chain"
+                        )
+                    for entry in (cdp_entries or []):
+                        if max_videos > 0 and len(entries) >= max_videos:
+                            break
+                        url_value = entry.get('url')
+                        if not url_value:
+                            continue
+                        normalized = _normalize_url(url_value)
+                        if normalized in seen_normalized:
+                            continue
+                        seen_normalized.add(normalized)
+                        entries.append(entry)
+                    if entries:
+                        pre_successful_method = "Managed Chrome CDP"
+                        successful_method_id = "managed_cdp_attach"
+                        if progress_callback:
+                            progress_callback(f"Found {len(entries)} links (managed session)")
+            except ImportError:
+                pass
+            except Exception as _cdp_err:
+                logging.debug("[ManagedCDP] attach-first failed: %s", _cdp_err)
+
+
         if (
             not entries
             and auth_manager is not None
@@ -4373,61 +4514,16 @@ def extract_links_intelligent(
         ):
             extracted_cookie = auth_manager.extract_cookies_for_platform(platform_key)
             if extracted_cookie:
-                cookie_file = extracted_cookie
+                _assign_cookie_file(
+                    extracted_cookie,
+                    "browser_profile_extract",
+                    fallback=True,
+                )
                 cookie_browser = None
                 if progress_callback:
                     progress_callback(
                         "Layer 2: Using cookies from browser profile for library methods..."
                     )
-
-        # ── Managed CDP attach-first path ──────────────────────────────
-        # When feature flag is ON, try extracting via the managed Chrome CDP
-        # session BEFORE the normal method chain.  This uses the real
-        # logged-in Chrome session and requires no cookies.
-        if not entries:
-            try:
-                from modules.shared.managed_chrome_session import (
-                    MANAGED_CDP_ATTACH_FIRST,
-                    extract_links_via_managed_cdp,
-                )
-                if MANAGED_CDP_ATTACH_FIRST:
-                    if platform_key == "tiktok":
-                        logging.info(
-                            "[TikTokPath] CDP attach-first: attempting attach-only "
-                            "(no browser launch) for %s", url[:80],
-                        )
-                    cdp_entries = extract_links_via_managed_cdp(
-                        url=url,
-                        platform_key=platform_key,
-                        max_videos=max_videos,
-                        progress_callback=progress_callback,
-                        expected_count=expected_count or 0,
-                    )
-                    if not cdp_entries and platform_key == "tiktok":
-                        logging.info(
-                            "[TikTokPath][ManagedCDP-Fallback] CDP returned 0 links "
-                            "— falling back to normal extraction chain"
-                        )
-                    for entry in (cdp_entries or []):
-                        if max_videos > 0 and len(entries) >= max_videos:
-                            break
-                        url_value = entry.get('url')
-                        if not url_value:
-                            continue
-                        normalized = _normalize_url(url_value)
-                        if normalized in seen_normalized:
-                            continue
-                        seen_normalized.add(normalized)
-                        entries.append(entry)
-                    if entries:
-                        pre_successful_method = "Managed Chrome CDP"
-                        successful_method_id = "managed_cdp_attach"
-                        if progress_callback:
-                            progress_callback(f"Found {len(entries)} links (managed session)")
-            except ImportError:
-                pass
-            except Exception as _cdp_err:
-                logging.debug("[ManagedCDP] attach-first failed: %s", _cdp_err)
 
         if managed_profile_only and not entries and not cookie_file and auth_manager is not None:
             try:
@@ -4461,7 +4557,11 @@ def extract_links_intelligent(
                             _refresh_err,
                         )
                     if refreshed_cookie:
-                        cookie_file = refreshed_cookie
+                        _assign_cookie_file(
+                            refreshed_cookie,
+                            "managed_browser_refresh",
+                            fallback=True,
+                        )
                         _auth_ticket = dict(_auth_ticket or {})
                         _auth_ticket["cookie_path"] = refreshed_cookie
                         _auth_ticket["source_id"] = _auth_ticket.get("source_id") or "managed_browser_refresh"
@@ -5144,7 +5244,11 @@ def extract_links_intelligent(
                     _recovery = RecoveryChain().attempt_recovery(platform_key, _failure_type)
 
                     if _recovery.cookie_path:
-                        cookie_file = _recovery.cookie_path
+                        _assign_cookie_file(
+                            _recovery.cookie_path,
+                            f"recovery_{_recovery.recovery_type or 'cookie_refresh'}",
+                            fallback=True,
+                        )
                         for _rname, _rfunc, _rmid in available_methods[:3]:
                             try:
                                 _r_entries = _rfunc()

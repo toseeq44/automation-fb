@@ -46,14 +46,20 @@ class AuthNetworkHub:
         candidates: List[Path] = []
 
         if platform and platform != "other":
-            # PRIORITY 1: Canonical Platform-Specific (Most reliable, synced from all sources)
+            manual_dir = self.cookies_dir / "manual"
+
+            # PRIORITY 1: Manual per-platform cookie files
+            candidates.append(manual_dir / f"{platform}.txt")
+
+            # PRIORITY 2: Canonical Platform-Specific (compatibility / legacy)
             candidates.append(self.cookies_dir / f"{platform}.txt")
             
-            # PRIORITY 2: Direct Chromium Sync (Browser Auth Sync standard)
+            # PRIORITY 3: Direct browser sync staging files
             candidates.append(self.cookies_dir / "browser_cookies" / f"{platform}_chromium_profile.txt")
+            candidates.append(self.cookies_dir / "browser_cookies" / f"{platform}_ixbrowser_profile.txt")
             candidates.append(self.cookies_dir / f"{platform}_chromium_profile.txt")
             
-            # PRIORITY 3: Legacy/Shared Master (May be stale)
+            # PRIORITY 4: Legacy/Shared Master (may contain user-uploaded cookies)
             candidates.append(self.cookies_dir / "chrome_cookies.txt")
             
         else:
@@ -65,9 +71,15 @@ class AuthNetworkHub:
 
         if source_folder:
             root = Path(source_folder)
+            manual_root = root / "manual"
+            for name in (f"{platform}.txt",):
+                candidates.append(manual_root / name)
             for name in ("chrome_cookies.txt", f"{platform}.txt", "cookies.txt"):
                 candidates.append(root / name)
             cookies_sub = root / "cookies"
+            cookies_manual = cookies_sub / "manual"
+            for name in (f"{platform}.txt",):
+                candidates.append(cookies_manual / name)
             for name in ("chrome_cookies.txt", f"{platform}.txt", "cookies.txt"):
                 candidates.append(cookies_sub / name)
 

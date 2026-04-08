@@ -99,6 +99,14 @@ class _BrowserLoginWorker(QThread):
 
 
 class LinkGrabberPage(QWidget):
+    _PLATFORM_COOKIE_DOMAINS = {
+        "youtube": ("youtube.com", "google.com"),
+        "instagram": ("instagram.com",),
+        "tiktok": ("tiktok.com",),
+        "facebook": ("facebook.com", "fb.com"),
+        "twitter": ("twitter.com", "x.com"),
+    }
+
     @staticmethod
     def _repair_log_text(msg: str) -> str:
         """Best-effort fix for mojibake text from legacy log strings."""
@@ -1523,6 +1531,54 @@ FIX: Check proxy username/password, verify format
             self.cookie_status.setStyleSheet("color: #E74C3C; font-size: 11px;")
         self._refresh_cookie_validity()
 
+    def _build_platform_cookie_text(self, cookies: str, platform: str) -> str:
+        """Extract a single platform's Netscape cookies from a multi-platform dump."""
+        domain_tokens = self._PLATFORM_COOKIE_DOMAINS.get(str(platform or "").strip().lower(), ())
+        if not domain_tokens:
+            return ""
+
+        filtered_lines = []
+        for raw_line in str(cookies or "").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) < 7:
+                continue
+            domain = str(parts[0] or "").strip().lower()
+            if any(token in domain for token in domain_tokens):
+                filtered_lines.append("\t".join(parts[:7]))
+
+        if not filtered_lines:
+            return ""
+
+        return (
+            "# Netscape HTTP Cookie File\n"
+            f"# Manual user cookie export ({platform})\n\n"
+            + "\n".join(filtered_lines)
+            + "\n"
+        )
+
+    def _save_manual_platform_cookie_files(self, cookies: str, platforms) -> tuple:
+        """Persist per-platform manual cookies without disturbing the shared master file."""
+        manual_dir = self.cookies_dir / "manual"
+        manual_dir.mkdir(parents=True, exist_ok=True)
+
+        saved_paths = []
+        warnings = []
+        for platform in sorted({str(p or "").strip().lower() for p in (platforms or []) if str(p or "").strip()}):
+            payload = self._build_platform_cookie_text(cookies, platform)
+            if not payload:
+                warnings.append(f"{platform}: no matching cookie lines found")
+                continue
+            target = manual_dir / f"{platform}.txt"
+            try:
+                target.write_text(payload, encoding="utf-8")
+                saved_paths.append(target)
+            except Exception as exc:
+                warnings.append(f"{platform}: {str(exc)[:120]}")
+        return saved_paths, warnings
+
     def save_cookies(self):
         """Save cookies as master chrome_cookies.txt file with comprehensive validation"""
         cookies = self.cookie_text.toPlainText().strip()
@@ -1609,6 +1665,14 @@ FIX: Check proxy username/password, verify format
                 f.write(cookies)
 
             self.log_area.append(f" Cookies saved to: cookies/chrome_cookies.txt")
+            manual_paths, manual_warnings = self._save_manual_platform_cookie_files(
+                cookies,
+                getattr(validation_result, "platforms_detected", []) or [],
+            )
+            for path in manual_paths:
+                self.log_area.append(f" Manual cookie saved: cookies/manual/{path.name}")
+            for warning in manual_warnings:
+                self.log_area.append(f" Manual cookie warning: {warning}")
             try:
                 self.auth_hub.write_auth_state(
                     {
@@ -1631,9 +1695,16 @@ FIX: Check proxy username/password, verify format
             success_msg = validation_result.get_summary()
             success_msg += "\n\n"
             success_msg += f" Saved to: cookies/chrome_cookies.txt\n"
+            if manual_paths:
+                success_msg += " Per-platform manual cookies saved to: cookies/manual/\n"
 
             if backup_created:
                 success_msg += f" Previous cookies backed up\n"
+
+            if manual_warnings:
+                success_msg += "\nWarnings while saving manual files:\n"
+                success_msg += "\n".join(f" - {warning}" for warning in manual_warnings[:5])
+                success_msg += "\n"
 
             success_msg += f"\n These cookies will be used automatically for ALL link extraction operations."
 

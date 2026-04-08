@@ -110,6 +110,27 @@ def _lbl(text: str, size: int = 12, alpha: float = 0.6) -> QLabel:
     return l
 
 
+class _NoWheelSpinBox(QSpinBox):
+    """Let the parent scroll area consume mouse-wheel scrolling."""
+
+    def wheelEvent(self, event):
+        event.ignore()
+
+
+class _NoWheelDoubleSpinBox(QDoubleSpinBox):
+    """Let the parent scroll area consume mouse-wheel scrolling."""
+
+    def wheelEvent(self, event):
+        event.ignore()
+
+
+class _NoWheelComboBox(QComboBox):
+    """Prevent accidental hover-wheel selection changes on creator cards."""
+
+    def wheelEvent(self, event):
+        event.ignore()
+
+
 # ── Platform icon assets ──────────────────────────────────────────────────────
 import sys as _sys
 
@@ -455,7 +476,7 @@ class CreatorCard(QFrame):
         controls.setContentsMargins(0, 0, 0, 0)
 
         controls.addWidget(_lbl("Max:"))
-        self.n_spin = QSpinBox()
+        self.n_spin = _NoWheelSpinBox()
         self.n_spin.setRange(1, 500)
         self.n_spin.setMinimumWidth(56)
         self.n_spin.setMaximumWidth(72)
@@ -466,7 +487,7 @@ class CreatorCard(QFrame):
 
         controls.addSpacing(6)
         controls.addWidget(_lbl("Upload:"))
-        self.upload_spin = QSpinBox()
+        self.upload_spin = _NoWheelSpinBox()
         self.upload_spin.setRange(0, 500)
         self.upload_spin.setMinimumWidth(56)
         self.upload_spin.setMaximumWidth(72)
@@ -478,7 +499,7 @@ class CreatorCard(QFrame):
 
         controls.addSpacing(8)
         controls.addWidget(_lbl("Editing:"))
-        self.mode_cb = QComboBox()
+        self.mode_cb = _NoWheelComboBox()
         self.mode_cb.addItems(["None", "Preset", "Split", "Split + Edit"])
         self.mode_cb.setMinimumWidth(108)
         self.mode_cb.setMaximumWidth(150)
@@ -494,7 +515,7 @@ class CreatorCard(QFrame):
         edit_row = QHBoxLayout()
         edit_row.setSpacing(6)
         edit_row.setContentsMargins(0, 0, 0, 0)
-        self.preset_cb = QComboBox()
+        self.preset_cb = _NoWheelComboBox()
         self.preset_cb.addItems(self.preset_names or ["- no presets -"])
         self.preset_cb.setMinimumWidth(110)
         self.preset_cb.setSizeAdjustPolicy(QComboBox.AdjustToContents)
@@ -503,7 +524,7 @@ class CreatorCard(QFrame):
         self.preset_cb.currentTextChanged.connect(self._auto_save)
         edit_row.addWidget(self.preset_cb, 1)
 
-        self.split_sp = QDoubleSpinBox()
+        self.split_sp = _NoWheelDoubleSpinBox()
         self.split_sp.setRange(1.0, 3600.0)
         self.split_sp.setSuffix(" s")
         self.split_sp.setFixedWidth(92)
@@ -583,7 +604,7 @@ class CreatorCard(QFrame):
         self.del_dl_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         bottom_toggles.addWidget(self.del_dl_btn, 1)
 
-        self.yt_type_cb = QComboBox()
+        self.yt_type_cb = _NoWheelComboBox()
         self.yt_type_cb.addItems(["All", "Shorts", "Long"])
         self.yt_type_cb.setToolTip("YouTube content type: All / Shorts only / Long videos only")
         self.yt_type_cb.setMinimumHeight(28)
@@ -949,6 +970,8 @@ class CreatorCard(QFrame):
         if status_code == "success" or result.get("success") and downloaded >= target:
             self._set_state("done", "Done")
             self._set_completion_progress(downloaded, target, "done")
+        elif status_code == "stopped":
+            self._set_state("idle", "Stopped")
         elif status_code == "partial_download" or (downloaded > 0 and target > 0):
             self._set_state("partial", "Partial")
             self._set_completion_progress(downloaded, target, "partial")

@@ -30,8 +30,20 @@ import socket
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
+import sys
+from urllib.parse import urlparse
+
+if sys.platform == "win32":
+    try:
+        import win32gui
+        import win32process
+        import win32con
+    except ImportError:
+        pass
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +96,7 @@ class ManagedChromeSessionManager:
 
         self._sa = get_session_authority()
         self._data_dir = get_data_dir()
-        self._profile_dir = self._sa.profile_dir
+        self._profile_dir = str(Path(self._sa.profile_dir).resolve())
         self._cdp_lock_path = self._data_dir / ".managed_cdp_lock"
         self._cdp_port = _DEFAULT_CDP_PORT
         self._chrome_process: Optional[subprocess.Popen] = None
@@ -296,7 +308,6 @@ class ManagedChromeSessionManager:
         """
         args = [
             chrome_exe,
-            "--headless=new",  # [NoPopupPolicy] NEVER open visible window
             f"--remote-debugging-port={self._cdp_port}",
             f"--user-data-dir={self._profile_dir}",
             "--no-first-run",
@@ -351,13 +362,117 @@ class ManagedChromeSessionManager:
             return False, "port_timeout"
 
         except Exception as exc:
-            logger.error("[ManagedCDP] Chrome launch failed: %s", exc)
+            logger.error("[ManagedCDP] Chrome launch failed: %s", exc, exc_info=True)
             self._kill_process()
             return False, f"launch_error: {exc}"
 
     # ------------------------------------------------------------------
     # Core: attach_selenium
     # ------------------------------------------------------------------
+    def _read_cdp_browser_version(self) -> Optional[str]:
+        """Read the managed Chrome browser version from the local CDP endpoint."""
+        if not self._is_port_open():
+            return None
+
+        try:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{self._cdp_port}/json/version",
+                timeout=2,
+            ) as response:
+                payload = json.loads(response.read().decode("utf-8", "ignore"))
+            browser = str(payload.get("Browser") or "").strip()
+            if "/" in browser:
+                return browser.split("/", 1)[1].strip() or None
+        except (OSError, ValueError, urllib.error.URLError) as exc:
+            logger.debug("[ManagedCDP] Failed to read CDP version: %s", exc)
+        return None
+
+    @staticmethod
+    def _version_key(value: str) -> Tuple[int, ...]:
+        parts = []
+        for piece in str(value).split("."):
+            try:
+                parts.append(int(piece))
+            except ValueError:
+                parts.append(0)
+        return tuple(parts)
+
+    def _find_cached_chromedriver(self, browser_major: str = "") -> Optional[str]:
+        """Find the best cached Selenium chromedriver, preferring browser major."""
+        cache_root = Path.home() / ".cache" / "selenium" / "chromedriver" / "win64"
+        if not cache_root.exists():
+            return None
+
+        preferred = []
+        others = []
+        for version_dir in cache_root.iterdir():
+            if not version_dir.is_dir():
+                continue
+            driver_path = version_dir / "chromedriver.exe"
+            if not driver_path.exists():
+                continue
+            version = version_dir.name
+            bucket = preferred if browser_major and version.startswith(f"{browser_major}.") else others
+            bucket.append((self._version_key(version), str(driver_path)))
+
+        for candidates in (preferred, others):
+            if candidates:
+                candidates.sort(reverse=True)
+                return candidates[0][1]
+        return None
+
+    def _resolve_selenium_driver_path(self, chrome_exe: str) -> Optional[str]:
+        """Resolve a ChromeDriver compatible with the managed system Chrome.
+
+        Selenium Manager is used first, but with the IXBrowser chromedriver PATH
+        entry filtered out so it cannot shadow the correct driver. If that still
+        fails, we fall back to the Selenium cache.
+        """
+        browser_version = self._read_cdp_browser_version() or ""
+        browser_major = browser_version.split(".", 1)[0] if browser_version else ""
+        original_path = os.environ.get("PATH", "")
+        cleaned_parts = [
+            part
+            for part in original_path.split(os.pathsep)
+            if "ixbrowser-resources\\chrome" not in part.lower()
+        ]
+        cleaned_path = os.pathsep.join(cleaned_parts)
+
+        try:
+            from selenium.webdriver.common.selenium_manager import SeleniumManager
+
+            os.environ["PATH"] = cleaned_path
+            result = SeleniumManager().binary_paths(
+                ["--browser", "chrome", "--browser-path", chrome_exe]
+            )
+            driver_path = str(result.get("driver_path") or "").strip()
+            if driver_path and Path(driver_path).exists():
+                logger.info(
+                    "[ManagedCDP] Resolved ChromeDriver %s for Chrome %s",
+                    driver_path,
+                    browser_version or "unknown",
+                )
+                return driver_path
+        except Exception as exc:
+            logger.warning("[ManagedCDP] ChromeDriver resolve failed: %s", exc)
+        finally:
+            os.environ["PATH"] = original_path
+
+        cached_driver = self._find_cached_chromedriver(browser_major)
+        if cached_driver:
+            logger.info(
+                "[ManagedCDP] Using cached ChromeDriver %s for Chrome %s",
+                cached_driver,
+                browser_version or "unknown",
+            )
+            return cached_driver
+
+        logger.warning(
+            "[ManagedCDP] No compatible ChromeDriver found for Chrome %s",
+            browser_version or "unknown",
+        )
+        return None
+
     def attach_selenium(self):
         """Attach Selenium WebDriver to the managed Chrome via CDP.
 
@@ -374,17 +489,36 @@ class ManagedChromeSessionManager:
         try:
             from selenium import webdriver
             from selenium.webdriver.chrome.options import Options
+            from selenium.webdriver.chrome.service import Service
 
             options = Options()
             options.add_experimental_option(
                 "debuggerAddress", f"localhost:{self._cdp_port}"
             )
-            driver = webdriver.Chrome(options=options)
+            chrome_exe = self._sa.chrome_executable
+            if not chrome_exe:
+                from modules.shared.browser_utils import get_chromium_executable_path
+
+                chrome_exe = get_chromium_executable_path()
+            if not chrome_exe or not Path(chrome_exe).exists():
+                logger.warning("[ManagedCDP] Cannot attach Selenium: Chrome not found")
+                return None
+
+            driver_path = self._resolve_selenium_driver_path(chrome_exe)
+            if not driver_path:
+                return None
+
+            service = Service(executable_path=driver_path)
+            driver = webdriver.Chrome(service=service, options=options)
             driver.set_page_load_timeout(30)
-            logger.info("[ManagedCDP] Selenium attached to port %d", self._cdp_port)
+            logger.info(
+                "[ManagedCDP] Selenium attached to port %d with %s",
+                self._cdp_port,
+                driver_path,
+            )
             return driver
         except Exception as exc:
-            logger.warning("[ManagedCDP] Selenium attach failed: %s", exc)
+            logger.error("[ManagedCDP] Selenium attach failed: %s", exc, exc_info=True)
             return None
 
     # ------------------------------------------------------------------
@@ -427,7 +561,7 @@ class ManagedChromeSessionManager:
             )
             return browser, context
         except Exception as exc:
-            logger.warning("[ManagedCDP] Playwright CDP attach failed: %s", exc)
+            logger.error("[ManagedCDP] Playwright CDP attach failed: %s", exc, exc_info=True)
             return None, None
 
     # ------------------------------------------------------------------
@@ -462,6 +596,99 @@ class ManagedChromeSessionManager:
             if was_running:
                 logger.info("[ManagedCDP] Chrome closed gracefully")
             return was_running
+
+    def _get_hwnd_for_pid(self, target_pid: int) -> Optional[int]:
+        """Find the main window handle (HWND) for a given PID."""
+        if sys.platform != "win32" or "win32gui" not in sys.modules:
+            return None
+
+        import psutil
+        try:
+            parent = psutil.Process(target_pid)
+            children = parent.children(recursive=True)
+            valid_pids = {target_pid} | {c.pid for c in children}
+        except psutil.NoSuchProcess:
+            return None
+
+        found_hwnd = []
+        def callback(hwnd, windows):
+            if win32gui.IsWindowVisible(hwnd) and win32gui.GetWindowText(hwnd):
+                _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                if pid in valid_pids:
+                    # Chrome typically uses this class name for its main window
+                    if win32gui.GetClassName(hwnd) == "Chrome_WidgetWin_1":
+                        windows.append(hwnd)
+            return True
+
+        try:
+            win32gui.EnumWindows(callback, found_hwnd)
+        except Exception as e:
+            logger.debug(f"[ManagedCDP] Error finding HWND: {e}")
+
+        if found_hwnd:
+            return found_hwnd[0]
+
+        # Fallback: Find ANY window ending in " - Google Chrome"
+        fallback_hwnds = []
+        def fallback_cb(hwnd, windows):
+            if win32gui.IsWindowVisible(hwnd):
+                text = win32gui.GetWindowText(hwnd)
+                if text and text.endswith(" - Google Chrome"):
+                    windows.append(hwnd)
+            return True
+            
+        try:
+            win32gui.EnumWindows(fallback_cb, fallback_hwnds)
+        except Exception:
+            pass
+            
+        if fallback_hwnds:
+            return fallback_hwnds[0]
+            
+        return None
+
+    def minimize_window(self) -> None:
+        """Minimize the active Chrome window if running on Windows."""
+        if sys.platform != "win32" or "win32gui" not in sys.modules:
+            return
+
+        lock = self._read_lock()
+        pid = lock.get("pid", 0) if lock else 0
+        if not pid and self._chrome_process:
+            pid = self._chrome_process.pid
+
+        if not pid:
+            return
+
+        hwnd = self._get_hwnd_for_pid(pid)
+        if hwnd:
+            try:
+                win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
+                logger.info(f"[ManagedCDP] Minimized window for pid={pid}")
+            except Exception as e:
+                logger.debug(f"[ManagedCDP] Failed to minimize window: {e}")
+
+    def maximize_window(self) -> None:
+        """Restore and maximize the active Chrome window if running on Windows."""
+        if sys.platform != "win32" or "win32gui" not in sys.modules:
+            return
+
+        lock = self._read_lock()
+        pid = lock.get("pid", 0) if lock else 0
+        if not pid and self._chrome_process:
+            pid = self._chrome_process.pid
+
+        if not pid:
+            return
+
+        hwnd = self._get_hwnd_for_pid(pid)
+        if hwnd:
+            try:
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                win32gui.SetForegroundWindow(hwnd)
+                logger.info(f"[ManagedCDP] Restored window for pid={pid}")
+            except Exception as e:
+                logger.debug(f"[ManagedCDP] Failed to restore window: {e}")
 
     def release_lock(self) -> None:
         """Release the process lock without killing Chrome.
@@ -514,6 +741,103 @@ def extract_links_via_managed_cdp(
     if not MANAGED_CDP_ATTACH_FIRST:
         return []
 
+    def _normalize_browser_url(raw_url: str) -> str:
+        parsed = urlparse((raw_url or "").strip())
+        host = (parsed.netloc or "").lower().replace("www.", "").replace("m.", "")
+        path = (parsed.path or "").rstrip("/").lower()
+        if host and path:
+            return f"{host}{path}"
+        return ((raw_url or "").split("?", 1)[0].split("#", 1)[0]).rstrip("/").lower()
+
+    def _same_target_url(target_url: str, current_url: str) -> bool:
+        target_norm = _normalize_browser_url(target_url)
+        current_norm = _normalize_browser_url(current_url)
+        return bool(target_norm and current_norm and target_norm == current_norm)
+
+    def _detect_blocked_state(target_url: str, current_url: str) -> Tuple[bool, str]:
+        current_norm = _normalize_browser_url(current_url)
+        target_norm = _normalize_browser_url(target_url)
+        lower_url = (current_url or "").lower()
+
+        if current_norm and target_norm and current_norm != target_norm:
+            return True, f"url_mismatch:{current_url}"
+
+        redirect_terms = (
+            "accounts/login",
+            "/login",
+            "/challenge",
+            "/checkpoint",
+            "/consent",
+            "/suspended",
+        )
+        if any(term in lower_url for term in redirect_terms):
+            return True, f"redirect:{current_url}"
+
+        block_terms = [
+            "log in",
+            "sign up",
+            "open app",
+            "use app",
+            "challenge_required",
+            "checkpoint required",
+            "confirm it's you",
+            "unusual activity",
+            "try again later",
+        ]
+        platform_specific_terms = {
+            "instagram": [
+                "see instagram photos and videos",
+                "continue as",
+                "instagram login",
+            ],
+            "tiktok": [
+                "login to tiktok",
+                "open tiktok",
+            ],
+            "facebook": [
+                "log into facebook",
+                "login to facebook",
+            ],
+        }
+        terms = block_terms + platform_specific_terms.get((platform_key or "").lower(), [])
+
+        try:
+            title_text = (driver.title or "").strip().lower()
+        except Exception:
+            title_text = ""
+        if any(term in title_text for term in terms):
+            return True, f"title_block:{title_text[:120]}"
+
+        try:
+            page_text = (driver.page_source or "").lower()
+        except Exception:
+            page_text = ""
+        page_block_terms = [
+            "challenge_required",
+            "checkpoint required",
+            "confirm it's you",
+            "unusual activity",
+            "try again later",
+            "accounts/login",
+            "login_and_signup_page",
+            "see instagram photos and videos",
+        ]
+        if page_text and any(term in page_text for term in page_block_terms):
+            return True, "page_block"
+
+        try:
+            from selenium.webdriver.common.by import By
+
+            dialogs = driver.find_elements(By.CSS_SELECTOR, "[role='dialog']")
+            for dialog in dialogs[:3]:
+                dialog_text = (dialog.text or "").strip().lower()
+                if dialog_text and any(term in dialog_text for term in terms):
+                    return True, f"dialog_block:{dialog_text[:120]}"
+        except Exception:
+            pass
+
+        return False, ""
+
     mgr = get_managed_chrome_session()
     if not mgr.is_running():
         # [NoPopupPolicy] NEVER auto-launch Chrome from background automation.
@@ -533,8 +857,64 @@ def extract_links_via_managed_cdp(
         if progress_callback:
             progress_callback("Scanning (managed session)...")
 
-        driver.get(url)
-        time.sleep(4)
+        current_url = driver.current_url or ""
+        target_base_url = url.split('?')[0].rstrip('/')
+        current_base_url = current_url.split('?')[0].rstrip('/')
+
+        # Smart URL check to prevent duplicate pasting/reloading
+        if current_base_url != target_base_url:
+            if progress_callback:
+                progress_callback(f"Writing URL to navigate: {url}")
+            
+            # --- Native typing block ---
+            import sys
+            typed = False
+            if sys.platform == "win32":
+                try:
+                    import win32gui
+                    import win32con
+                    import pyautogui
+                    mgr.maximize_window()
+                    time.sleep(0.5)
+                    pyautogui.hotkey('ctrl', 'l')
+                    time.sleep(0.3)
+                    import random
+                    for char in url:
+                        pyautogui.typewrite(char)
+                        # Randomize typing speed per character natively
+                        time.sleep(random.uniform(0.04, 0.13))
+                    time.sleep(0.2)
+                    pyautogui.press('enter')
+                    typed = True
+                except ImportError:
+                    pass
+            
+            if not typed:
+                driver.get(url)
+            # ---------------------------
+            
+            time.sleep(3)
+
+            # Verification: If PyAutoGUI typed into the void instead of Chrome, force driver.get!
+            post_nav_url = driver.current_url or ""
+            if _normalize_browser_url(post_nav_url) != _normalize_browser_url(url):
+                if progress_callback:
+                    progress_callback("PyAutoGUI missed address bar. Forcing native driver.get()...")
+                logger.info("[ManagedCDP] PyAutoGUI failed to navigate. Forcing driver.get(url)")
+                driver.get(url)
+                time.sleep(4)
+                post_nav_url = driver.current_url or ""
+
+            blocked, reason = _detect_blocked_state(url, post_nav_url)
+            if blocked:
+                msg = f"Managed session blocked after URL write ({reason})"
+                logger.info("[ManagedCDP] %s", msg)
+                if progress_callback:
+                    progress_callback(msg)
+                return []
+        else:
+            if progress_callback:
+                progress_callback("Continuing from active profile view (target already open)")
 
         # Reuse existing link extraction logic
         from modules.link_grabber.core import _extract_links_from_selenium_driver
@@ -549,10 +929,74 @@ def extract_links_via_managed_cdp(
 
         if entries and progress_callback:
             progress_callback(f"Found {len(entries)} links (managed session)")
+            return entries
 
-        return entries
+        current_url = driver.current_url or ""
+        blocked, reason = _detect_blocked_state(url, current_url)
+        if blocked:
+            msg = f"Managed session blocked after extraction ({reason})"
+            logger.info("[ManagedCDP] %s", msg)
+            if progress_callback:
+                progress_callback(msg)
+            return []
+
+        if not _same_target_url(url, current_url):
+            msg = f"Managed session URL mismatch after extraction: {current_url or '<empty>'}"
+            logger.info("[ManagedCDP] %s", msg)
+            if progress_callback:
+                progress_callback(msg)
+            return []
+
+        if progress_callback:
+            progress_callback("Managed session returned 0 links; refreshing target page...")
+
+        try:
+            driver.refresh()
+        except Exception as refresh_exc:
+            logger.debug("[ManagedCDP] refresh failed: %s", refresh_exc)
+            if progress_callback:
+                progress_callback("Managed session refresh failed; skipping managed method")
+            return []
+
+        time.sleep(4)
+
+        refreshed_url = driver.current_url or ""
+        blocked, reason = _detect_blocked_state(url, refreshed_url)
+        if blocked:
+            msg = f"Managed session blocked after refresh ({reason})"
+            logger.info("[ManagedCDP] %s", msg)
+            if progress_callback:
+                progress_callback(msg)
+            return []
+
+        if not _same_target_url(url, refreshed_url):
+            msg = f"Managed session URL changed after refresh: {refreshed_url or '<empty>'}"
+            logger.info("[ManagedCDP] %s", msg)
+            if progress_callback:
+                progress_callback(msg)
+            return []
+
+        if progress_callback:
+            progress_callback("Managed session target verified after refresh; retrying extraction...")
+
+        retry_entries = _extract_links_from_selenium_driver(
+            driver,
+            platform_key=platform_key,
+            max_videos=max_videos,
+            expected_count=expected_count,
+            progress_callback=progress_callback,
+        )
+
+        if retry_entries and progress_callback:
+            progress_callback(f"Found {len(retry_entries)} links (managed session retry)")
+
+        if not retry_entries and progress_callback:
+            progress_callback("Managed session retry returned 0 links; falling back to next method")
+
+        return retry_entries
+
     except Exception as exc:
-        logger.debug("[ManagedCDP] extract failed: %s", exc)
+        logger.error("[ManagedCDP] extract failed: %s", exc, exc_info=True)
         return []
     finally:
         # Disconnect ChromeDriver WITHOUT closing Chrome

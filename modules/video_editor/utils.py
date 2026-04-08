@@ -59,6 +59,42 @@ def ensure_moviepy_available():
 
 # ==================== VIDEO INFO ====================
 
+def get_filesystem_path(path: str) -> str:
+    """
+    Normalize a path for filesystem calls.
+
+    On Windows, Python's path helpers can fail around the MAX_PATH boundary even
+    when the file is real. Long absolute paths are converted to the Windows
+    extended-length form so size/existence/delete operations can still work.
+    """
+    path_str = os.fspath(path)
+    if not path_str:
+        return path_str
+
+    normalized = os.path.abspath(path_str)
+    if os.name != "nt" or normalized.startswith("\\\\?\\"):
+        return normalized
+
+    if normalized.startswith("\\\\"):
+        if len(normalized) >= 248:
+            return f"\\\\?\\UNC\\{normalized.lstrip('\\')}"
+        return normalized
+
+    if len(normalized) >= 248:
+        return f"\\\\?\\{normalized}"
+
+    return normalized
+
+
+def filesystem_path_exists(path: str) -> bool:
+    """Existence check that also works for Windows long paths."""
+    return os.path.exists(get_filesystem_path(path))
+
+
+def remove_filesystem_path(path: str) -> None:
+    """Remove a file using a long-path-safe filesystem path."""
+    os.remove(get_filesystem_path(path))
+
 def get_ffprobe_path() -> str:
     """
     Resolve FFprobe path using the same strategy as FFmpeg.
@@ -95,7 +131,10 @@ def get_video_info(video_path: str) -> Dict[str, Any]:
     Returns:
         Dictionary with video metadata
     """
-    if not os.path.exists(video_path):
+    display_path = os.path.abspath(video_path)
+    io_path = get_filesystem_path(display_path)
+
+    if not os.path.exists(io_path):
         raise FileNotFoundError(f"Video not found: {video_path}")
 
     try:
@@ -106,7 +145,7 @@ def get_video_info(video_path: str) -> Dict[str, Any]:
             '-print_format', 'json',
             '-show_format',
             '-show_streams',
-            video_path
+            io_path
         ]
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -125,10 +164,10 @@ def get_video_info(video_path: str) -> Dict[str, Any]:
                     audio_stream = stream
 
             info = {
-                'filename': os.path.basename(video_path),
-                'filepath': video_path,
-                'filesize': os.path.getsize(video_path),
-                'filesize_mb': round(os.path.getsize(video_path) / (1024 * 1024), 2),
+                'filename': os.path.basename(display_path),
+                'filepath': display_path,
+                'filesize': os.path.getsize(io_path),
+                'filesize_mb': round(os.path.getsize(io_path) / (1024 * 1024), 2),
             }
 
             if video_stream:
@@ -174,12 +213,12 @@ def get_video_info(video_path: str) -> Dict[str, Any]:
             except ImportError:
                 from moviepy.video.io.VideoFileClip import VideoFileClip
 
-        video = VideoFileClip(video_path)
+        video = VideoFileClip(io_path)
         info = {
-            'filename': os.path.basename(video_path),
-            'filepath': video_path,
-            'filesize': os.path.getsize(video_path),
-            'filesize_mb': round(os.path.getsize(video_path) / (1024 * 1024), 2),
+            'filename': os.path.basename(display_path),
+            'filepath': display_path,
+            'filesize': os.path.getsize(io_path),
+            'filesize_mb': round(os.path.getsize(io_path) / (1024 * 1024), 2),
             'duration': video.duration,
             'width': video.w,
             'height': video.h,
@@ -193,9 +232,9 @@ def get_video_info(video_path: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Failed to get video info: {e}")
         return {
-            'filename': os.path.basename(video_path),
-            'filepath': video_path,
-            'filesize': os.path.getsize(video_path),
+            'filename': os.path.basename(display_path),
+            'filepath': display_path,
+            'filesize': os.path.getsize(io_path),
             'error': str(e)
         }
 

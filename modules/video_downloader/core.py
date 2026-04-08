@@ -555,6 +555,7 @@ class VideoDownloaderThread(QThread):
         self.runtime_readiness = dict(self.options.get("runtime_readiness") or {})
         self.platform_retry_policy = dict(self.options.get("platform_retry_policy") or {})
         self.rate_limit_profile = dict(self.options.get("rate_limit_profile") or {})
+        self._logged_cookie_debug = set()
         self.skip_recent_window = coerce_bool(
             self.options.get('skip_recent_window'),
             default=self.skip_recent_window,
@@ -1284,6 +1285,38 @@ class VideoDownloaderThread(QThread):
         logging.info("[VideoDownloader] No cookie file found for %s", platform)
         return None
 
+    def _cookie_debug_key(self, cookie_file: str = None) -> str:
+        raw = str(cookie_file or "").strip()
+        if not raw:
+            return "<none>"
+        try:
+            return str(Path(raw).resolve()).lower()
+        except Exception:
+            return raw.lower()
+
+    def _cookie_debug_path(self, cookie_file: str = None) -> str:
+        raw = str(cookie_file or "").strip()
+        if not raw:
+            return "<none>"
+        try:
+            return str(Path(raw).resolve())
+        except Exception:
+            return raw
+
+    def _emit_cookie_debug_overview(self, primary_cookie: str = None) -> None:
+        key = self._cookie_debug_key(primary_cookie)
+        if key in self._logged_cookie_debug:
+            return
+        self._logged_cookie_debug.add(key)
+        self.progress.emit(f"   [CookieDebug] Download primary cookie = {self._cookie_debug_path(primary_cookie)}")
+
+    def _emit_cookie_debug_try(self, cookie_file: str = None) -> None:
+        key = self._cookie_debug_key(cookie_file)
+        if key in self._logged_cookie_debug:
+            return
+        self._logged_cookie_debug.add(key)
+        self.progress.emit(f"   [CookieDebug] Download fallback cookie tried = {self._cookie_debug_path(cookie_file)}")
+
     def _maybe_warn_tiktok_impersonation_runtime(self) -> None:
         """Emit a clear once-per-thread warning when TikTok impersonation support is missing."""
         if self._tiktok_impersonation_warned:
@@ -1503,6 +1536,8 @@ class VideoDownloaderThread(QThread):
 
         for cookie_attempt_idx, current_cookie in enumerate(cookie_files, 1):
             if cookie_attempt_idx > 1:
+                if current_cookie:
+                    self._emit_cookie_debug_try(current_cookie)
                 self.progress.emit(f"   ðŸ”„ Cookie {cookie_attempt_idx}/{len(cookie_files)}")
                 if current_cookie:
                     self.progress.emit(f"   ðŸª Using: {Path(current_cookie).name}")
@@ -1533,6 +1568,8 @@ class VideoDownloaderThread(QThread):
                     cmd.extend(self._ffmpeg_cli_args())
                     cmd.extend(['--add-header', 'Referer:https://www.tiktok.com/'])
                     _apply_tiktok_impersonation_cli(url, cmd)
+                    # TikTok API hostname bypass: reduces "login required" from CDN edge nodes
+                    cmd.extend(['--extractor-args', 'tiktok:api_hostname=api22-normal-c-useast1a.tiktokv.com'])
 
                     # Add proxy if requested.
                     # Prefer proxy pool; fall back to legacy proxy_url/env proxy.
@@ -1708,6 +1745,8 @@ class VideoDownloaderThread(QThread):
 
             # Try each cookie file
             for cookie_idx, current_cookie_file in enumerate(cookie_files_to_try, 1):
+                if current_cookie_file and cookie_idx > 1:
+                    self._emit_cookie_debug_try(current_cookie_file)
                 if cookie_idx > 1:
                     self.progress.emit(f"   ðŸ”„ Trying alternate cookie file ({cookie_idx}/{total_cookies})")
 
@@ -1852,6 +1891,8 @@ class VideoDownloaderThread(QThread):
             self.progress.emit(f"   ðŸ”  Found {total_cookies} cookie candidate(s)")
 
             for idx, current_cookie_file in enumerate(unique_cookies, 1):
+                if current_cookie_file and idx > 1:
+                    self._emit_cookie_debug_try(current_cookie_file)
                 if self.cancelled: return False
 
                 user_agent = _get_random_user_agent()
@@ -2493,6 +2534,7 @@ class VideoDownloaderThread(QThread):
                     continue
                 self.progress.emit(f"\nðŸ“¥ [{processed}/{total}] {url[:80]}...")
                 cookie_file = self.get_cookie_file(url, folder)
+                self._emit_cookie_debug_overview(cookie_file)
                 # Platform-wise methods with enhanced fallbacks
                 platform = _detect_platform(url)
                 if platform == 'tiktok':
@@ -2697,6 +2739,7 @@ class VideoDownloaderThread(QThread):
                                         _cdp_fresh = _sa2.force_browser_cookie_refresh(platform)
                                         if _cdp_fresh and _cdp_fresh not in self._all_cookie_files:
                                             self._all_cookie_files.insert(0, _cdp_fresh)
+                                            self._emit_cookie_debug_try(_cdp_fresh)
                                             for method in methods[:2]:
                                                 try:
                                                     method_before = self._snapshot_folder(folder)
@@ -2722,6 +2765,7 @@ class VideoDownloaderThread(QThread):
                                     cookie_file = _rc.cookie_path
                                     if cookie_file not in self._all_cookie_files:
                                         self._all_cookie_files.insert(0, cookie_file)
+                                    self._emit_cookie_debug_try(cookie_file)
                                     for method in methods[:2]:
                                         try:
                                             method_before = self._snapshot_folder(folder)

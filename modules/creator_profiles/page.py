@@ -1722,6 +1722,12 @@ class AllSettingsDialog(QDialog):
         self.n_spin.setMinimumWidth(130)
         settings_form.addRow("N Videos:", self.n_spin)
 
+        self.upload_spin = QSpinBox()
+        self.upload_spin.setRange(0, 500)
+        self.upload_spin.setMinimumWidth(130)
+        self.upload_spin.setToolTip("Upload target per OneGo run (0 = skip)")
+        settings_form.addRow("Upload Target:", self.upload_spin)
+
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(_EDIT_MODE_LABELS)
         self.mode_combo.setMinimumWidth(170)
@@ -1763,6 +1769,12 @@ class AllSettingsDialog(QDialog):
 
         self.rand_check = QCheckBox("Randomize links")
         settings_form.addRow("Randomize:", self.rand_check)
+
+        self.keep_original_check = QCheckBox("Keep original video after editing")
+        settings_form.addRow("Original File:", self.keep_original_check)
+
+        self.delete_before_dl_check = QCheckBox("Delete existing media before downloading")
+        settings_form.addRow("Cleanup:", self.delete_before_dl_check)
 
         self.yt_type_combo = QComboBox()
         self.yt_type_combo.addItems(["All", "Shorts", "Long"])
@@ -1983,7 +1995,7 @@ class AllSettingsDialog(QDialog):
         content.addStretch(1)
 
         for ctrl in (
-            self.n_spin, self.mode_combo, self.preset_combo, self.split_spin,
+            self.n_spin, self.upload_spin, self.mode_combo, self.preset_combo, self.split_spin,
             self.wm_text_edit, self.wm_txt_pos_cb, self.wm_txt_font_edit, self.wm_txt_color_preset_cb,
             self.wm_txt_size_sp, self.wm_txt_weight_cb, self.wm_txt_style_cb,
             self.wm_txt_render_style_cb, self.wm_txt_shadow_offset_sp, self.wm_txt_spacing_sp, self.wm_logo_path_edit,
@@ -2063,6 +2075,7 @@ class AllSettingsDialog(QDialog):
         c = self.baseline_cfg
         self._loading_settings = True
         self.n_spin.setValue(c.n_videos)
+        self.upload_spin.setValue(c.uploading_target)
         self.mode_combo.setCurrentIndex(_edit_mode_index(c.editing_mode))
         if c.preset_name and c.preset_name in self.preset_names:
             self.preset_combo.setCurrentText(c.preset_name)
@@ -2071,6 +2084,8 @@ class AllSettingsDialog(QDialog):
         self.dup_check.setChecked(c.duplication_control)
         self.pop_check.setChecked(c.popular_fallback)
         self.rand_check.setChecked(c.randomize_links)
+        self.keep_original_check.setChecked(c.keep_original_after_edit)
+        self.delete_before_dl_check.setChecked(c.delete_before_download)
         _yt_map = {"all": 0, "shorts": 1, "long": 2}
         self.yt_type_combo.setCurrentIndex(_yt_map.get(c.yt_content_type, 0))
 
@@ -2095,6 +2110,7 @@ class AllSettingsDialog(QDialog):
         self.wm_logo_path_edit.setText(str(wl.get("path", "")))
         self.wm_logo_pos_cb.setCurrentText(str(wl.get("position", "TopLeft")))
         self.wm_logo_opacity_sl.setValue(int(wl.get("opacity", 80)))
+        self._wm_logo_size = int(wl.get("size", 15))
         wa = c.watermark_avatar
         self.wm_avatar_enable_check.setChecked(bool(wa.get("enabled", False)))
         self.wm_avatar_path_edit.setText(str(wa.get("path", "")))
@@ -2121,6 +2137,7 @@ class AllSettingsDialog(QDialog):
         mode = _edit_mode_value(self.mode_combo.currentIndex())
         return {
             "n_videos": self.n_spin.value(),
+            "uploading_target": self.upload_spin.value(),
             "editing_mode": mode,
             "preset_name": self.preset_combo.currentText(),
             "split_duration": self.split_spin.value(),
@@ -2129,6 +2146,8 @@ class AllSettingsDialog(QDialog):
             "popular_fallback": self.pop_check.isChecked(),
             "prefer_popular_first": False,
             "randomize_links": self.rand_check.isChecked(),
+            "keep_original_after_edit": self.keep_original_check.isChecked(),
+            "delete_before_download": self.delete_before_dl_check.isChecked(),
             "yt_content_type": ["all", "shorts", "long"][self.yt_type_combo.currentIndex()],
             "watermark_enabled": self.wm_enable_check.isChecked(),
             "watermark_text": {
@@ -2151,6 +2170,7 @@ class AllSettingsDialog(QDialog):
                 "path":     self.wm_logo_path_edit.text().strip(),
                 "position": self.wm_logo_pos_cb.currentText(),
                 "opacity":  self.wm_logo_opacity_sl.value(),
+                "size":     int(getattr(self, "_wm_logo_size", 15) or 15),
             },
             "watermark_avatar": {
                 "enabled":  self.wm_avatar_enable_check.isChecked(),
@@ -3127,7 +3147,12 @@ class CreatorProfilesPage(QWidget):
                 "randomize_links":     cfg.randomize_links,
                 "keep_original_after_edit": cfg.keep_original_after_edit,
                 "delete_before_download": cfg.delete_before_download,
+                "yt_content_type":     cfg.yt_content_type,
                 "uploading_target":      cfg.uploading_target,
+                "watermark_enabled":   cfg.watermark_enabled,
+                "watermark_text":      cfg.watermark_text,
+                "watermark_logo":      cfg.watermark_logo,
+                "watermark_avatar":    cfg.watermark_avatar,
             })
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
@@ -3156,7 +3181,9 @@ class CreatorProfilesPage(QWidget):
                             "preset_name", "split_duration", "split_edit_settings", "duplication_control",
                             "popular_fallback", "prefer_popular_first", "randomize_links",
                             "keep_original_after_edit", "delete_before_download",
-                            "uploading_target"):
+                            "yt_content_type", "uploading_target",
+                            "watermark_enabled", "watermark_text",
+                            "watermark_logo", "watermark_avatar"):
                     if key in entry:
                         cfg.data[key] = entry[key]
                 cfg.save()

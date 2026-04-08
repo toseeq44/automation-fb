@@ -36,6 +36,17 @@ config/auth_state.json
 memory/
 *.part
 api_config.json
+.onesoul/
+debug_creator_profile.log
+
+# Local debug helpers (do not commit)
+chk_engine.py
+chk_ix_session.py
+find_close.py
+find_ix.py
+find_launch.py
+find_rec.py
+refactor_singleton.py
 
 # License data (don't commit user licenses)
 modules/license/.license

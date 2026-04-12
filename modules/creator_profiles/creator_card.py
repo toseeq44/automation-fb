@@ -12,6 +12,7 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont, QPainter, QPainterPath, QPixmap
 from PyQt5.QtWidgets import (
     QComboBox,
+    QCheckBox,
     QDoubleSpinBox,
     QFrame,
     QGridLayout,
@@ -333,6 +334,7 @@ class CreatorCard(QFrame):
         self._search_highlight = False
         self._active_highlight = False
         self._current_speed = ""
+        self._selection_mode = False
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self.setObjectName("creatorCard")
@@ -368,6 +370,17 @@ class CreatorCard(QFrame):
         super().leaveEvent(e)
         self._style(False)
 
+    def set_selection_mode(self, enabled: bool):
+        """Toggle selection mode visibility and logic."""
+        self._selection_mode = bool(enabled)
+        if self._selection_mode:
+            self.selection_cb.show()
+            self.selection_cb.setChecked(False)
+            self.run_btn.setEnabled(False) # Block run while selecting
+        else:
+            self.selection_cb.hide()
+            self.run_btn.setEnabled(not self._queue_active and not self._manual_run_locked)
+
     def set_queue_active(self, active: bool):
         """Called by queue manager to mark active creator card."""
         self._queue_active = bool(active)
@@ -386,6 +399,22 @@ class CreatorCard(QFrame):
             return
         self.run_btn.setEnabled(not self._manual_run_locked and not self._queue_active)
 
+    def is_selected(self) -> bool:
+        """Returns True if the card is checked."""
+        return self.selection_cb.isChecked()
+
+    def set_selected(self, state: bool):
+        """Programmatically check/uncheck the card."""
+        self.selection_cb.setChecked(bool(state))
+
+    def mousePressEvent(self, e):
+        """Catch click anywhere on card when in selection mode."""
+        if hasattr(self, '_selection_mode') and self._selection_mode:
+            self.selection_cb.setChecked(not self.selection_cb.isChecked())
+            e.accept()
+        else:
+            super().mousePressEvent(e)
+
     def _build(self):
         v = QVBoxLayout(self)
         v.setContentsMargins(11, 7, 11, 7)
@@ -394,6 +423,25 @@ class CreatorCard(QFrame):
         # ── Header: platform icon + creator name (H1 style) + status dot ──
         hrow = QHBoxLayout()
         hrow.setSpacing(6)
+
+        # ── Selection Checkbox ──
+        self.selection_cb = QCheckBox()
+        self.selection_cb.hide()
+        self.selection_cb.setStyleSheet(f"""
+            QCheckBox::indicator {{
+                width: 22px;
+                height: 22px;
+                border-radius: 4px;
+                border: 2px solid {_CYAN};
+                background: #11141a;
+            }}
+            QCheckBox::indicator:checked {{
+                background-color: {_CYAN};
+                border: 2px solid {_CYAN};
+            }}
+        """)
+        self.selection_cb.setAttribute(Qt.WA_TransparentForMouseEvents)
+        hrow.addWidget(self.selection_cb)
 
         self.platform_lbl = QLabel("\u25c8")
         self.platform_lbl.setFixedSize(30, 30)

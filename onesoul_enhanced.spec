@@ -301,11 +301,12 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name='OneSoul',
+    # Re-enable the legacy onedir layout (no top-level _internal folder).
+    contents_directory='.',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=False,  # No console window
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,

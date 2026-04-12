@@ -2232,6 +2232,7 @@ class CreatorProfilesPage(QWidget):
         self._search_query = ""
         self.daily_guard_enabled = False
         self.daily_guard_interval_minutes = 30
+        self._is_selection_mode = False
         self._queue_manager = CreatorQueueManager(self)
         self._queue_manager.queue_progress.connect(self._on_queue_progress)
         self._queue_manager.creator_started.connect(self._on_queue_creator_started)
@@ -2331,10 +2332,19 @@ class CreatorProfilesPage(QWidget):
         row1 = QHBoxLayout()
         row1.setSpacing(7)
 
-        run_all = _abtn("▶  Run All", _GREEN, "#161b22")
-        run_all.clicked.connect(self._on_run_all)
-        row1.addWidget(run_all)
+        self.run_all_btn = _abtn("▶  Run All", _GREEN, "#161b22")
+        self.run_all_btn.clicked.connect(self._on_run_all)
+        row1.addWidget(self.run_all_btn)
 
+        self.select_btn = _abtn("☑  Select", _CYAN, "#161b22")
+        self.select_btn.clicked.connect(self._on_select_mode_clicked)
+        row1.addWidget(self.select_btn)
+
+        self.cancel_select_btn = _abtn("✖  Cancel", _RED, "#161b22")
+        self.cancel_select_btn.setVisible(False)
+        self.cancel_select_btn.clicked.connect(self._on_cancel_selection)
+        row1.addWidget(self.cancel_select_btn)
+        
         self.onego_btn = _abtn("▶  OneGo", _CYAN, "#161b22")
         self.onego_btn.setToolTip("Run download + upload workflow in one click")
         self.onego_btn.clicked.connect(self._on_onego)
@@ -2831,7 +2841,36 @@ class CreatorProfilesPage(QWidget):
         dlg = OneGoReportDialog(report, self)
         dlg.exec_()
 
-    def _on_run_all(self):
+    def _on_select_mode_clicked(self):
+        """Toggle or Run Selected."""
+        if not self._is_selection_mode:
+            self._is_selection_mode = True
+            self.select_btn.setText("▶  Run Selected")
+            self.cancel_select_btn.setVisible(True)
+            self.run_all_btn.setEnabled(False)
+            for card in self.cards.values():
+                card.set_selection_mode(True)
+        else:
+            selected = [fp for fp, card in self.cards.items() if card.is_selected()]
+            if not selected:
+                from PyQt5.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "No Selection", "Please select creators to run.")
+                return
+            self._on_run_all(folders=selected)
+            self._on_cancel_selection(reset_state=False)
+
+    def _on_cancel_selection(self, reset_state=True):
+        """Exit selection mode."""
+        self._is_selection_mode = False
+        self.select_btn.setText("☑  Select")
+        self.cancel_select_btn.setVisible(False)
+        self.run_all_btn.setEnabled(True)
+        for card in self.cards.values():
+            card.set_selection_mode(False)
+            if reset_state:
+                card.set_selected(False)
+
+    def _on_run_all(self, folders=None):
         """Start sequential queue using CreatorQueueManager."""
         if not self.cards:
             return
@@ -2840,12 +2879,21 @@ class CreatorProfilesPage(QWidget):
         # simultaneously, resulting in duplicate downloads and platform bans.
         if self._queue_manager.isRunning():
             return
-        folders = list(self.cards.keys())
+        # If no specific folders passed, use all currently matched/loaded cards
+        if folders is None:
+            folders = list(self.cards.keys())
+        
+        if not folders:
+            return
         self.summary_btn.setVisible(False)
         self._queue_stats = {"total": len(folders), "done": 0, "success": 0, "failed": 0}
-        # Show queued status on all cards
-        for i, card in enumerate(self.cards.values()):
-            card._set_state("idle", f"Queued ({i + 1}/{len(folders)})")
+        # visual mark cards in THIS queue as queued
+        folder_set = set(folders)
+        for i, (fp, card) in enumerate(self.cards.items()):
+            if fp in folder_set:
+                card._set_state("idle", f"Queued ({folders.index(fp) + 1}/{len(folders)})")
+            else:
+                card._set_state("idle", "")
         # Show Pause button, hide Resume
         self.pause_all_btn.setVisible(True)
         self.resume_all_btn.setVisible(False)

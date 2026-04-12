@@ -12,6 +12,7 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont, QPainter, QPainterPath, QPixmap
 from PyQt5.QtWidgets import (
     QComboBox,
+    QCheckBox,
     QDoubleSpinBox,
     QFrame,
     QGridLayout,
@@ -108,6 +109,27 @@ def _lbl(text: str, size: int = 12, alpha: float = 0.6) -> QLabel:
         " font-weight:bold; background:transparent; border:none;"
     )
     return l
+
+
+class _NoWheelSpinBox(QSpinBox):
+    """Let the parent scroll area consume mouse-wheel scrolling."""
+
+    def wheelEvent(self, event):
+        event.ignore()
+
+
+class _NoWheelDoubleSpinBox(QDoubleSpinBox):
+    """Let the parent scroll area consume mouse-wheel scrolling."""
+
+    def wheelEvent(self, event):
+        event.ignore()
+
+
+class _NoWheelComboBox(QComboBox):
+    """Prevent accidental hover-wheel selection changes on creator cards."""
+
+    def wheelEvent(self, event):
+        event.ignore()
 
 
 # ── Platform icon assets ──────────────────────────────────────────────────────
@@ -312,6 +334,7 @@ class CreatorCard(QFrame):
         self._search_highlight = False
         self._active_highlight = False
         self._current_speed = ""
+        self._selection_mode = False
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self.setObjectName("creatorCard")
@@ -347,6 +370,17 @@ class CreatorCard(QFrame):
         super().leaveEvent(e)
         self._style(False)
 
+    def set_selection_mode(self, enabled: bool):
+        """Toggle selection mode visibility and logic."""
+        self._selection_mode = bool(enabled)
+        if self._selection_mode:
+            self.selection_cb.show()
+            self.selection_cb.setChecked(False)
+            self.run_btn.setEnabled(False) # Block run while selecting
+        else:
+            self.selection_cb.hide()
+            self.run_btn.setEnabled(not self._queue_active and not self._manual_run_locked)
+
     def set_queue_active(self, active: bool):
         """Called by queue manager to mark active creator card."""
         self._queue_active = bool(active)
@@ -365,6 +399,22 @@ class CreatorCard(QFrame):
             return
         self.run_btn.setEnabled(not self._manual_run_locked and not self._queue_active)
 
+    def is_selected(self) -> bool:
+        """Returns True if the card is checked."""
+        return self.selection_cb.isChecked()
+
+    def set_selected(self, state: bool):
+        """Programmatically check/uncheck the card."""
+        self.selection_cb.setChecked(bool(state))
+
+    def mousePressEvent(self, e):
+        """Catch click anywhere on card when in selection mode."""
+        if hasattr(self, '_selection_mode') and self._selection_mode:
+            self.selection_cb.setChecked(not self.selection_cb.isChecked())
+            e.accept()
+        else:
+            super().mousePressEvent(e)
+
     def _build(self):
         v = QVBoxLayout(self)
         v.setContentsMargins(11, 7, 11, 7)
@@ -373,6 +423,25 @@ class CreatorCard(QFrame):
         # ── Header: platform icon + creator name (H1 style) + status dot ──
         hrow = QHBoxLayout()
         hrow.setSpacing(6)
+
+        # ── Selection Checkbox ──
+        self.selection_cb = QCheckBox()
+        self.selection_cb.hide()
+        self.selection_cb.setStyleSheet(f"""
+            QCheckBox::indicator {{
+                width: 22px;
+                height: 22px;
+                border-radius: 4px;
+                border: 2px solid {_CYAN};
+                background: #11141a;
+            }}
+            QCheckBox::indicator:checked {{
+                background-color: {_CYAN};
+                border: 2px solid {_CYAN};
+            }}
+        """)
+        self.selection_cb.setAttribute(Qt.WA_TransparentForMouseEvents)
+        hrow.addWidget(self.selection_cb)
 
         self.platform_lbl = QLabel("\u25c8")
         self.platform_lbl.setFixedSize(30, 30)
@@ -455,7 +524,7 @@ class CreatorCard(QFrame):
         controls.setContentsMargins(0, 0, 0, 0)
 
         controls.addWidget(_lbl("Max:"))
-        self.n_spin = QSpinBox()
+        self.n_spin = _NoWheelSpinBox()
         self.n_spin.setRange(1, 500)
         self.n_spin.setMinimumWidth(56)
         self.n_spin.setMaximumWidth(72)
@@ -466,7 +535,7 @@ class CreatorCard(QFrame):
 
         controls.addSpacing(6)
         controls.addWidget(_lbl("Upload:"))
-        self.upload_spin = QSpinBox()
+        self.upload_spin = _NoWheelSpinBox()
         self.upload_spin.setRange(0, 500)
         self.upload_spin.setMinimumWidth(56)
         self.upload_spin.setMaximumWidth(72)
@@ -478,7 +547,7 @@ class CreatorCard(QFrame):
 
         controls.addSpacing(8)
         controls.addWidget(_lbl("Editing:"))
-        self.mode_cb = QComboBox()
+        self.mode_cb = _NoWheelComboBox()
         self.mode_cb.addItems(["None", "Preset", "Split", "Split + Edit"])
         self.mode_cb.setMinimumWidth(108)
         self.mode_cb.setMaximumWidth(150)
@@ -494,7 +563,7 @@ class CreatorCard(QFrame):
         edit_row = QHBoxLayout()
         edit_row.setSpacing(6)
         edit_row.setContentsMargins(0, 0, 0, 0)
-        self.preset_cb = QComboBox()
+        self.preset_cb = _NoWheelComboBox()
         self.preset_cb.addItems(self.preset_names or ["- no presets -"])
         self.preset_cb.setMinimumWidth(110)
         self.preset_cb.setSizeAdjustPolicy(QComboBox.AdjustToContents)
@@ -503,7 +572,7 @@ class CreatorCard(QFrame):
         self.preset_cb.currentTextChanged.connect(self._auto_save)
         edit_row.addWidget(self.preset_cb, 1)
 
-        self.split_sp = QDoubleSpinBox()
+        self.split_sp = _NoWheelDoubleSpinBox()
         self.split_sp.setRange(1.0, 3600.0)
         self.split_sp.setSuffix(" s")
         self.split_sp.setFixedWidth(92)
@@ -583,7 +652,7 @@ class CreatorCard(QFrame):
         self.del_dl_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         bottom_toggles.addWidget(self.del_dl_btn, 1)
 
-        self.yt_type_cb = QComboBox()
+        self.yt_type_cb = _NoWheelComboBox()
         self.yt_type_cb.addItems(["All", "Shorts", "Long"])
         self.yt_type_cb.setToolTip("YouTube content type: All / Shorts only / Long videos only")
         self.yt_type_cb.setMinimumHeight(28)
@@ -884,10 +953,11 @@ class CreatorCard(QFrame):
                 if filtered is None:
                     return
                 m = filtered
-            except ImportError:
-                pass
+            except Exception:
+                pass  # use original message if filter unavailable or raises
             self._set_state("running", m)
-        self.worker.progress.connect(_filter_card_progress)
+        self._progress_cb = _filter_card_progress  # keep ref for disconnect
+        self.worker.progress.connect(self._progress_cb)
         self.worker.download_speed.connect(self._on_download_speed)
         self.worker.progress_percent.connect(self._on_progress_percent)
         self.worker.paused.connect(self._on_worker_paused)
@@ -924,17 +994,43 @@ class CreatorCard(QFrame):
         )
 
     def _on_finished(self, result: dict):
+        # Disconnect all signals to prevent memory leak on repeated runs
+        if self.worker:
+            for sig, slot in [
+                (self.worker.progress,          getattr(self, '_progress_cb', None)),
+                (self.worker.download_speed,    self._on_download_speed),
+                (self.worker.progress_percent,  self._on_progress_percent),
+                (self.worker.paused,            self._on_worker_paused),
+                (self.worker.finished,          self._on_finished),
+                (self.worker.login_required,    self._on_login_required),
+            ]:
+                if slot is not None:
+                    try:
+                        sig.disconnect(slot)
+                    except Exception:
+                        pass
         self.config = CreatorConfig(self.folder)
         self._refresh_activity()
         self._refresh_header()
+        status_code = str(result.get("status_code", "") or "")
         downloaded = int(result.get("downloaded", 0) or 0)
         target = int(result.get("target", 0) or 0)
-        if result.get("success"):
+        if status_code == "success" or result.get("success") and downloaded >= target:
             self._set_state("done", "Done")
-        elif downloaded > 0 and target > 0:
+            self._set_completion_progress(downloaded, target, "done")
+        elif status_code == "stopped":
+            self._set_state("idle", "Stopped")
+        elif status_code == "partial_download" or (downloaded > 0 and target > 0):
             self._set_state("partial", "Partial")
+            self._set_completion_progress(downloaded, target, "partial")
         else:
-            self._set_state("error", "Failed")
+            label = {
+                "failed_auth": "Auth required",
+                "link_grab_failed": "No links found",
+                "download_failed": "Download failed",
+                "runtime_unavailable": "Runtime issue",
+            }.get(status_code, "Failed")
+            self._set_state("error", label)
         self._set_run_button_state(False)
         if self._manual_run_active:
             self._manual_run_active = False
@@ -953,6 +1049,23 @@ class CreatorCard(QFrame):
             self.progress_bar.setFormat(f"%p%  |  {self._current_speed}")
         else:
             self.progress_bar.setFormat("%p%")
+
+    def _set_completion_progress(self, downloaded: int, target: int, state: str) -> None:
+        """Set final completion percentage from downloaded vs target."""
+        try:
+            downloaded_i = max(0, int(downloaded or 0))
+            target_i = max(0, int(target or 0))
+        except Exception:
+            return
+
+        if state == "done":
+            pct = 100
+        elif target_i > 0:
+            pct = int(round((downloaded_i / target_i) * 100))
+        else:
+            return
+
+        self.progress_bar.setValue(max(0, min(100, pct)))
 
     def _set_state(self, state: str, msg: str):
         self._state = state
@@ -1107,7 +1220,9 @@ class CreatorCard(QFrame):
     def stop_worker(self):
         if self.worker and self.worker.isRunning():
             self.worker.stop()
-            self.worker.wait(3000)
+            finished = self.worker.wait(3000)
+            if not finished:
+                self.worker.terminate()  # force-kill if still running after 3s
             if self._manual_run_active:
                 self._manual_run_active = False
                 self.run_finished.emit(self.folder)

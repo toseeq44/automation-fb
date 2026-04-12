@@ -1722,6 +1722,12 @@ class AllSettingsDialog(QDialog):
         self.n_spin.setMinimumWidth(130)
         settings_form.addRow("N Videos:", self.n_spin)
 
+        self.upload_spin = QSpinBox()
+        self.upload_spin.setRange(0, 500)
+        self.upload_spin.setMinimumWidth(130)
+        self.upload_spin.setToolTip("Upload target per OneGo run (0 = skip)")
+        settings_form.addRow("Upload Target:", self.upload_spin)
+
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(_EDIT_MODE_LABELS)
         self.mode_combo.setMinimumWidth(170)
@@ -1763,6 +1769,12 @@ class AllSettingsDialog(QDialog):
 
         self.rand_check = QCheckBox("Randomize links")
         settings_form.addRow("Randomize:", self.rand_check)
+
+        self.keep_original_check = QCheckBox("Keep original video after editing")
+        settings_form.addRow("Original File:", self.keep_original_check)
+
+        self.delete_before_dl_check = QCheckBox("Delete existing media before downloading")
+        settings_form.addRow("Cleanup:", self.delete_before_dl_check)
 
         self.yt_type_combo = QComboBox()
         self.yt_type_combo.addItems(["All", "Shorts", "Long"])
@@ -1983,7 +1995,7 @@ class AllSettingsDialog(QDialog):
         content.addStretch(1)
 
         for ctrl in (
-            self.n_spin, self.mode_combo, self.preset_combo, self.split_spin,
+            self.n_spin, self.upload_spin, self.mode_combo, self.preset_combo, self.split_spin,
             self.wm_text_edit, self.wm_txt_pos_cb, self.wm_txt_font_edit, self.wm_txt_color_preset_cb,
             self.wm_txt_size_sp, self.wm_txt_weight_cb, self.wm_txt_style_cb,
             self.wm_txt_render_style_cb, self.wm_txt_shadow_offset_sp, self.wm_txt_spacing_sp, self.wm_logo_path_edit,
@@ -2063,6 +2075,7 @@ class AllSettingsDialog(QDialog):
         c = self.baseline_cfg
         self._loading_settings = True
         self.n_spin.setValue(c.n_videos)
+        self.upload_spin.setValue(c.uploading_target)
         self.mode_combo.setCurrentIndex(_edit_mode_index(c.editing_mode))
         if c.preset_name and c.preset_name in self.preset_names:
             self.preset_combo.setCurrentText(c.preset_name)
@@ -2071,6 +2084,8 @@ class AllSettingsDialog(QDialog):
         self.dup_check.setChecked(c.duplication_control)
         self.pop_check.setChecked(c.popular_fallback)
         self.rand_check.setChecked(c.randomize_links)
+        self.keep_original_check.setChecked(c.keep_original_after_edit)
+        self.delete_before_dl_check.setChecked(c.delete_before_download)
         _yt_map = {"all": 0, "shorts": 1, "long": 2}
         self.yt_type_combo.setCurrentIndex(_yt_map.get(c.yt_content_type, 0))
 
@@ -2095,6 +2110,7 @@ class AllSettingsDialog(QDialog):
         self.wm_logo_path_edit.setText(str(wl.get("path", "")))
         self.wm_logo_pos_cb.setCurrentText(str(wl.get("position", "TopLeft")))
         self.wm_logo_opacity_sl.setValue(int(wl.get("opacity", 80)))
+        self._wm_logo_size = int(wl.get("size", 15))
         wa = c.watermark_avatar
         self.wm_avatar_enable_check.setChecked(bool(wa.get("enabled", False)))
         self.wm_avatar_path_edit.setText(str(wa.get("path", "")))
@@ -2121,6 +2137,7 @@ class AllSettingsDialog(QDialog):
         mode = _edit_mode_value(self.mode_combo.currentIndex())
         return {
             "n_videos": self.n_spin.value(),
+            "uploading_target": self.upload_spin.value(),
             "editing_mode": mode,
             "preset_name": self.preset_combo.currentText(),
             "split_duration": self.split_spin.value(),
@@ -2129,6 +2146,8 @@ class AllSettingsDialog(QDialog):
             "popular_fallback": self.pop_check.isChecked(),
             "prefer_popular_first": False,
             "randomize_links": self.rand_check.isChecked(),
+            "keep_original_after_edit": self.keep_original_check.isChecked(),
+            "delete_before_download": self.delete_before_dl_check.isChecked(),
             "yt_content_type": ["all", "shorts", "long"][self.yt_type_combo.currentIndex()],
             "watermark_enabled": self.wm_enable_check.isChecked(),
             "watermark_text": {
@@ -2151,6 +2170,7 @@ class AllSettingsDialog(QDialog):
                 "path":     self.wm_logo_path_edit.text().strip(),
                 "position": self.wm_logo_pos_cb.currentText(),
                 "opacity":  self.wm_logo_opacity_sl.value(),
+                "size":     int(getattr(self, "_wm_logo_size", 15) or 15),
             },
             "watermark_avatar": {
                 "enabled":  self.wm_avatar_enable_check.isChecked(),
@@ -2212,6 +2232,7 @@ class CreatorProfilesPage(QWidget):
         self._search_query = ""
         self.daily_guard_enabled = False
         self.daily_guard_interval_minutes = 30
+        self._is_selection_mode = False
         self._queue_manager = CreatorQueueManager(self)
         self._queue_manager.queue_progress.connect(self._on_queue_progress)
         self._queue_manager.creator_started.connect(self._on_queue_creator_started)
@@ -2311,10 +2332,19 @@ class CreatorProfilesPage(QWidget):
         row1 = QHBoxLayout()
         row1.setSpacing(7)
 
-        run_all = _abtn("▶  Run All", _GREEN, "#161b22")
-        run_all.clicked.connect(self._on_run_all)
-        row1.addWidget(run_all)
+        self.run_all_btn = _abtn("▶  Run All", _GREEN, "#161b22")
+        self.run_all_btn.clicked.connect(self._on_run_all)
+        row1.addWidget(self.run_all_btn)
 
+        self.select_btn = _abtn("☑  Select", _CYAN, "#161b22")
+        self.select_btn.clicked.connect(self._on_select_mode_clicked)
+        row1.addWidget(self.select_btn)
+
+        self.cancel_select_btn = _abtn("✖  Cancel", _RED, "#161b22")
+        self.cancel_select_btn.setVisible(False)
+        self.cancel_select_btn.clicked.connect(self._on_cancel_selection)
+        row1.addWidget(self.cancel_select_btn)
+        
         self.onego_btn = _abtn("▶  OneGo", _CYAN, "#161b22")
         self.onego_btn.setToolTip("Run download + upload workflow in one click")
         self.onego_btn.clicked.connect(self._on_onego)
@@ -2766,11 +2796,19 @@ class CreatorProfilesPage(QWidget):
             parent=self,
         )
 
-        # If download+upload mode, connect queue_finished to mark download done
+        # If download+upload mode, connect queue_finished to mark download done.
+        # Always clean up any previous callback first to avoid orphaned connections.
+        if hasattr(self, "_onego_dl_done_cb"):
+            try:
+                self._queue_manager.queue_finished.disconnect(self._onego_dl_done_cb)
+            except Exception:
+                pass
+            del self._onego_dl_done_cb
+
         if result["mode"] == MODE_DOWNLOAD_UPLOAD:
             def _on_dl_done():
                 worker.mark_download_done()
-            self._onego_dl_done_cb = _on_dl_done  # prevent GC
+            self._onego_dl_done_cb = _on_dl_done  # keep ref for later disconnect
             self._queue_manager.queue_finished.connect(_on_dl_done)
 
         self._onego_worker = worker
@@ -2803,16 +2841,59 @@ class CreatorProfilesPage(QWidget):
         dlg = OneGoReportDialog(report, self)
         dlg.exec_()
 
-    def _on_run_all(self):
+    def _on_select_mode_clicked(self):
+        """Toggle or Run Selected."""
+        if not self._is_selection_mode:
+            self._is_selection_mode = True
+            self.select_btn.setText("▶  Run Selected")
+            self.cancel_select_btn.setVisible(True)
+            self.run_all_btn.setEnabled(False)
+            for card in self.cards.values():
+                card.set_selection_mode(True)
+        else:
+            selected = [fp for fp, card in self.cards.items() if card.is_selected()]
+            if not selected:
+                from PyQt5.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "No Selection", "Please select creators to run.")
+                return
+            self._on_run_all(folders=selected)
+            self._on_cancel_selection(reset_state=False)
+
+    def _on_cancel_selection(self, reset_state=True):
+        """Exit selection mode."""
+        self._is_selection_mode = False
+        self.select_btn.setText("☑  Select")
+        self.cancel_select_btn.setVisible(False)
+        self.run_all_btn.setEnabled(True)
+        for card in self.cards.values():
+            card.set_selection_mode(False)
+            if reset_state:
+                card.set_selected(False)
+
+    def _on_run_all(self, folders=None):
         """Start sequential queue using CreatorQueueManager."""
         if not self.cards:
             return
-        folders = list(self.cards.keys())
+        # Guard: prevent starting a new queue while one is already running.
+        # Multiple concurrent queues cause the same creator to be processed
+        # simultaneously, resulting in duplicate downloads and platform bans.
+        if self._queue_manager.isRunning():
+            return
+        # If no specific folders passed, use all currently matched/loaded cards
+        if folders is None:
+            folders = list(self.cards.keys())
+        
+        if not folders:
+            return
         self.summary_btn.setVisible(False)
         self._queue_stats = {"total": len(folders), "done": 0, "success": 0, "failed": 0}
-        # Show queued status on all cards
-        for i, card in enumerate(self.cards.values()):
-            card._set_state("idle", f"Queued ({i + 1}/{len(folders)})")
+        # visual mark cards in THIS queue as queued
+        folder_set = set(folders)
+        for i, (fp, card) in enumerate(self.cards.items()):
+            if fp in folder_set:
+                card._set_state("idle", f"Queued ({folders.index(fp) + 1}/{len(folders)})")
+            else:
+                card._set_state("idle", "")
         # Show Pause button, hide Resume
         self.pause_all_btn.setVisible(True)
         self.resume_all_btn.setVisible(False)
@@ -2890,7 +2971,7 @@ class CreatorProfilesPage(QWidget):
                 card._on_progress_percent(pct)
                 break
 
-    def _on_queue_creator_finished(self, creator_name: str, success: bool):
+    def _on_queue_creator_finished(self, creator_name: str, success: bool, result: object = None):
         """Un-highlight the finished card, update stats and summary."""
         self._queue_stats["done"] += 1
         if success:
@@ -2912,7 +2993,30 @@ class CreatorProfilesPage(QWidget):
                 card.config = CreatorConfig(fp)
                 card._refresh_activity()
                 card._refresh_header()
-                if success:
+                status_code = ""
+                downloaded = 0
+                target = 0
+                if isinstance(result, dict):
+                    status_code = str(result.get("status_code", "") or "")
+                    downloaded = int(result.get("downloaded", 0) or 0)
+                    target = int(result.get("target", 0) or 0)
+                if status_code == "success":
+                    card._set_state("done", "Queue: Complete")
+                    card._set_completion_progress(downloaded, target, "done")
+                elif status_code == "partial_download":
+                    card._set_state("partial", "Queue: Partial")
+                    card._set_completion_progress(downloaded, target, "partial")
+                elif status_code == "failed_auth":
+                    card._set_state("error", "Queue: Auth required")
+                elif status_code == "link_grab_failed":
+                    card._set_state("error", "Queue: No links")
+                elif status_code == "download_failed":
+                    card._set_state("error", "Queue: Download failed")
+                elif status_code == "runtime_unavailable":
+                    card._set_state("error", "Queue: Runtime issue")
+                elif status_code == "no_url_configured":
+                    card._set_state("error", "Queue: No URL")
+                elif success:
                     card._set_state("done", "Queue: Complete")
                 else:
                     card._set_state("error", "Queue: Failed")
@@ -3091,7 +3195,12 @@ class CreatorProfilesPage(QWidget):
                 "randomize_links":     cfg.randomize_links,
                 "keep_original_after_edit": cfg.keep_original_after_edit,
                 "delete_before_download": cfg.delete_before_download,
+                "yt_content_type":     cfg.yt_content_type,
                 "uploading_target":      cfg.uploading_target,
+                "watermark_enabled":   cfg.watermark_enabled,
+                "watermark_text":      cfg.watermark_text,
+                "watermark_logo":      cfg.watermark_logo,
+                "watermark_avatar":    cfg.watermark_avatar,
             })
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
@@ -3120,7 +3229,9 @@ class CreatorProfilesPage(QWidget):
                             "preset_name", "split_duration", "split_edit_settings", "duplication_control",
                             "popular_fallback", "prefer_popular_first", "randomize_links",
                             "keep_original_after_edit", "delete_before_download",
-                            "uploading_target"):
+                            "yt_content_type", "uploading_target",
+                            "watermark_enabled", "watermark_text",
+                            "watermark_logo", "watermark_avatar"):
                     if key in entry:
                         cfg.data[key] = entry[key]
                 cfg.save()

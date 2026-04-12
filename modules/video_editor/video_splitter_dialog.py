@@ -28,7 +28,14 @@ from PyQt5.QtWidgets import (
 )
 
 from modules.logging.logger import get_logger
-from modules.video_editor.utils import get_ffmpeg_path, get_video_info, format_duration
+from modules.video_editor.utils import (
+    filesystem_path_exists,
+    format_duration,
+    get_ffmpeg_path,
+    get_filesystem_path,
+    get_video_info,
+    remove_filesystem_path,
+)
 
 logger = get_logger(__name__)
 
@@ -90,7 +97,7 @@ class VideoSplitWorker(QThread):
 
                 if self.delete_originals:
                     try:
-                        os.remove(source_path)
+                        remove_filesystem_path(source_path)
                         self.log_message.emit(f"Deleted original: {Path(source_path).name}")
                     except Exception as exc:
                         self.log_message.emit(
@@ -141,8 +148,7 @@ class VideoSplitWorker(QThread):
 
             if not split_ok:
                 try:
-                    if output_path.exists():
-                        output_path.unlink()
+                    remove_filesystem_path(str(output_path))
                 except Exception:
                     pass
                 return False, f"ffmpeg failed for part {part_index + 1}"
@@ -152,11 +158,13 @@ class VideoSplitWorker(QThread):
     def _build_ffmpeg_commands(
         self, source: Path, start: float, segment_duration: float, output_path: Path
     ) -> List[List[str]]:
+        source_arg = get_filesystem_path(str(source))
+        output_arg = get_filesystem_path(str(output_path))
         common = [
             self.ffmpeg_path,
             "-y",
             "-i",
-            str(source),
+            source_arg,
             "-ss",
             f"{start:.3f}",
             "-t",
@@ -194,7 +202,7 @@ class VideoSplitWorker(QThread):
                     "128k",
                     "-af",
                     "aresample=async=1:first_pts=0",
-                    str(output_path),
+                    output_arg,
                 ]
             )
         else:
@@ -215,7 +223,7 @@ class VideoSplitWorker(QThread):
                     "aresample=async=1:first_pts=0",
                     "-movflags",
                     "+faststart",
-                    str(output_path),
+                    output_arg,
                 ]
             )
 
@@ -227,7 +235,7 @@ class VideoSplitWorker(QThread):
                 "-ss",
                 f"{start:.3f}",
                 "-i",
-                str(source),
+                source_arg,
                 "-t",
                 f"{segment_duration:.3f}",
                 "-c",
@@ -236,7 +244,7 @@ class VideoSplitWorker(QThread):
                 "make_zero",
                 "-reset_timestamps",
                 "1",
-                str(output_path),
+                output_arg,
             ]
         )
 
@@ -350,7 +358,7 @@ class VideoSplitWorker(QThread):
 
     @staticmethod
     def _unique_path(path: Path) -> Path:
-        if not path.exists():
+        if not filesystem_path_exists(str(path)):
             return path
         stem = path.stem
         suffix = path.suffix
@@ -358,7 +366,7 @@ class VideoSplitWorker(QThread):
         counter = 1
         while True:
             candidate = parent / f"{stem}_{counter}{suffix}"
-            if not candidate.exists():
+            if not filesystem_path_exists(str(candidate)):
                 return candidate
             counter += 1
 

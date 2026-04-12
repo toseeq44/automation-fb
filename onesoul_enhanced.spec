@@ -26,6 +26,18 @@ else:
 optional_datas = []
 extra_hiddenimports = []
 
+# Playwright browsers
+import subprocess
+try:
+    playwright_path = subprocess.check_output(['python', '-c', 'import os, playwright; print(os.path.join(os.path.expanduser("~"), "AppData", "Local", "ms-playwright"))']).decode('utf-8').strip()
+    if os.path.exists(playwright_path):
+        optional_datas.append((playwright_path, 'playwright_browsers'))
+        print(f"INFO: Playwright bundle imported from: {playwright_path}")
+    else:
+        print("WARNING: Playwright browsers path not found locally.")
+except Exception as e:
+    print(f"WARNING: Playwright browsers not found: {e}")
+
 try:
     optional_datas += collect_data_files('curl_cffi')
     optional_binaries += collect_dynamic_libs('curl_cffi')
@@ -173,6 +185,7 @@ a = Analysis(
         'selenium',
         'selenium.webdriver',
         'selenium.webdriver.chrome',
+        'selenium.webdriver.chrome.webdriver',
         'selenium.webdriver.chrome.options',
         'selenium.webdriver.chrome.service',
         'selenium.webdriver.common',
@@ -184,6 +197,11 @@ a = Analysis(
         'selenium.webdriver.support.expected_conditions',
         'selenium.common',
         'selenium.common.exceptions',
+        
+        # Playwright
+        'playwright',
+        'playwright.sync_api',
+        'playwright.async_api',
 
         # Browser automation - UI control
         'pyautogui',
@@ -283,11 +301,12 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name='OneSoul',
+    # Re-enable the legacy onedir layout (no top-level _internal folder).
+    contents_directory='.',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=False,  # No console window
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,

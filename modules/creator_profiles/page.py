@@ -2806,8 +2806,8 @@ class CreatorProfilesPage(QWidget):
             del self._onego_dl_done_cb
 
         if result["mode"] == MODE_DOWNLOAD_UPLOAD:
-            def _on_dl_done():
-                worker.mark_download_done()
+            def _on_dl_done(stopped: bool = False):
+                worker.mark_download_done(stopped=stopped)
             self._onego_dl_done_cb = _on_dl_done  # keep ref for later disconnect
             self._queue_manager.queue_finished.connect(_on_dl_done)
 
@@ -2918,6 +2918,8 @@ class CreatorProfilesPage(QWidget):
     def _on_stop_all(self):
         """Stop the queue and all active downloads."""
         self._queue_manager.stop()
+        if hasattr(self, "_onego_worker") and self._onego_worker and self._onego_worker.isRunning():
+            self._onego_worker.stop()
         self.pause_all_btn.setVisible(False)
         self.resume_all_btn.setVisible(False)
         self.queue_status_lbl.setVisible(False)
@@ -3023,7 +3025,7 @@ class CreatorProfilesPage(QWidget):
                 card._set_run_button_state(False)
                 break
 
-    def _on_queue_finished(self):
+    def _on_queue_finished(self, stopped: bool = False):
         """Queue completed — show summary, unlock cards."""
         self.pause_all_btn.setVisible(False)
         self.resume_all_btn.setVisible(False)
@@ -3031,6 +3033,9 @@ class CreatorProfilesPage(QWidget):
         for card in self.cards.values():
             card.set_manual_run_locked(False)
             card.set_queue_active(False)
+        if stopped:
+            self.summary_btn.setVisible(False)
+            return
         # Collect failures
         failed = [c.folder.name for c in self.cards.values()
                   if c._state in ("error", "partial")]

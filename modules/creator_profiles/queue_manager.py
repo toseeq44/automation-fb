@@ -69,7 +69,7 @@ class CreatorQueueManager(QThread):
     creator_finished     = pyqtSignal(str, bool, object)
     creator_progress_msg = pyqtSignal(str, str)   # folder_name, raw progress text
     creator_progress_pct = pyqtSignal(str, int)   # folder_name, percent (0-100)
-    queue_finished       = pyqtSignal()
+    queue_finished       = pyqtSignal(bool)
     paused               = pyqtSignal()
 
     def __init__(self, parent=None):
@@ -330,10 +330,10 @@ class CreatorQueueManager(QThread):
         self._delete_state()
         if not self._stop_flag:
             self.queue_progress.emit(f"Queue: Done — {total} creator(s) processed")
-            self.queue_finished.emit()
+            self.queue_finished.emit(False)
         else:
             self.queue_progress.emit("Queue: Stopped")
-            self.queue_finished.emit()
+            self.queue_finished.emit(True)
 
     def _run_one(self, folder: Path) -> bool:
         """

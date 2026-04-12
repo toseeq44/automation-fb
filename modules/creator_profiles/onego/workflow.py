@@ -128,13 +128,16 @@ class OneGoWorker(QThread):
         self._download_trigger = download_trigger
         self._stop = False
         self._download_done = False
+        self._download_stopped = False
+        self._report_emitted = False
 
     def stop(self):
         self._stop = True
 
-    def mark_download_done(self):
-        """Called externally when download queue finishes."""
+    def mark_download_done(self, stopped: bool = False):
+        """Called externally when download queue finishes or is stopped."""
         self._download_done = True
+        self._download_stopped = bool(stopped)
 
     def _build_resume_key(self, profiles: List[Any]) -> str:
         ids = "|".join(str(p.profile_id) for p in profiles)
@@ -213,9 +216,9 @@ class OneGoWorker(QThread):
                     # Wait for download phase to complete
                     while not self._download_done and not self._stop:
                         time.sleep(0.5)
-                    if self._stop:
+                    if self._stop or self._download_stopped:
+                        report.session_error = "stopped"
                         self.progress.emit("OneGo: Stopped during download phase.")
-                        self._emit_report(report)
                         return
                     self.progress.emit("OneGo: Download phase complete. Starting upload phase...")
                 else:
@@ -230,6 +233,8 @@ class OneGoWorker(QThread):
             log.error("[OneGo] Fatal error: %s", exc, exc_info=True)
             self.progress.emit(f"OneGo: Fatal error â€” {exc}")
         finally:
+            if self._stop and not report.session_error:
+                report.session_error = "stopped"
             self._emit_report(report)
 
     def _run_upload_phase(self, report: OneGoReport):
@@ -519,6 +524,10 @@ class OneGoWorker(QThread):
 
     def _emit_report(self, report: OneGoReport):
         """Persist report JSON and emit finished signal."""
+        if self._report_emitted:
+            return
+        self._report_emitted = True
+
         report_dict = report.to_dict()
         report_dict["completed_at"] = datetime.now().isoformat()
 
@@ -532,9 +541,15 @@ class OneGoWorker(QThread):
         except Exception as exc:
             log.warning("[OneGo] Failed to save report: %s", exc)
 
-        self.progress.emit(
-            f"OneGo: Complete â€” uploaded {report.total_uploaded}, "
-            f"skipped {report.total_skipped}, failed {report.total_failed}"
-        )
+        if report.session_error == "stopped":
+            self.progress.emit(
+                f"OneGo: Stopped â€” uploaded {report.total_uploaded}, "
+                f"skipped {report.total_skipped}, failed {report.total_failed}"
+            )
+        else:
+            self.progress.emit(
+                f"OneGo: Complete â€” uploaded {report.total_uploaded}, "
+                f"skipped {report.total_skipped}, failed {report.total_failed}"
+            )
         self.finished_signal.emit(report_dict)
 

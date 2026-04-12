@@ -158,22 +158,81 @@ class ManagedChromeSessionManager:
         except Exception as exc:
             logger.warning("[ManagedCDP] Failed to clear lock: %s", exc)
 
+    def _find_listener_pid(self, port: int = 0) -> int:
+        """Best-effort resolve of the process currently listening on ``port``."""
+        port = int(port or self._cdp_port)
+        try:
+            import psutil
+
+            for conn in psutil.net_connections(kind="tcp"):
+                try:
+                    laddr = conn.laddr
+                    local_port = getattr(laddr, "port", None)
+                    status = str(getattr(conn, "status", "") or "").upper()
+                    if local_port != port or status != "LISTEN":
+                        continue
+                    pid = int(conn.pid or 0)
+                    if pid > 0:
+                        return pid
+                except Exception:
+                    continue
+        except Exception as exc:
+            logger.debug("[ManagedCDP] Failed to resolve listener pid: %s", exc)
+        return 0
+
+    def _adopt_running_instance(self, port: int = 0) -> bool:
+        """Adopt an already-running managed Chrome when the port is live."""
+        port = int(port or self._cdp_port)
+        if not self._is_port_open(port):
+            return False
+
+        pid = self._find_listener_pid(port)
+        purpose = "managed_cdp_adopted"
+        lock = self._read_lock() or {}
+        current_pid = int(lock.get("pid", 0) or 0)
+        current_port = int(lock.get("port", port) or port)
+        current_purpose = str(lock.get("purpose") or purpose)
+
+        if current_pid != pid or current_port != port:
+            self._write_lock(pid, purpose)
+            logger.info(
+                "[ManagedCDP] Adopted existing Chrome on port %d (pid=%s)",
+                port,
+                pid or "?",
+            )
+        else:
+            self._write_lock(pid or current_pid, current_purpose)
+        return True
+
     def _is_lock_stale(self, lock_data: Dict) -> bool:
         """Check if a lock is stale (process dead or too old)."""
         pid = lock_data.get("pid", 0)
+        port = int(lock_data.get("port", self._cdp_port) or self._cdp_port)
         ts = lock_data.get("timestamp", 0)
 
-        # Too old
-        if time.time() - ts > _STALE_LOCK_SECONDS:
+        # As long as the listener is still alive, keep the session.
+        if self._is_port_open(port):
+            return False
+
+        if pid and self._is_pid_alive(pid):
+            return False
+
+        # Process is dead and CDP port is closed.
+        if pid:
             logger.info(
-                "[ManagedCDP] Lock is stale (age=%.0fs > %ds)",
-                time.time() - ts, _STALE_LOCK_SECONDS,
+                "[ManagedCDP] Lock is stale (pid=%d is dead and port=%d is closed)",
+                pid,
+                port,
             )
             return True
 
-        # Process is dead
-        if pid and not self._is_pid_alive(pid):
-            logger.info("[ManagedCDP] Lock is stale (pid=%d is dead)", pid)
+        # No pid information left and the port is closed: treat as stale only
+        # after the grace window so an in-flight launch is not broken.
+        if time.time() - ts > _STALE_LOCK_SECONDS:
+            logger.info(
+                "[ManagedCDP] Lock is stale (inactive age=%.0fs > %ds)",
+                time.time() - ts, _STALE_LOCK_SECONDS,
+            )
             return True
 
         return False
@@ -245,16 +304,28 @@ class ManagedChromeSessionManager:
         """Check if the managed Chrome instance is currently running.
 
         Returns True only when:
-          1. We have a valid (non-stale) lock file, AND
-          2. The CDP port is accepting connections.
+          1. A valid managed lock exists and the CDP port is alive, OR
+          2. The CDP port is already alive and can be adopted.
         """
         lock = self._read_lock()
-        if not lock:
-            return False
-        if self._is_lock_stale(lock):
-            self._clear_lock()
-            return False
-        return self._is_port_open(lock.get("port", self._cdp_port))
+        if lock:
+            if self._is_lock_stale(lock):
+                if self._adopt_running_instance(lock.get("port", self._cdp_port)):
+                    return True
+                self._clear_lock()
+                return False
+
+            port = int(lock.get("port", self._cdp_port) or self._cdp_port)
+            if self._is_port_open(port):
+                # Refresh the heartbeat so long sessions are not misclassified
+                # as stale later.
+                self._write_lock(
+                    int(lock.get("pid", 0) or self._find_listener_pid(port)),
+                    str(lock.get("purpose") or "managed_cdp"),
+                )
+                return True
+
+        return self._adopt_running_instance(self._cdp_port)
 
     # ------------------------------------------------------------------
     # Core: ensure_running

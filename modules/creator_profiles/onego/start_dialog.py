@@ -29,6 +29,8 @@ _BORDER = "rgba(0,212,255,0.2)"
 
 MODE_DOWNLOAD_UPLOAD = "download_upload"
 MODE_UPLOAD_ONLY = "upload_only"
+ACTIVITY_DISABLED = "disabled"
+ACTIVITY_ENABLED = "enabled"
 
 
 def _load_ix_prefill() -> Dict[str, str]:
@@ -124,6 +126,13 @@ class OneGoStartDialog(QDialog):
         self.mode_cb.setFixedHeight(32)
         form.addRow("Mode:", self.mode_cb)
 
+        self.activity_cb = QComboBox()
+        self.activity_cb.addItem("Just Uploading", ACTIVITY_DISABLED)
+        self.activity_cb.addItem("Uploading + Activity", ACTIVITY_ENABLED)
+        self.activity_cb.setStyleSheet(self._input_ss())
+        self.activity_cb.setFixedHeight(32)
+        form.addRow("Profile Activity:", self.activity_cb)
+
         # IX API fields
         self.api_url_input = QLineEdit()
         self.api_url_input.setPlaceholderText("http://127.0.0.1:53200")
@@ -215,6 +224,7 @@ class OneGoStartDialog(QDialog):
         mode = self.mode_cb.currentData()
         self._result_data = {
             "mode": mode,
+            "activity_mode": self.activity_cb.currentData(),
             "api_url": api_url,
             "email": email,
             "password": effective_pw,

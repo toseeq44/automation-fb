@@ -10,6 +10,7 @@ Layout:
 """
 
 import json
+import logging
 import re
 import shutil
 from datetime import datetime
@@ -34,6 +35,8 @@ from PyQt5.QtWidgets import (
 from .creator_card import CreatorCard
 from .config_manager import CreatorConfig, summarize_split_edit_settings
 from .queue_manager import CreatorQueueManager
+
+log = logging.getLogger(__name__)
 
 # ── Theme constants ───────────────────────────────────────────────────────────
 _BG        = "#050712"
@@ -2767,6 +2770,14 @@ class CreatorProfilesPage(QWidget):
         from .onego.start_dialog import OneGoStartDialog
         from .onego.workflow import OneGoWorker, MODE_DOWNLOAD_UPLOAD
 
+        if self._queue_manager.isRunning() or self._any_manual_card_running():
+            QMessageBox.information(
+                self,
+                "Run In Progress",
+                "Wait for the current creator run to finish before starting OneGo.",
+            )
+            return
+
         dlg = OneGoStartDialog(self)
         if dlg.exec_() != OneGoStartDialog.Accepted:
             return
@@ -2779,13 +2790,18 @@ class CreatorProfilesPage(QWidget):
             return
 
         card_folders = list(self.cards.keys())
+        selected_download_folders = [
+            fp for fp, card in self.cards.items() if card.is_selected()
+        ]
+        download_folders = list(selected_download_folders or card_folders)
 
         # Download trigger: start the existing queue, signal OneGo when done
         def download_trigger():
-            self._on_run_all()
+            self._on_run_all(folders=download_folders)
 
         worker = OneGoWorker(
             mode=result["mode"],
+            activity_enabled=result.get("activity_mode") != "disabled",
             api_url=result["api_url"],
             email=result["email"],
             password=result["password"],
@@ -2817,10 +2833,16 @@ class CreatorProfilesPage(QWidget):
         worker.start()
         self.onego_btn.setEnabled(False)
         self.onego_btn.setText("OneGo Running...")
+        self._refresh_primary_run_controls()
 
     def _on_onego_progress(self, msg: str):
         self.queue_status_lbl.setText(msg)
         self.queue_status_lbl.setVisible(True)
+        log.info("[OneGo] %s", msg)
+        try:
+            print(msg, flush=True)
+        except Exception:
+            pass
 
     def _on_onego_finished(self, report: dict):
         self.onego_btn.setEnabled(True)
@@ -2840,6 +2862,24 @@ class CreatorProfilesPage(QWidget):
         from .onego.report_dialog import OneGoReportDialog
         dlg = OneGoReportDialog(report, self)
         dlg.exec_()
+        self._refresh_primary_run_controls()
+
+    def _any_manual_card_running(self) -> bool:
+        return any(card.is_running() for card in self.cards.values())
+
+    def _refresh_primary_run_controls(self):
+        queue_active = self._queue_manager.isRunning()
+        manual_active = self._any_manual_card_running()
+        onego_active = bool(
+            getattr(self, "_onego_worker", None)
+            and self._onego_worker.isRunning()
+        )
+        busy = queue_active or manual_active or onego_active
+
+        self.run_all_btn.setEnabled((not busy) and (not self._is_selection_mode))
+        self.select_btn.setEnabled(not busy)
+        self.cancel_select_btn.setEnabled(not busy)
+        self.onego_btn.setEnabled(not busy)
 
     def _on_select_mode_clicked(self):
         """Toggle or Run Selected."""
@@ -2864,11 +2904,11 @@ class CreatorProfilesPage(QWidget):
         self._is_selection_mode = False
         self.select_btn.setText("☑  Select")
         self.cancel_select_btn.setVisible(False)
-        self.run_all_btn.setEnabled(True)
         for card in self.cards.values():
             card.set_selection_mode(False)
             if reset_state:
                 card.set_selected(False)
+        self._refresh_primary_run_controls()
 
     def _on_run_all(self, folders=None):
         """Start sequential queue using CreatorQueueManager."""
@@ -2878,6 +2918,15 @@ class CreatorProfilesPage(QWidget):
         # Multiple concurrent queues cause the same creator to be processed
         # simultaneously, resulting in duplicate downloads and platform bans.
         if self._queue_manager.isRunning():
+            return
+        if self._any_manual_card_running():
+            QMessageBox.information(
+                self,
+                "Run In Progress",
+                "Wait for the current creator run to finish before starting Run All or Run Selected.",
+            )
+            return
+        if getattr(self, "_onego_worker", None) and self._onego_worker.isRunning():
             return
         # If no specific folders passed, use all currently matched/loaded cards
         if folders is None:
@@ -2901,6 +2950,7 @@ class CreatorProfilesPage(QWidget):
         # Lock all manual run buttons during queue
         for card in self.cards.values():
             card.set_manual_run_locked(True)
+        self._refresh_primary_run_controls()
         self._queue_manager.start_queue(folders)
 
     def _on_pause_all(self):
@@ -3033,6 +3083,7 @@ class CreatorProfilesPage(QWidget):
         for card in self.cards.values():
             card.set_manual_run_locked(False)
             card.set_queue_active(False)
+        self._refresh_primary_run_controls()
         if stopped:
             self.summary_btn.setVisible(False)
             return
@@ -3091,6 +3142,7 @@ class CreatorProfilesPage(QWidget):
         for fp, card in self.cards.items():
             if fp != Path(folder):
                 card.set_manual_run_locked(True)
+        self._refresh_primary_run_controls()
 
     def _on_card_run_finished(self, folder):
         """Unlock all cards when a manual (non-queue) run finishes."""
@@ -3098,6 +3150,7 @@ class CreatorProfilesPage(QWidget):
         if not self._queue_manager.isRunning():
             for card in self.cards.values():
                 card.set_manual_run_locked(False)
+        self._refresh_primary_run_controls()
 
     def _on_summary_clicked(self):
         dlg = FailedSummaryDialog(getattr(self, "_failed_folders_cache", []), self)

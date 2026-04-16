@@ -3016,10 +3016,17 @@ class CreatorDownloadWorker(QThread):
                 
             # Stagger between link-grab phase and download phase to reduce rush.
             pre_download_wait = _pacer.scale_delay(random.uniform(1.5, 3.5))
-            time.sleep(pre_download_wait)
-            self.progress.emit(
-                f"Selected {len(selected)} videos. Starting downloads (after {pre_download_wait:.1f}s)..."
-            )
+            waited = 0.0
+            while waited < pre_download_wait:
+                if self._check_pause():
+                    break
+                step = min(0.1, pre_download_wait - waited)
+                time.sleep(step)
+                waited += step
+            if not self._stop:
+                self.progress.emit(
+                    f"Selected {len(selected)} videos. Starting downloads (after {pre_download_wait:.1f}s)..."
+                )
 
         # ── Download: final pre-filtered URLs only ────────────────────
         selected_count = _queue_entries(selected, "Selected", skip_downloaded=dup_ctrl)

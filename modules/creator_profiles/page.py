@@ -10,11 +10,12 @@ Layout:
 """
 
 import json
+import logging
 import re
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Set
 from urllib.parse import parse_qs, urlparse
 
 from PyQt5.QtCore import Qt, QEvent, QFileSystemWatcher, QTimer
@@ -34,6 +35,8 @@ from PyQt5.QtWidgets import (
 from .creator_card import CreatorCard
 from .config_manager import CreatorConfig, summarize_split_edit_settings
 from .queue_manager import CreatorQueueManager
+
+log = logging.getLogger(__name__)
 
 # ── Theme constants ───────────────────────────────────────────────────────────
 _BG        = "#050712"
@@ -2250,6 +2253,18 @@ class CreatorProfilesPage(QWidget):
         self._col_timer.timeout.connect(self._update_cols)
         self._daily_guard_timer = QTimer(self)
         self._daily_guard_timer.timeout.connect(self._daily_guard_cycle)
+        self._structure_refresh_timer = QTimer(self)
+        self._structure_refresh_timer.setSingleShot(True)
+        self._structure_refresh_timer.setInterval(250)
+        self._structure_refresh_timer.timeout.connect(self._refresh_cards)
+        self._card_refresh_timer = QTimer(self)
+        self._card_refresh_timer.setSingleShot(True)
+        self._card_refresh_timer.setInterval(180)
+        self._card_refresh_timer.timeout.connect(self._flush_pending_card_refreshes)
+        self._pending_card_refreshes: Set[Path] = set()
+        self._watched_container_paths: Set[str] = set()
+        self._watched_card_paths: Set[str] = set()
+        self._refresh_in_progress = False
 
         self.setStyleSheet(f"QWidget {{ background:{_BG}; color:white; }}")
         self._build_ui()
@@ -2561,41 +2576,136 @@ class CreatorProfilesPage(QWidget):
     # ── watcher ───────────────────────────────────────────────────────────
 
     def _setup_watcher(self):
-        self.watcher = QFileSystemWatcher()
+        self.watcher = QFileSystemWatcher(self)
+        self.watcher.directoryChanged.connect(self._on_watcher_directory_changed)
+
+    @staticmethod
+    def _normalize_watch_path(path) -> str:
+        try:
+            return str(Path(path).resolve())
+        except Exception:
+            return str(Path(path))
+
+    def _sync_watcher_paths(self, folders: List[Path]):
+        desired_card_paths = {
+            self._normalize_watch_path(folder)
+            for folder in folders
+            if folder.exists()
+        }
+        desired_container_paths = set()
         if self.root.exists():
-            self.watcher.addPath(str(self.root))
-        self.watcher.directoryChanged.connect(lambda _: self._refresh_cards())
+            desired_container_paths.add(self._normalize_watch_path(self.root))
+        for folder in folders:
+            parent = folder.parent
+            if parent.exists():
+                desired_container_paths.add(self._normalize_watch_path(parent))
+
+        desired_paths = desired_card_paths | desired_container_paths
+        current_paths = self._watched_card_paths | self._watched_container_paths
+
+        remove_paths = sorted(current_paths - desired_paths)
+        if remove_paths:
+            try:
+                self.watcher.removePaths(remove_paths)
+            except Exception:
+                for watch_path in remove_paths:
+                    try:
+                        self.watcher.removePath(watch_path)
+                    except Exception:
+                        pass
+
+        add_paths = sorted(desired_paths - current_paths)
+        if add_paths:
+            try:
+                self.watcher.addPaths(add_paths)
+            except Exception:
+                for watch_path in add_paths:
+                    try:
+                        self.watcher.addPath(watch_path)
+                    except Exception:
+                        pass
+
+        self._watched_card_paths = desired_card_paths
+        self._watched_container_paths = desired_container_paths
+
+    def _schedule_structure_refresh(self):
+        self._structure_refresh_timer.start()
+
+    def _schedule_card_refresh(self, folder: Path):
+        self._pending_card_refreshes.add(Path(folder))
+        self._card_refresh_timer.start()
+
+    def _flush_pending_card_refreshes(self):
+        pending = list(self._pending_card_refreshes)
+        self._pending_card_refreshes.clear()
+        for folder in pending:
+            card = self.cards.get(Path(folder))
+            if card is None:
+                self._schedule_structure_refresh()
+                continue
+            if not card.folder.exists():
+                self._schedule_structure_refresh()
+                continue
+            card.refresh_from_disk()
+
+    def _on_watcher_directory_changed(self, changed_path: str):
+        normalized = self._normalize_watch_path(changed_path)
+
+        if normalized in self._watched_container_paths:
+            self._schedule_structure_refresh()
+            return
+
+        folder = Path(normalized)
+        card = self.cards.get(folder)
+        if card is None:
+            self._schedule_structure_refresh()
+            return
+
+        if card.is_running():
+            return
+
+        self._schedule_card_refresh(folder)
 
     # ── card management ───────────────────────────────────────────────────
 
     def _refresh_cards(self):
+        if self._refresh_in_progress:
+            self._schedule_structure_refresh()
+            return
+
+        self._refresh_in_progress = True
         self.root_lbl.setText(f"Scan:  {self.root}")
-        folders = _scan_folders(self.root)
-        folder_set = set(folders)
+        try:
+            folders = _scan_folders(self.root)
+            folder_set = set(folders)
 
-        # Remove stale cards
-        for fp in list(self.cards.keys()):
-            if fp not in folder_set:
-                card = self.cards.pop(fp)
-                card.stop_worker()
-                card.deleteLater()
+            # Remove stale cards
+            for fp in list(self.cards.keys()):
+                if fp not in folder_set:
+                    card = self.cards.pop(fp)
+                    card.stop_worker()
+                    card.deleteLater()
 
-        # Add new cards
-        for fp in folders:
-            if fp not in self.cards:
-                card = CreatorCard(fp, self.root, self.presets)
-                card.remove_requested.connect(self._on_remove_card)
-                card.run_started.connect(self._on_card_run_started)
-                card.run_finished.connect(self._on_card_run_finished)
-                self.cards[fp] = card
-                self.watcher.addPath(str(fp))
+            # Add new cards
+            for fp in folders:
+                if fp not in self.cards:
+                    card = CreatorCard(fp, self.root, self.presets)
+                    card.remove_requested.connect(self._on_remove_card)
+                    card.run_started.connect(self._on_card_run_started)
+                    card.run_finished.connect(self._on_card_run_finished)
+                    if self._is_selection_mode:
+                        card.set_selection_mode(True)
+                    self.cards[fp] = card
 
-        self._rebuild_grid()
-        n = len(self.cards)
-        self.count_lbl.setText(
-            f"{n} creator{'s' if n != 1 else ''} loaded"
-        )
-        self._toggle_empty(n == 0)
+            self._sync_watcher_paths(folders)
+            self._rebuild_grid()
+            n = len(self.cards)
+            self.count_lbl.setText(
+                f"{n} creator{'s' if n != 1 else ''} loaded"
+            )
+            self._toggle_empty(n == 0)
+        finally:
+            self._refresh_in_progress = False
 
     def _rebuild_grid(self):
         """Clear and re-populate the QGridLayout with current column count."""
@@ -2663,13 +2773,10 @@ class CreatorProfilesPage(QWidget):
                 return
 
         if folder in self.cards:
-            try:
-                self.watcher.removePath(str(folder))
-            except Exception:
-                pass
             card = self.cards.pop(folder)
             card.stop_worker()
             card.deleteLater()
+        self._sync_watcher_paths(list(self.cards.keys()))
         self._rebuild_grid()
         self._toggle_empty(len(self.cards) == 0)
 
@@ -2767,6 +2874,14 @@ class CreatorProfilesPage(QWidget):
         from .onego.start_dialog import OneGoStartDialog
         from .onego.workflow import OneGoWorker, MODE_DOWNLOAD_UPLOAD
 
+        if self._queue_manager.isRunning() or self._any_manual_card_running():
+            QMessageBox.information(
+                self,
+                "Run In Progress",
+                "Wait for the current creator run to finish before starting OneGo.",
+            )
+            return
+
         dlg = OneGoStartDialog(self)
         if dlg.exec_() != OneGoStartDialog.Accepted:
             return
@@ -2779,13 +2894,18 @@ class CreatorProfilesPage(QWidget):
             return
 
         card_folders = list(self.cards.keys())
+        selected_download_folders = [
+            fp for fp, card in self.cards.items() if card.is_selected()
+        ]
+        download_folders = list(selected_download_folders or card_folders)
 
         # Download trigger: start the existing queue, signal OneGo when done
         def download_trigger():
-            self._on_run_all()
+            self._on_run_all(folders=download_folders)
 
         worker = OneGoWorker(
             mode=result["mode"],
+            activity_enabled=result.get("activity_mode") != "disabled",
             api_url=result["api_url"],
             email=result["email"],
             password=result["password"],
@@ -2806,8 +2926,8 @@ class CreatorProfilesPage(QWidget):
             del self._onego_dl_done_cb
 
         if result["mode"] == MODE_DOWNLOAD_UPLOAD:
-            def _on_dl_done():
-                worker.mark_download_done()
+            def _on_dl_done(stopped: bool = False):
+                worker.mark_download_done(stopped=stopped)
             self._onego_dl_done_cb = _on_dl_done  # keep ref for later disconnect
             self._queue_manager.queue_finished.connect(_on_dl_done)
 
@@ -2817,10 +2937,16 @@ class CreatorProfilesPage(QWidget):
         worker.start()
         self.onego_btn.setEnabled(False)
         self.onego_btn.setText("OneGo Running...")
+        self._refresh_primary_run_controls()
 
     def _on_onego_progress(self, msg: str):
         self.queue_status_lbl.setText(msg)
         self.queue_status_lbl.setVisible(True)
+        log.info("[OneGo] %s", msg)
+        try:
+            print(msg, flush=True)
+        except Exception:
+            pass
 
     def _on_onego_finished(self, report: dict):
         self.onego_btn.setEnabled(True)
@@ -2840,6 +2966,24 @@ class CreatorProfilesPage(QWidget):
         from .onego.report_dialog import OneGoReportDialog
         dlg = OneGoReportDialog(report, self)
         dlg.exec_()
+        self._refresh_primary_run_controls()
+
+    def _any_manual_card_running(self) -> bool:
+        return any(card.is_running() for card in self.cards.values())
+
+    def _refresh_primary_run_controls(self):
+        queue_active = self._queue_manager.isRunning()
+        manual_active = self._any_manual_card_running()
+        onego_active = bool(
+            getattr(self, "_onego_worker", None)
+            and self._onego_worker.isRunning()
+        )
+        busy = queue_active or manual_active or onego_active
+
+        self.run_all_btn.setEnabled((not busy) and (not self._is_selection_mode))
+        self.select_btn.setEnabled(not busy)
+        self.cancel_select_btn.setEnabled(not busy)
+        self.onego_btn.setEnabled(not busy)
 
     def _on_select_mode_clicked(self):
         """Toggle or Run Selected."""
@@ -2864,11 +3008,11 @@ class CreatorProfilesPage(QWidget):
         self._is_selection_mode = False
         self.select_btn.setText("☑  Select")
         self.cancel_select_btn.setVisible(False)
-        self.run_all_btn.setEnabled(True)
         for card in self.cards.values():
             card.set_selection_mode(False)
             if reset_state:
                 card.set_selected(False)
+        self._refresh_primary_run_controls()
 
     def _on_run_all(self, folders=None):
         """Start sequential queue using CreatorQueueManager."""
@@ -2878,6 +3022,15 @@ class CreatorProfilesPage(QWidget):
         # Multiple concurrent queues cause the same creator to be processed
         # simultaneously, resulting in duplicate downloads and platform bans.
         if self._queue_manager.isRunning():
+            return
+        if self._any_manual_card_running():
+            QMessageBox.information(
+                self,
+                "Run In Progress",
+                "Wait for the current creator run to finish before starting Run All or Run Selected.",
+            )
+            return
+        if getattr(self, "_onego_worker", None) and self._onego_worker.isRunning():
             return
         # If no specific folders passed, use all currently matched/loaded cards
         if folders is None:
@@ -2901,6 +3054,7 @@ class CreatorProfilesPage(QWidget):
         # Lock all manual run buttons during queue
         for card in self.cards.values():
             card.set_manual_run_locked(True)
+        self._refresh_primary_run_controls()
         self._queue_manager.start_queue(folders)
 
     def _on_pause_all(self):
@@ -2918,6 +3072,8 @@ class CreatorProfilesPage(QWidget):
     def _on_stop_all(self):
         """Stop the queue and all active downloads."""
         self._queue_manager.stop()
+        if hasattr(self, "_onego_worker") and self._onego_worker and self._onego_worker.isRunning():
+            self._onego_worker.stop()
         self.pause_all_btn.setVisible(False)
         self.resume_all_btn.setVisible(False)
         self.queue_status_lbl.setVisible(False)
@@ -3023,7 +3179,7 @@ class CreatorProfilesPage(QWidget):
                 card._set_run_button_state(False)
                 break
 
-    def _on_queue_finished(self):
+    def _on_queue_finished(self, stopped: bool = False):
         """Queue completed — show summary, unlock cards."""
         self.pause_all_btn.setVisible(False)
         self.resume_all_btn.setVisible(False)
@@ -3031,6 +3187,10 @@ class CreatorProfilesPage(QWidget):
         for card in self.cards.values():
             card.set_manual_run_locked(False)
             card.set_queue_active(False)
+        self._refresh_primary_run_controls()
+        if stopped:
+            self.summary_btn.setVisible(False)
+            return
         # Collect failures
         failed = [c.folder.name for c in self.cards.values()
                   if c._state in ("error", "partial")]
@@ -3086,6 +3246,7 @@ class CreatorProfilesPage(QWidget):
         for fp, card in self.cards.items():
             if fp != Path(folder):
                 card.set_manual_run_locked(True)
+        self._refresh_primary_run_controls()
 
     def _on_card_run_finished(self, folder):
         """Unlock all cards when a manual (non-queue) run finishes."""
@@ -3093,6 +3254,7 @@ class CreatorProfilesPage(QWidget):
         if not self._queue_manager.isRunning():
             for card in self.cards.values():
                 card.set_manual_run_locked(False)
+        self._refresh_primary_run_controls()
 
     def _on_summary_clicked(self):
         dlg = FailedSummaryDialog(getattr(self, "_failed_folders_cache", []), self)

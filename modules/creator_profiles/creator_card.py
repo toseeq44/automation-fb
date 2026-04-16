@@ -1232,3 +1232,17 @@ class CreatorCard(QFrame):
 
     def is_running(self) -> bool:
         return bool(self.worker and self.worker.isRunning())
+
+    def refresh_from_disk(self):
+        """Reload lightweight card state without rebuilding the whole page."""
+        if self.is_running():
+            return
+        if not self.folder.exists():
+            return
+
+        selected = self.selection_cb.isChecked() if hasattr(self, "selection_cb") else False
+        self.config = CreatorConfig(self.folder)
+        self._load_values()
+        self._refresh_activity()
+        if hasattr(self, "selection_cb"):
+            self.selection_cb.setChecked(selected)

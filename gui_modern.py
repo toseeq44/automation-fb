@@ -834,8 +834,10 @@ class VideoToolSuiteGUI(QMainWindow):
             VideoDownloaderPage(back_callback=self.go_to_main_menu, links=self.links)
         )
         self.downloading_editing = CreatorProfilesPage()  # manages its own layout
-        self.video_editor = self.wrap_in_3d(
-            IntegratedVideoEditor(self.go_to_main_menu)
+        self._video_editor_loaded = False
+        self.video_editor = self._build_lazy_placeholder(
+            "Video Editor",
+            "Loads only when you open it so the main interface stays fast.",
         )
         self.metadata_remover = self.wrap_in_3d(
             MetadataRemoverPage(self.go_to_main_menu)
@@ -866,6 +868,49 @@ class VideoToolSuiteGUI(QMainWindow):
     def wrap_in_3d(self, widget):
         """Wrap module widget in 3D container"""
         return Content3DWrapper(widget)
+
+    def _build_lazy_placeholder(self, title, subtitle):
+        placeholder = QWidget()
+        layout = QVBoxLayout(placeholder)
+        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setSpacing(12)
+        layout.addStretch(1)
+
+        title_lbl = QLabel(title)
+        title_lbl.setAlignment(Qt.AlignCenter)
+        title_lbl.setStyleSheet(
+            f"color: {OneSoulTheme.TEXT_CYAN}; font-size: 24px; font-weight: bold;"
+        )
+        layout.addWidget(title_lbl)
+
+        subtitle_lbl = QLabel(subtitle)
+        subtitle_lbl.setAlignment(Qt.AlignCenter)
+        subtitle_lbl.setWordWrap(True)
+        subtitle_lbl.setStyleSheet(
+            f"color: {OneSoulTheme.TEXT_SECONDARY}; font-size: 14px;"
+        )
+        layout.addWidget(subtitle_lbl)
+        layout.addStretch(1)
+        return self.wrap_in_3d(placeholder)
+
+    def _ensure_video_editor_loaded(self):
+        if self._video_editor_loaded:
+            return
+
+        placeholder = self.video_editor
+        index = self.stacked_widget.indexOf(placeholder)
+        if index < 0:
+            return
+
+        real_widget = self.wrap_in_3d(
+            IntegratedVideoEditor(self.go_to_main_menu)
+        )
+        self.stacked_widget.removeWidget(placeholder)
+        placeholder.deleteLater()
+        self.stacked_widget.insertWidget(index, real_widget)
+        self.video_editor = real_widget
+        self._video_editor_loaded = True
+        self.stacked_widget.setCurrentIndex(index)
 
     def apply_global_theme(self):
         """Apply centralized theme to entire app"""
@@ -904,6 +949,8 @@ class VideoToolSuiteGUI(QMainWindow):
 
         index = module_map.get(module_id, 0)
         self.stacked_widget.setCurrentIndex(index)
+        if module_id == "video_editor" and not self._video_editor_loaded:
+            QTimer.singleShot(0, self._ensure_video_editor_loaded)
 
     def open_video_downloader_from_grabber(self):
         """Push freshly grabbed links into the downloader and switch view"""

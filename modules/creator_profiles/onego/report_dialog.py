@@ -8,12 +8,11 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QDialog,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
+    QScrollArea,
     QVBoxLayout,
+    QWidget,
 )
 
 _BG = "#0d1117"
@@ -39,7 +38,8 @@ class OneGoReportDialog(QDialog):
     def __init__(self, report: Dict[str, Any], parent=None):
         super().__init__(parent)
         self.setWindowTitle("OneGo Report")
-        self.setMinimumSize(700, 500)
+        self.setMinimumSize(760, 560)
+        self.resize(980, 720)
         self.setStyleSheet(f"""
             QDialog {{ background:{_BG}; color:white; }}
             QLabel {{ color:white; background:transparent; border:none; }}
@@ -49,6 +49,7 @@ class OneGoReportDialog(QDialog):
 
     def _build(self):
         vbox = QVBoxLayout(self)
+        vbox.setContentsMargins(12, 12, 12, 12)
         vbox.setSpacing(10)
 
         # Title
@@ -74,11 +75,44 @@ class OneGoReportDialog(QDialog):
             err_lbl.setWordWrap(True)
             vbox.addWidget(err_lbl)
 
-        # Profile details table
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setStyleSheet("""
+            QScrollArea { background: transparent; border: none; }
+            QScrollBar:vertical  { background:#0a0e1a; width:8px; border-radius:4px; }
+            QScrollBar::handle:vertical {
+                background:rgba(0,212,255,0.4); border-radius:4px; min-height:20px;
+            }
+            QScrollBar::handle:vertical:hover { background:#00d4ff; }
+            QScrollBar::add-line, QScrollBar::sub-line { height:0; width:0; }
+        """)
+
+        body = QWidget()
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 6, 0)
+        body_layout.setSpacing(8)
+
+        # Profile details
         profiles = self._report.get("profiles", [])
         if profiles:
             for prof in profiles:
-                vbox.addWidget(self._build_profile_section(prof))
+                body_layout.addWidget(self._build_profile_section(prof))
+        else:
+            empty_lbl = QLabel(
+                f"<div style='padding:8px; background:{_BG_CARD}; border-radius:6px;'>"
+                f"<span style='color:rgba(255,255,255,0.6);'>No profile results found.</span>"
+                f"</div>"
+            )
+            empty_lbl.setTextFormat(Qt.RichText)
+            empty_lbl.setWordWrap(True)
+            body_layout.addWidget(empty_lbl)
+
+        body_layout.addStretch(1)
+        scroll.setWidget(body)
+        vbox.addWidget(scroll, 1)
 
         # Close button
         btn_row = QHBoxLayout()

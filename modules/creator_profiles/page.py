@@ -15,7 +15,7 @@ import re
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Set
 from urllib.parse import parse_qs, urlparse
 
 from PyQt5.QtCore import Qt, QEvent, QFileSystemWatcher, QTimer
@@ -2253,6 +2253,18 @@ class CreatorProfilesPage(QWidget):
         self._col_timer.timeout.connect(self._update_cols)
         self._daily_guard_timer = QTimer(self)
         self._daily_guard_timer.timeout.connect(self._daily_guard_cycle)
+        self._structure_refresh_timer = QTimer(self)
+        self._structure_refresh_timer.setSingleShot(True)
+        self._structure_refresh_timer.setInterval(250)
+        self._structure_refresh_timer.timeout.connect(self._refresh_cards)
+        self._card_refresh_timer = QTimer(self)
+        self._card_refresh_timer.setSingleShot(True)
+        self._card_refresh_timer.setInterval(180)
+        self._card_refresh_timer.timeout.connect(self._flush_pending_card_refreshes)
+        self._pending_card_refreshes: Set[Path] = set()
+        self._watched_container_paths: Set[str] = set()
+        self._watched_card_paths: Set[str] = set()
+        self._refresh_in_progress = False
 
         self.setStyleSheet(f"QWidget {{ background:{_BG}; color:white; }}")
         self._build_ui()
@@ -2564,41 +2576,136 @@ class CreatorProfilesPage(QWidget):
     # ── watcher ───────────────────────────────────────────────────────────
 
     def _setup_watcher(self):
-        self.watcher = QFileSystemWatcher()
+        self.watcher = QFileSystemWatcher(self)
+        self.watcher.directoryChanged.connect(self._on_watcher_directory_changed)
+
+    @staticmethod
+    def _normalize_watch_path(path) -> str:
+        try:
+            return str(Path(path).resolve())
+        except Exception:
+            return str(Path(path))
+
+    def _sync_watcher_paths(self, folders: List[Path]):
+        desired_card_paths = {
+            self._normalize_watch_path(folder)
+            for folder in folders
+            if folder.exists()
+        }
+        desired_container_paths = set()
         if self.root.exists():
-            self.watcher.addPath(str(self.root))
-        self.watcher.directoryChanged.connect(lambda _: self._refresh_cards())
+            desired_container_paths.add(self._normalize_watch_path(self.root))
+        for folder in folders:
+            parent = folder.parent
+            if parent.exists():
+                desired_container_paths.add(self._normalize_watch_path(parent))
+
+        desired_paths = desired_card_paths | desired_container_paths
+        current_paths = self._watched_card_paths | self._watched_container_paths
+
+        remove_paths = sorted(current_paths - desired_paths)
+        if remove_paths:
+            try:
+                self.watcher.removePaths(remove_paths)
+            except Exception:
+                for watch_path in remove_paths:
+                    try:
+                        self.watcher.removePath(watch_path)
+                    except Exception:
+                        pass
+
+        add_paths = sorted(desired_paths - current_paths)
+        if add_paths:
+            try:
+                self.watcher.addPaths(add_paths)
+            except Exception:
+                for watch_path in add_paths:
+                    try:
+                        self.watcher.addPath(watch_path)
+                    except Exception:
+                        pass
+
+        self._watched_card_paths = desired_card_paths
+        self._watched_container_paths = desired_container_paths
+
+    def _schedule_structure_refresh(self):
+        self._structure_refresh_timer.start()
+
+    def _schedule_card_refresh(self, folder: Path):
+        self._pending_card_refreshes.add(Path(folder))
+        self._card_refresh_timer.start()
+
+    def _flush_pending_card_refreshes(self):
+        pending = list(self._pending_card_refreshes)
+        self._pending_card_refreshes.clear()
+        for folder in pending:
+            card = self.cards.get(Path(folder))
+            if card is None:
+                self._schedule_structure_refresh()
+                continue
+            if not card.folder.exists():
+                self._schedule_structure_refresh()
+                continue
+            card.refresh_from_disk()
+
+    def _on_watcher_directory_changed(self, changed_path: str):
+        normalized = self._normalize_watch_path(changed_path)
+
+        if normalized in self._watched_container_paths:
+            self._schedule_structure_refresh()
+            return
+
+        folder = Path(normalized)
+        card = self.cards.get(folder)
+        if card is None:
+            self._schedule_structure_refresh()
+            return
+
+        if card.is_running():
+            return
+
+        self._schedule_card_refresh(folder)
 
     # ── card management ───────────────────────────────────────────────────
 
     def _refresh_cards(self):
+        if self._refresh_in_progress:
+            self._schedule_structure_refresh()
+            return
+
+        self._refresh_in_progress = True
         self.root_lbl.setText(f"Scan:  {self.root}")
-        folders = _scan_folders(self.root)
-        folder_set = set(folders)
+        try:
+            folders = _scan_folders(self.root)
+            folder_set = set(folders)
 
-        # Remove stale cards
-        for fp in list(self.cards.keys()):
-            if fp not in folder_set:
-                card = self.cards.pop(fp)
-                card.stop_worker()
-                card.deleteLater()
+            # Remove stale cards
+            for fp in list(self.cards.keys()):
+                if fp not in folder_set:
+                    card = self.cards.pop(fp)
+                    card.stop_worker()
+                    card.deleteLater()
 
-        # Add new cards
-        for fp in folders:
-            if fp not in self.cards:
-                card = CreatorCard(fp, self.root, self.presets)
-                card.remove_requested.connect(self._on_remove_card)
-                card.run_started.connect(self._on_card_run_started)
-                card.run_finished.connect(self._on_card_run_finished)
-                self.cards[fp] = card
-                self.watcher.addPath(str(fp))
+            # Add new cards
+            for fp in folders:
+                if fp not in self.cards:
+                    card = CreatorCard(fp, self.root, self.presets)
+                    card.remove_requested.connect(self._on_remove_card)
+                    card.run_started.connect(self._on_card_run_started)
+                    card.run_finished.connect(self._on_card_run_finished)
+                    if self._is_selection_mode:
+                        card.set_selection_mode(True)
+                    self.cards[fp] = card
 
-        self._rebuild_grid()
-        n = len(self.cards)
-        self.count_lbl.setText(
-            f"{n} creator{'s' if n != 1 else ''} loaded"
-        )
-        self._toggle_empty(n == 0)
+            self._sync_watcher_paths(folders)
+            self._rebuild_grid()
+            n = len(self.cards)
+            self.count_lbl.setText(
+                f"{n} creator{'s' if n != 1 else ''} loaded"
+            )
+            self._toggle_empty(n == 0)
+        finally:
+            self._refresh_in_progress = False
 
     def _rebuild_grid(self):
         """Clear and re-populate the QGridLayout with current column count."""
@@ -2666,13 +2773,10 @@ class CreatorProfilesPage(QWidget):
                 return
 
         if folder in self.cards:
-            try:
-                self.watcher.removePath(str(folder))
-            except Exception:
-                pass
             card = self.cards.pop(folder)
             card.stop_worker()
             card.deleteLater()
+        self._sync_watcher_paths(list(self.cards.keys()))
         self._rebuild_grid()
         self._toggle_empty(len(self.cards) == 0)
 

@@ -43,7 +43,15 @@ _WATERMARK_AVATAR_DEFAULTS = {
     "height": 160,                # target box height in px
 }
 
-EDITING_MODE_VALUES = ("none", "preset", "split", "split_edit")
+EDITING_MODE_VALUES = ("none", "preset", "split", "parts", "split_edit")
+
+
+def _normalize_parts_count(value: Any, default: int = 2) -> int:
+    try:
+        count = int(value)
+    except Exception:
+        count = default
+    return max(2, min(200, count))
 
 _SPLIT_EDIT_DEFAULTS = {
     "zoom_percent": 100,
@@ -112,9 +120,10 @@ def summarize_split_edit_settings(settings: Optional[Dict[str, Any]]) -> str:
 _DEFAULTS = {
     "creator_url": "",
     "n_videos": 5,
-    "editing_mode": "none",       # "none" | "preset" | "split" | "split_edit"
+    "editing_mode": "none",       # "none" | "preset" | "split" | "parts" | "split_edit"
     "preset_name": "",
     "split_duration": 15.0,
+    "parts_count": 2,
     "split_edit_settings": get_split_edit_defaults(),
     "duplication_control": True,
     "popular_fallback": True,
@@ -193,6 +202,9 @@ class CreatorConfig:
                 wm_avatar = _WATERMARK_AVATAR_DEFAULTS.copy()
                 wm_avatar.update(merged.get("watermark_avatar") or {})
                 merged["watermark_avatar"] = wm_avatar
+                merged["parts_count"] = _normalize_parts_count(
+                    merged.get("parts_count", _DEFAULTS["parts_count"])
+                )
                 merged["split_edit_settings"] = merge_split_edit_settings(
                     merged.get("split_edit_settings")
                 )
@@ -454,6 +466,10 @@ class CreatorConfig:
     @property
     def split_duration(self) -> float:
         return float(self.data.get("split_duration", 15.0))
+
+    @property
+    def parts_count(self) -> int:
+        return _normalize_parts_count(self.data.get("parts_count", 2))
 
     @property
     def split_edit_settings(self) -> dict:

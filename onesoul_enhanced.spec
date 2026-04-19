@@ -128,6 +128,7 @@ a = Analysis(
 
         # Configs to bundle
         ('api_config.json', '.'),
+        ('license_endpoints.json', '.'),
     ] + optional_datas,  # Add optional data files
     hiddenimports=collect_submodules('encodings') + collect_submodules('demucs') + collect_submodules('openunmix') + collect_submodules('torchaudio') + collect_submodules('dora') + collect_submodules('julius') + collect_submodules('yt_dlp_ejs') + extra_hiddenimports + [
         # PyQt5 essentials

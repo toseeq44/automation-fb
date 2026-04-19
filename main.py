@@ -4,6 +4,8 @@ Main application to launch OneSoul.
 """
 import sys
 import os
+import threading
+import json
 
 # --- PyInstaller Playwright Bundling Fix ---
 if getattr(sys, 'frozen', False):
@@ -19,6 +21,7 @@ except Exception as e:
     print(f"Failed to setup debug logger at startup: {e}")
 # ------------------------------------
 
+from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
 # Choose UI version (set USE_MODERN_UI = True for new OneSoul design)
@@ -38,6 +41,11 @@ from modules.ui import LicenseActivationDialog
 import os
 import shutil
 from pathlib import Path
+
+
+HEARTBEAT_INTERVAL_SECONDS = 45
+TRACKING_POLL_INTERVAL_SECONDS = 15
+SECURITY_WATCHDOG_INTERVAL_MS = 15000
 
 
 def _should_block_frozen_helper_invocation() -> bool:
@@ -72,15 +80,28 @@ def restore_bundled_configs():
     # List of files/folders to restore
     files_to_restore = [
         "api_config.json",
+        "license_endpoints.json",
         "folder_mappings.json"
     ]
     
     for filename in files_to_restore:
         source = base_path / filename
         target = exe_dir / filename
-        
-        # If source exists in bundle but target missing in exe dir, copy it
-        if source.exists() and not target.exists():
+
+        if not source.exists():
+            continue
+
+        should_copy = not target.exists()
+        if filename == "license_endpoints.json" and target.exists():
+            try:
+                target_payload = json.loads(target.read_text(encoding="utf-8"))
+                target_primary = str(target_payload.get("primary_url", "") or "").strip().lower()
+                if (not target_primary) or ("trycloudflare.com" in target_primary):
+                    should_copy = True
+            except Exception:
+                should_copy = True
+
+        if should_copy:
             try:
                 shutil.copy2(source, target)
                 print(f"Restored bundled config: {filename}")
@@ -145,14 +166,43 @@ def main():
 
     # Initialize license manager
     server_url = config.get('license.server_url', 'http://localhost:5000')
-    license_manager = LicenseManager(server_url=server_url)
+    app_version = config.get('app.version', '1.0.0')
+    server_fallback_urls = config.get('license.server_fallback_urls', [])
+    bootstrap_urls = config.get('license.bootstrap_urls', [])
+    remember_last_good_url = config.get('license.remember_last_good_url', True)
+    heartbeat_interval_seconds = int(config.get('license.heartbeat_interval_seconds', HEARTBEAT_INTERVAL_SECONDS) or HEARTBEAT_INTERVAL_SECONDS)
+    tracking_poll_interval_seconds = int(config.get('license.task_poll_interval_seconds', TRACKING_POLL_INTERVAL_SECONDS) or TRACKING_POLL_INTERVAL_SECONDS)
+    heartbeat_interval_seconds = max(15, heartbeat_interval_seconds)
+    tracking_poll_interval_seconds = max(5, tracking_poll_interval_seconds)
+    license_manager = LicenseManager(
+        server_url=server_url,
+        app_version=app_version,
+        fallback_urls=server_fallback_urls,
+        bootstrap_urls=bootstrap_urls,
+        remember_last_good_url=remember_last_good_url,
+    )
 
-    logger.info(f"License server: {server_url}", "License")
+    license_provider = str(config.get('license.provider', 'firebase') or 'firebase').strip().lower()
+    logger.info(f"License provider: {license_provider}", "License")
+    logger.info(f"License server preference: {server_url or '(auto)'}", "License")
+    logger.info(
+        f"License endpoint candidates: {', '.join(license_manager.get_server_url_candidates()) or '(none configured)'}",
+        "License",
+    )
+    logger.info(f"Resolved license endpoint: {license_manager.get_active_server_url() or '(none yet)'}", "License")
     # Production enforcement: always validate license on startup.
     is_valid, message, license_info = license_manager.validate_license()
 
     if not is_valid:
         logger.warning(f"License validation failed: {message}", "License")
+
+        if license_manager.should_force_shutdown():
+            logger.error(f"License startup lock triggered: {license_manager.last_status_code}", "License")
+            title = "License Service Unavailable"
+            if str(license_manager.last_status_code).strip().lower() == "firebase_config_missing":
+                title = "Firebase Configuration Missing"
+            QMessageBox.critical(None, title, f"{message}\n\nOneSoul will now close.")
+            sys.exit(0)
 
         # Show activation dialog for both no license and expired license
         if not license_info:
@@ -188,6 +238,13 @@ def main():
             # License activated successfully, validate again
             is_valid, message, license_info = license_manager.validate_license()
             if not is_valid:
+                if license_manager.should_force_shutdown():
+                    logger.error(f"Post-activation startup lock triggered: {license_manager.last_status_code}", "License")
+                    title = "License Service Unavailable"
+                    if str(license_manager.last_status_code).strip().lower() == "firebase_config_missing":
+                        title = "Firebase Configuration Missing"
+                    QMessageBox.critical(None, title, f"{message}\n\nOneSoul will now close.")
+                    sys.exit(0)
                 logger.error("License activation succeeded but validation failed.", "License")
                 QMessageBox.critical(
                     None,
@@ -215,8 +272,48 @@ def main():
     logger.info("Syncing user plan across modules...", "App")
     sync_all_plans(license_manager)
 
+    # Best-effort startup heartbeat and background presence tracking.
+    hb_ok, hb_msg = license_manager.send_heartbeat("startup")
+    if hb_ok:
+        logger.info(f"Startup heartbeat accepted: {hb_msg}", "License")
+    else:
+        logger.debug(f"Startup heartbeat unavailable: {hb_msg}", "License")
+
+    heartbeat_stop = threading.Event()
+
+    def heartbeat_loop():
+        while not heartbeat_stop.wait(heartbeat_interval_seconds):
+            ok, msg = license_manager.send_heartbeat("running")
+            if ok:
+                logger.debug(f"Running heartbeat accepted: {msg}", "License")
+            else:
+                logger.warning(f"Running heartbeat unavailable: {msg}", "License")
+
+    heartbeat_thread = threading.Thread(target=heartbeat_loop, daemon=True, name="LicenseHeartbeat")
+    heartbeat_thread.start()
+
+    def tracking_loop():
+        while not heartbeat_stop.wait(tracking_poll_interval_seconds):
+            ok, msg = license_manager.poll_admin_tasks()
+            if ok:
+                logger.debug(f"Tracking poll: {msg}", "License")
+            else:
+                logger.warning(f"Tracking poll idle/unavailable: {msg}", "License")
+
+    tracking_thread = threading.Thread(target=tracking_loop, daemon=True, name="LicenseTrackingPoll")
+    tracking_thread.start()
+
     # Browser Singleton Teardown Hook
     def cleanup_browsers():
+        heartbeat_stop.set()
+        try:
+            hb_ok, hb_msg = license_manager.send_heartbeat("shutdown")
+            if hb_ok:
+                logger.info(f"Shutdown heartbeat accepted: {hb_msg}", "License")
+            else:
+                logger.debug(f"Shutdown heartbeat unavailable: {hb_msg}", "License")
+        except Exception:
+            pass
         logger.info("Application shutting down: cleaning up managed browsers", "App")
         try:
             from modules.shared.managed_chrome_session import get_managed_chrome_session
@@ -234,6 +331,26 @@ def main():
     logger.info("Launching main window", "App")
     window = VideoToolSuiteGUI(license_manager, config)
     window.show()
+
+    shutdown_notice_shown = {"value": False}
+
+    def security_watchdog():
+        if not license_manager.should_force_shutdown() or shutdown_notice_shown["value"]:
+            return
+        shutdown_notice_shown["value"] = True
+        logger.error(f"Runtime license security lock triggered: {license_manager.last_status_code}", "License")
+        QMessageBox.critical(
+            window,
+            "License Security Lock",
+            "OneSoul could not refresh its secure license lease within the allowed window.\n\n"
+            "The application will now close."
+        )
+        app.quit()
+
+    security_timer = QTimer()
+    security_timer.setInterval(SECURITY_WATCHDOG_INTERVAL_MS)
+    security_timer.timeout.connect(security_watchdog)
+    security_timer.start()
 
     # Run application
     exit_code = app.exec_()

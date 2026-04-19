@@ -13,7 +13,7 @@ import time
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
@@ -105,6 +105,7 @@ class OneGoWorker(QThread):
 
     progress = pyqtSignal(str)
     finished_signal = pyqtSignal(dict)
+    download_requested = pyqtSignal(object)
 
     def __init__(
         self,
@@ -116,7 +117,7 @@ class OneGoWorker(QThread):
         profile_hint: str,
         card_folders: List[Path],
         links_root: Path,
-        download_trigger: Optional[Callable] = None,
+        download_folders: Optional[List[Path]] = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -128,7 +129,7 @@ class OneGoWorker(QThread):
         self.profile_hint = profile_hint
         self.card_folders = card_folders
         self.links_root = links_root
-        self._download_trigger = download_trigger
+        self._download_folders = list(download_folders or [])
         self._stop = False
         self._download_done = False
         self._download_stopped = False
@@ -730,8 +731,8 @@ class OneGoWorker(QThread):
             # Phase 1: Download (optional)
             if self.mode == MODE_DOWNLOAD_UPLOAD:
                 self.progress.emit("OneGo: Starting download phase...")
-                if self._download_trigger:
-                    self._download_trigger()
+                if self._download_folders:
+                    self.download_requested.emit(list(self._download_folders))
                     # Wait for download phase to complete
                     while not self._download_done and not self._stop:
                         time.sleep(0.5)
@@ -741,7 +742,7 @@ class OneGoWorker(QThread):
                         return
                     self.progress.emit("OneGo: Download phase complete. Starting upload phase...")
                 else:
-                    self.progress.emit("OneGo: No download trigger â€” skipping to upload phase.")
+                    self.progress.emit("OneGo: No download folders resolved â€” skipping to upload phase.")
             else:
                 self.progress.emit("OneGo: Upload-only mode â€” starting upload phase...")
 

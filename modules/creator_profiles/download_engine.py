@@ -1323,6 +1323,156 @@ def split_video(
     return parts
 
 
+def split_video_by_parts(
+    input_path: Path,
+    output_folder: Path,
+    parts_count: int,
+    ffmpeg: str = "ffmpeg",
+    progress_cb: Callable[[str], None] = None,
+) -> List[Path]:
+    input_path = Path(input_path)
+    output_folder = Path(output_folder)
+    output_folder.mkdir(parents=True, exist_ok=True)
+
+    try:
+        parts_count = int(parts_count)
+    except Exception:
+        parts_count = 0
+    if parts_count < 2:
+        return []
+
+    stem = input_path.stem
+    input_ext = input_path.suffix.lower()
+    out_ext = input_ext if input_ext in {".mp4", ".m4v", ".mov"} else ".mp4"
+
+    duration = _probe_duration_seconds(input_path, ffmpeg)
+    if duration <= 0:
+        return []
+    if duration < 8.0:
+        if progress_cb:
+            progress_cb(
+                f"    Parts split: skipped {input_path.name} "
+                f"(duration={duration:.2f}s < 8.00s)"
+            )
+        return []
+
+    min_valid_part_sec = 0.20
+    target_part_sec = duration / parts_count
+    if target_part_sec < min_valid_part_sec:
+        if progress_cb:
+            progress_cb(
+                f"    Parts split: skipped {input_path.name} "
+                f"(target part duration={target_part_sec:.2f}s too short)"
+            )
+        return []
+
+    for stale in output_folder.glob(f"{stem}_part*{out_ext}"):
+        try:
+            stale.unlink()
+        except Exception:
+            pass
+
+    parts: List[Path] = []
+    for idx in range(1, parts_count + 1):
+        start = duration * (idx - 1) / parts_count
+        end = duration * idx / parts_count
+        chunk = max(0.0, end - start)
+        out_path = output_folder / f"{stem}_part{idx:03d}{out_ext}"
+
+        if progress_cb:
+            progress_cb(
+                f"    Parts split {idx}/{parts_count}: "
+                f"{start:.2f}s -> {start + chunk:.2f}s"
+            )
+
+        cmd = [
+            ffmpeg, "-hide_banner", "-loglevel", "error",
+            "-i", str(input_path),
+            "-ss", f"{start:.3f}", "-t", f"{chunk:.3f}",
+            "-map", "0:v:0", "-map", "0:a?",
+            "-fflags", "+genpts",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+            "-pix_fmt", "yuv420p", "-fps_mode", "cfr",
+            "-af", "aresample=async=1:first_pts=0",
+            "-c:a", "aac", "-b:a", "160k",
+            "-avoid_negative_ts", "make_zero",
+            "-movflags", "+faststart",
+            str(out_path), "-y",
+        ]
+
+        def _run_safe(command: List[str]) -> Tuple[int, str]:
+            try:
+                res = _run_subprocess_safe(command, timeout=1800, capture_output=True)
+                stdout = res.stdout if res.stdout else b""
+                stderr = res.stderr if res.stderr else b""
+                if isinstance(stdout, str):
+                    stdout = stdout.encode(errors="ignore")
+                if isinstance(stderr, str):
+                    stderr = stderr.encode(errors="ignore")
+                text = (stderr + b"\n" + stdout).decode(errors="ignore")
+                return res.returncode, re.sub(r"\s+", " ", text).strip()
+            except Exception:
+                return -1, "ffmpeg process timed out or was terminated"
+
+        try:
+            rc, err_text = _run_safe(cmd)
+            if rc != 0:
+                cmd2 = [
+                    ffmpeg, "-hide_banner", "-loglevel", "error",
+                    "-i", str(input_path),
+                    "-ss", f"{start:.3f}", "-t", f"{chunk:.3f}",
+                    "-fflags", "+genpts",
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+                    "-pix_fmt", "yuv420p", "-fps_mode", "cfr",
+                    "-af", "aresample=async=1:first_pts=0",
+                    "-c:a", "aac", "-b:a", "128k",
+                    "-avoid_negative_ts", "make_zero",
+                    str(out_path), "-y",
+                ]
+                rc2, err_text2 = _run_safe(cmd2)
+                if rc2 != 0:
+                    if progress_cb:
+                        progress_cb(f"    Parts split: ffmpeg failed for part {idx} (rc={rc2})")
+                        preview = (err_text2 or err_text)[:180]
+                        if preview:
+                            progress_cb(f"    Parts split: {preview}")
+                    break
+
+            if out_path.exists() and out_path.stat().st_size > 0:
+                actual = _probe_duration_with_retry(out_path, ffmpeg)
+                if actual >= min_valid_part_sec:
+                    parts.append(out_path)
+                else:
+                    if _can_decode_media(out_path, ffmpeg):
+                        if progress_cb:
+                            progress_cb(
+                                f"    Parts split: keeping {out_path.name} after decode fallback "
+                                "(duration probe lagged)"
+                            )
+                        parts.append(out_path)
+                    else:
+                        if progress_cb:
+                            progress_cb(
+                                f"    Parts split: invalid part {idx} "
+                                f"(size={out_path.stat().st_size} bytes, duration={actual:.2f}s)"
+                            )
+                        try:
+                            out_path.unlink()
+                        except Exception:
+                            pass
+                        break
+            else:
+                if progress_cb:
+                    progress_cb(f"    Parts split: no output created for part {idx}")
+                break
+        except Exception as exc:
+            if progress_cb:
+                progress_cb(f"    Parts split: exception on part {idx}: {exc}")
+            break
+
+    return parts
+
+
 def apply_preset(
     input_path: Path,
     output_folder: Path,
@@ -3688,6 +3838,37 @@ class CreatorDownloadWorker(QThread):
                             pass
             elif mode == "split" and not ffmpeg_ok:
                 self.progress.emit("SKIP split: ffmpeg not available")
+
+            elif mode == "parts" and ffmpeg_ok:
+                self.progress.emit(f"Editing: splitting into {self.config.parts_count} equal parts...")
+                for fp in downloads:
+                    if self._stop:
+                        break
+                    parts = split_video_by_parts(
+                        fp,
+                        self.creator_folder,
+                        self.config.parts_count,
+                        self.ffmpeg,
+                        self.progress.emit,
+                    )
+                    if not parts:
+                        self.progress.emit(f"  INFO: parts split skipped or failed for {fp.name} - kept original")
+                    for part in parts:
+                        if self._stop:
+                            break
+                        _apply_wm(part, preserve_source=False)
+                    self.config.append_activity_event(
+                        "output_finalized",
+                        {"mode": "parts", "source": fp.name, "parts": len(parts)},
+                    )
+                    if parts and not keep_original and fp.exists():
+                        try:
+                            fp.unlink()
+                            self.progress.emit(f"Removed original: {fp.name}")
+                        except Exception:
+                            pass
+            elif mode == "parts" and not ffmpeg_ok:
+                self.progress.emit("SKIP parts: ffmpeg not available")
 
             elif mode == "preset" and self.config.preset_name and ffmpeg_ok:
                 self.progress.emit(f"Editing: applying preset '{self.config.preset_name}'...")

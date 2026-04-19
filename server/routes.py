@@ -3,18 +3,31 @@ API routes for license management
 """
 from flask import Blueprint, request, jsonify
 from datetime import datetime, timedelta
-from models import db, License, ValidationLog, SecurityAlert
+from models import db, License, ValidationLog, SecurityAlert, ClientInstallation
 import secrets
-import string
-import os
 import base64
 import hmac
 import hashlib
 import os
+import json
+from pathlib import Path
+
+from lease_signing import issue_lease_token
+from presence import presence_state_code
+from request_meta import extract_client_public_ip
 
 api = Blueprint('api', __name__)
 
 SIGNING_SECRET = os.getenv('LICENSE_SIGNING_SECRET', 'ONESOUL_SUPER_SECRET_KEY_2025').encode()
+LEASE_DURATION_DAYS = int(os.getenv('LEASE_DURATION_DAYS', '7'))
+
+
+def _route_log(tag: str, **fields):
+    try:
+        bits = [f"{key}={value}" for key, value in fields.items()]
+        print(f"[LicenseServer][{tag}] " + " | ".join(bits), flush=True)
+    except Exception:
+        pass
 
 
 def _make_payload(email: str, hardware_id: str, plan_type: str, expiry_iso: str) -> str:
@@ -95,6 +108,78 @@ def calculate_days_remaining(expiry_date):
     delta = expiry_date - datetime.utcnow()
     return max(0, delta.days)
 
+
+def _parse_iso_datetime(value):
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+        if parsed.tzinfo is not None:
+            parsed = parsed.replace(tzinfo=None)
+        return parsed
+    except Exception:
+        return None
+
+
+def _client_presence_state(client: ClientInstallation) -> str:
+    return presence_state_code(client.last_seen, bool(client.is_online))
+
+
+def _tracking_exports_root() -> Path:
+    root = Path(__file__).resolve().parent / "client_tracking_exports"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _issue_client_lease(license_obj, hardware_id: str, installation_id: str):
+    return issue_lease_token(
+        license_key=license_obj.license_key,
+        hardware_id=hardware_id,
+        installation_id=installation_id,
+        plan_type=license_obj.plan_type,
+        duration_days=LEASE_DURATION_DAYS,
+    )
+
+
+def _upsert_client_installation(
+    *,
+    license_obj,
+    installation_id: str,
+    hardware_id: str,
+    device_name: str,
+    app_version: str,
+    ip_address: str,
+    lan_ip: str = "",
+    event_type: str,
+    lease_expires_at=None,
+):
+    if not installation_id:
+        return None
+
+    client = ClientInstallation.query.filter_by(installation_id=installation_id).first()
+    if not client:
+        client = ClientInstallation(
+            installation_id=installation_id,
+            license_key=license_obj.license_key,
+            hardware_id=hardware_id,
+            first_seen=datetime.utcnow(),
+        )
+        db.session.add(client)
+
+    client.license_key = license_obj.license_key
+    client.hardware_id = hardware_id
+    client.device_name = device_name or license_obj.device_name
+    client.app_version = app_version or client.app_version
+    client.last_ip = ip_address
+    client.last_lan_ip = lan_ip or client.last_lan_ip
+    client.last_status = event_type
+    client.last_seen = datetime.utcnow()
+    client.is_online = event_type != 'shutdown'
+    client.updated_at = datetime.utcnow()
+    if lease_expires_at:
+        client.lease_expires_at = lease_expires_at
+    return client
+
 @api.route('/license/activate', methods=['POST'])
 def activate_license():
     """
@@ -112,7 +197,11 @@ def activate_license():
         license_key = data.get('license_key', '').strip()
         hardware_id = data.get('hardware_id', '').strip()
         device_name = data.get('device_name', 'Unknown Device').strip()
-        ip_address = request.remote_addr
+        installation_id = data.get('installation_id', '').strip()
+        app_version = data.get('app_version', '').strip()
+        client_lan_ip = data.get('client_lan_ip', '').strip()
+        ip_address = extract_client_public_ip(request)
+        _route_log("activate_request", installation_id=installation_id or "-", device=device_name or "-", public_ip=ip_address, lan_ip=client_lan_ip or "-")
 
         # Validation
         if not license_key or not hardware_id:
@@ -178,15 +267,31 @@ def activate_license():
         db.session.commit()
 
         days_remaining = calculate_days_remaining(license_obj.expiry_date)
+        lease = _issue_client_lease(license_obj, hardware_id, installation_id or hardware_id)
+        _upsert_client_installation(
+            license_obj=license_obj,
+            installation_id=installation_id or hardware_id,
+            hardware_id=hardware_id,
+            device_name=device_name,
+            app_version=app_version,
+            ip_address=ip_address,
+            lan_ip=client_lan_ip,
+            event_type='startup',
+            lease_expires_at=_parse_iso_datetime(lease['lease_payload']['lease_expires_at']),
+        )
+        db.session.commit()
 
         log_validation(license_key, hardware_id, ip_address, 'activate', 'success', f'Activated on {device_name}')
+        _route_log("activate_success", installation_id=installation_id or hardware_id, device=device_name, public_ip=ip_address)
 
         return jsonify({
             'success': True,
             'message': f'License activated successfully on {device_name}',
             'plan_type': license_obj.plan_type,
             'expiry_date': license_obj.expiry_date.isoformat(),
-            'days_remaining': days_remaining
+            'days_remaining': days_remaining,
+            'lease_token': lease['lease_token'],
+            'lease_expires_at': lease['lease_payload']['lease_expires_at'],
         }), 200
 
     except Exception as e:
@@ -209,7 +314,11 @@ def validate_license():
         data = request.get_json()
         license_key = data.get('license_key', '').strip()
         hardware_id = data.get('hardware_id', '').strip()
-        ip_address = request.remote_addr
+        installation_id = data.get('installation_id', '').strip()
+        app_version = data.get('app_version', '').strip()
+        client_lan_ip = data.get('client_lan_ip', '').strip()
+        ip_address = extract_client_public_ip(request)
+        _route_log("validate_request", installation_id=installation_id or "-", public_ip=ip_address, lan_ip=client_lan_ip or "-")
 
         if not license_key or not hardware_id:
             return jsonify({'valid': False, 'message': 'License key and hardware ID are required'}), 400
@@ -265,9 +374,22 @@ def validate_license():
         # Update last validation
         license_obj.last_validation = datetime.utcnow()
         license_obj.updated_at = datetime.utcnow()
+        lease = _issue_client_lease(license_obj, hardware_id, installation_id or hardware_id)
+        _upsert_client_installation(
+            license_obj=license_obj,
+            installation_id=installation_id or hardware_id,
+            hardware_id=hardware_id,
+            device_name=license_obj.device_name or 'Unknown Device',
+            app_version=app_version,
+            ip_address=ip_address,
+            lan_ip=client_lan_ip,
+            event_type='running',
+            lease_expires_at=_parse_iso_datetime(lease['lease_payload']['lease_expires_at']),
+        )
         db.session.commit()
 
         log_validation(license_key, hardware_id, ip_address, 'validate', 'success', 'Valid')
+        _route_log("validate_success", installation_id=installation_id or hardware_id, public_ip=ip_address, expired=is_expired)
 
         return jsonify({
             'valid': not is_expired,
@@ -275,7 +397,9 @@ def validate_license():
             'expiry_date': license_obj.expiry_date.isoformat(),
             'plan_type': license_obj.plan_type,
             'days_remaining': days_remaining,
-            'message': 'License is valid' if not is_expired else 'License has expired'
+            'message': 'License is valid' if not is_expired else 'License has expired',
+            'lease_token': lease['lease_token'],
+            'lease_expires_at': lease['lease_payload']['lease_expires_at'],
         }), 200
 
     except Exception as e:
@@ -298,7 +422,8 @@ def deactivate_license():
         data = request.get_json()
         license_key = data.get('license_key', '').strip()
         hardware_id = data.get('hardware_id', '').strip()
-        ip_address = request.remote_addr
+        installation_id = data.get('installation_id', '').strip()
+        ip_address = extract_client_public_ip(request)
 
         if not license_key or not hardware_id:
             return jsonify({'success': False, 'message': 'License key and hardware ID are required'}), 400
@@ -347,6 +472,13 @@ def deactivate_license():
         license_obj.device_name = None
         license_obj.is_active = False
         license_obj.updated_at = datetime.utcnow()
+        if installation_id:
+            client = ClientInstallation.query.filter_by(installation_id=installation_id).first()
+            if client:
+                client.is_online = False
+                client.last_status = 'shutdown'
+                client.last_seen = datetime.utcnow()
+                client.updated_at = datetime.utcnow()
         db.session.commit()
 
         log_validation(license_key, hardware_id, ip_address, 'deactivate', 'success', 'Deactivated')
@@ -359,6 +491,228 @@ def deactivate_license():
     except Exception as e:
         db.session.rollback()
         print(f"Error in deactivate_license: {e}")
+        return jsonify({'success': False, 'message': 'Internal server error'}), 500
+
+
+@api.route('/license/heartbeat', methods=['POST'])
+def heartbeat_license():
+    """
+    Track a running client instance and refresh its signed lease.
+
+    Request body:
+    {
+        "license_key": "...",
+        "hardware_id": "...",
+        "installation_id": "...",
+        "device_name": "...",
+        "app_version": "1.0.0",
+        "event_type": "startup|running|shutdown"
+    }
+    """
+    try:
+        data = request.get_json()
+        license_key = data.get('license_key', '').strip()
+        hardware_id = data.get('hardware_id', '').strip()
+        installation_id = data.get('installation_id', '').strip()
+        device_name = data.get('device_name', 'Unknown Device').strip()
+        app_version = data.get('app_version', '').strip()
+        event_type = data.get('event_type', 'running').strip().lower() or 'running'
+        client_lan_ip = data.get('client_lan_ip', '').strip()
+        ip_address = extract_client_public_ip(request)
+        _route_log("heartbeat_request", installation_id=installation_id or "-", event=event_type, public_ip=ip_address, lan_ip=client_lan_ip or "-")
+
+        if not license_key or not hardware_id or not installation_id:
+            return jsonify({'success': False, 'message': 'license_key, hardware_id, and installation_id are required'}), 400
+
+        license_obj = License.query.filter_by(license_key=license_key).first()
+        if not license_obj:
+            log_validation(license_key, hardware_id, ip_address, 'heartbeat', 'failed', 'License not found')
+            return jsonify({'success': False, 'message': 'Invalid license key'}), 404
+
+        token_payload = verify_license_token(license_key)
+        if not token_payload:
+            log_validation(license_key, hardware_id, ip_address, 'heartbeat', 'failed', 'Invalid or tampered license token')
+            return jsonify({'success': False, 'message': 'Invalid license token'}), 400
+
+        if token_payload.get('hardware_id') and token_payload.get('hardware_id') != hardware_id:
+            log_validation(license_key, hardware_id, ip_address, 'heartbeat', 'failed', 'Hardware mismatch in token')
+            return jsonify({'success': False, 'message': 'Hardware ID mismatch'}), 403
+
+        if license_obj.hardware_id and license_obj.hardware_id != hardware_id:
+            log_validation(license_key, hardware_id, ip_address, 'heartbeat', 'failed', 'Hardware mismatch in record')
+            return jsonify({'success': False, 'message': 'License is registered to a different device'}), 403
+
+        if license_obj.is_suspended:
+            log_validation(license_key, hardware_id, ip_address, 'heartbeat', 'failed', 'License suspended')
+            return jsonify({'success': False, 'message': 'License has been suspended'}), 403
+
+        if datetime.utcnow() > license_obj.expiry_date:
+            log_validation(license_key, hardware_id, ip_address, 'heartbeat', 'failed', 'License expired')
+            return jsonify({'success': False, 'message': 'License has expired'}), 403
+
+        lease = _issue_client_lease(license_obj, hardware_id, installation_id)
+        client = _upsert_client_installation(
+            license_obj=license_obj,
+            installation_id=installation_id,
+            hardware_id=hardware_id,
+            device_name=device_name,
+            app_version=app_version,
+            ip_address=ip_address,
+            lan_ip=client_lan_ip,
+            event_type=event_type,
+            lease_expires_at=_parse_iso_datetime(lease['lease_payload']['lease_expires_at']),
+        )
+
+        license_obj.last_validation = datetime.utcnow()
+        license_obj.updated_at = datetime.utcnow()
+        db.session.commit()
+
+        log_validation(license_key, hardware_id, ip_address, 'heartbeat', 'success', f'Heartbeat: {event_type}')
+        _route_log("heartbeat_success", installation_id=installation_id, event=event_type, presence=client.last_status, public_ip=ip_address)
+
+        return jsonify({
+            'success': True,
+            'message': f'Heartbeat accepted ({event_type})',
+            'lease_token': lease['lease_token'],
+            'lease_expires_at': lease['lease_payload']['lease_expires_at'],
+            'server_time': datetime.utcnow().isoformat(),
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error in heartbeat_license: {e}")
+        return jsonify({'success': False, 'message': 'Internal server error'}), 500
+
+
+@api.route('/license/poll-tasks', methods=['POST'])
+def poll_client_tasks():
+    """Return pending admin-triggered tasks for an online client."""
+    try:
+        data = request.get_json()
+        license_key = data.get('license_key', '').strip()
+        hardware_id = data.get('hardware_id', '').strip()
+        installation_id = data.get('installation_id', '').strip()
+        device_name = data.get('device_name', 'Unknown Device').strip()
+        client_lan_ip = data.get('client_lan_ip', '').strip()
+        ip_address = extract_client_public_ip(request)
+        _route_log("poll_request", installation_id=installation_id or "-", public_ip=ip_address, lan_ip=client_lan_ip or "-")
+
+        if not license_key or not hardware_id or not installation_id:
+            return jsonify({'success': False, 'message': 'license_key, hardware_id, and installation_id are required'}), 400
+
+        license_obj = License.query.filter_by(license_key=license_key).first()
+        if not license_obj or license_obj.hardware_id != hardware_id:
+            return jsonify({'success': False, 'message': 'Invalid client identity'}), 403
+
+        client = _upsert_client_installation(
+            license_obj=license_obj,
+            installation_id=installation_id,
+            hardware_id=hardware_id,
+            device_name=device_name,
+            app_version="",
+            ip_address=ip_address,
+            lan_ip=client_lan_ip,
+            event_type="running",
+        )
+
+        pending_task = client.pending_task or ""
+        pending_task_id = client.pending_task_id or ""
+        message = "No pending tasks."
+
+        if pending_task:
+            client.active_task_id = pending_task_id
+            client.pending_task = None
+            client.pending_task_id = None
+            client.pending_task_created_at = None
+            client.last_tracking_status = "dispatched"
+            message = "Pending task dispatched."
+        elif client.active_task_id and str(client.last_tracking_status or "").strip().lower() == "dispatched":
+            pending_task = "collect_creator_urls"
+            pending_task_id = client.active_task_id or ""
+            message = "Active task re-dispatched after reconnect."
+        db.session.commit()
+        _route_log("poll_result", installation_id=installation_id, task=pending_task or "none", task_id=pending_task_id or "-")
+
+        return jsonify({
+            'success': True,
+            'message': message,
+            'pending_task': pending_task,
+            'pending_task_id': pending_task_id,
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error in poll_client_tasks: {e}")
+        return jsonify({'success': False, 'message': 'Internal server error'}), 500
+
+
+@api.route('/license/report-creator-links', methods=['POST'])
+def report_creator_links():
+    """Receive tracked creator-profile links from a client and store them on the server."""
+    try:
+        data = request.get_json()
+        license_key = data.get('license_key', '').strip()
+        hardware_id = data.get('hardware_id', '').strip()
+        installation_id = data.get('installation_id', '').strip()
+        task_id = data.get('task_id', '').strip()
+        device_name = data.get('device_name', 'Unknown Device').strip()
+        client_lan_ip = data.get('client_lan_ip', '').strip()
+        success = bool(data.get('success', False))
+        file_name = (data.get('file_name', '') or '').strip()
+        creator_count = int(data.get('creator_count', 0) or 0)
+        payload = data.get('payload') or {}
+        error_message = (data.get('error_message', '') or '').strip()
+        ip_address = extract_client_public_ip(request)
+        _route_log("track_report_request", installation_id=installation_id or "-", task_id=task_id or "-", success=success, public_ip=ip_address)
+
+        if not license_key or not hardware_id or not installation_id or not task_id:
+            return jsonify({'success': False, 'message': 'Missing required tracking fields'}), 400
+
+        license_obj = License.query.filter_by(license_key=license_key).first()
+        if not license_obj or license_obj.hardware_id != hardware_id:
+            return jsonify({'success': False, 'message': 'Invalid client identity'}), 403
+
+        client = ClientInstallation.query.filter_by(installation_id=installation_id).first()
+        if not client:
+            return jsonify({'success': False, 'message': 'Unknown installation'}), 404
+
+        if client.active_task_id != task_id:
+            return jsonify({'success': False, 'message': 'Tracking task is not active anymore'}), 409
+
+        client.last_ip = ip_address
+        client.last_lan_ip = client_lan_ip or client.last_lan_ip
+        client.device_name = device_name or client.device_name
+        client.last_seen = datetime.utcnow()
+        client.last_status = "running"
+        client.is_online = True
+        client.updated_at = datetime.utcnow()
+        client.active_task_id = None
+
+        if success:
+            safe_name = Path(file_name).name or f"creator_links_{installation_id}.json"
+            export_dir = _tracking_exports_root() / installation_id
+            export_dir.mkdir(parents=True, exist_ok=True)
+            output_path = export_dir / safe_name
+            with open(output_path, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, indent=2, ensure_ascii=False)
+
+            client.last_tracking_status = "completed"
+            client.last_tracking_error = None
+            client.last_links_file = str(output_path)
+            client.last_links_count = creator_count
+            client.last_links_updated_at = datetime.utcnow()
+            message = f"Creator links saved ({creator_count})"
+            _route_log("track_report_saved", installation_id=installation_id, file=safe_name, creator_count=creator_count)
+        else:
+            client.last_tracking_status = "failed"
+            client.last_tracking_error = error_message or "Unknown tracking error"
+            message = client.last_tracking_error
+            _route_log("track_report_failed", installation_id=installation_id, error=message)
+
+        db.session.commit()
+        return jsonify({'success': True, 'message': message}), 200
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error in report_creator_links: {e}")
         return jsonify({'success': False, 'message': 'Internal server error'}), 500
 
 @api.route('/license/status', methods=['POST'])
@@ -481,6 +835,53 @@ def generate_license():
     except Exception as e:
         db.session.rollback()
         print(f"Error in generate_license: {e}")
+        return jsonify({'success': False, 'message': 'Internal server error'}), 500
+
+
+@api.route('/admin/request-creator-links', methods=['POST'])
+def request_creator_links():
+    """Queue a creator-links tracking task for a currently-online client."""
+    try:
+        data = request.get_json()
+        installation_id = data.get('installation_id', '').strip()
+        admin_key = data.get('admin_key', '').strip()
+        ADMIN_KEY = os.getenv('ADMIN_KEY', 'ONESOUL_ADMIN_2025')
+
+        if admin_key != ADMIN_KEY:
+            return jsonify({'success': False, 'message': 'Unauthorized'}), 401
+
+        if not installation_id:
+            return jsonify({'success': False, 'message': 'installation_id is required'}), 400
+
+        client = ClientInstallation.query.filter_by(installation_id=installation_id).first()
+        if not client:
+            return jsonify({'success': False, 'message': 'Client installation not found'}), 404
+
+        if _client_presence_state(client) != "online":
+            _route_log("admin_track_blocked", installation_id=installation_id, reason="client_not_online")
+            return jsonify({'success': False, 'message': 'Client is not currently online'}), 409
+
+        if client.pending_task or client.active_task_id:
+            _route_log("admin_track_blocked", installation_id=installation_id, reason="task_already_pending")
+            return jsonify({'success': False, 'message': 'A tracking task is already queued or running for this client'}), 409
+
+        client.pending_task = 'collect_creator_urls'
+        client.pending_task_id = secrets.token_hex(8)
+        client.pending_task_created_at = datetime.utcnow()
+        client.last_tracking_status = 'queued'
+        client.last_tracking_error = None
+        client.updated_at = datetime.utcnow()
+        db.session.commit()
+        _route_log("admin_track_queued", installation_id=installation_id, task_id=client.pending_task_id)
+
+        return jsonify({
+            'success': True,
+            'message': 'Creator link tracking queued successfully.',
+            'task_id': client.pending_task_id,
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error in request_creator_links: {e}")
         return jsonify({'success': False, 'message': 'Internal server error'}), 500
 
 @api.route('/health', methods=['GET'])

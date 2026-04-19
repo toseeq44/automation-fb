@@ -49,3 +49,4 @@ proglog>=0.1.10
 Flask
 Flask-Limiter
 Flask-SQLAlchemy
+waitress>=3.0.2

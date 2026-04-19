@@ -13,7 +13,7 @@ class License(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     license_key = db.Column(db.String(100), unique=True, nullable=False, index=True)
     email = db.Column(db.String(255), nullable=False)
-    plan_type = db.Column(db.String(20), nullable=False)  # 'monthly', 'yearly', 'trial'
+    plan_type = db.Column(db.String(20), nullable=False)  # 'basic' or 'pro'
     purchase_date = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     expiry_date = db.Column(db.DateTime, nullable=False)
     hardware_id = db.Column(db.String(255), nullable=True)  # Null until activated
@@ -28,6 +28,7 @@ class License(db.Model):
     # Relationships
     validation_logs = db.relationship('ValidationLog', backref='license', lazy=True, cascade='all, delete-orphan')
     security_alerts = db.relationship('SecurityAlert', backref='license', lazy=True, cascade='all, delete-orphan')
+    client_installations = db.relationship('ClientInstallation', backref='license', lazy=True, cascade='all, delete-orphan')
 
     def __repr__(self):
         return f'<License {self.license_key} - {self.email}>'
@@ -76,3 +77,36 @@ class SecurityAlert(db.Model):
 
     def __repr__(self):
         return f'<SecurityAlert {self.license_key} - {self.alert_type} - {self.severity}>'
+
+
+class ClientInstallation(db.Model):
+    """Track each installed/running client instance for admin visibility."""
+    __tablename__ = 'client_installations'
+
+    id = db.Column(db.Integer, primary_key=True)
+    installation_id = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    license_key = db.Column(db.String(100), db.ForeignKey('licenses.license_key'), nullable=False, index=True)
+    hardware_id = db.Column(db.String(255), nullable=False, index=True)
+    device_name = db.Column(db.String(255), nullable=True)
+    app_version = db.Column(db.String(50), nullable=True)
+    is_online = db.Column(db.Boolean, default=False, nullable=False)
+    last_status = db.Column(db.String(32), nullable=True)  # startup, running, shutdown
+    last_ip = db.Column(db.String(50), nullable=True)
+    last_lan_ip = db.Column(db.String(50), nullable=True)
+    pending_task = db.Column(db.String(64), nullable=True)
+    pending_task_id = db.Column(db.String(64), nullable=True)
+    pending_task_created_at = db.Column(db.DateTime, nullable=True)
+    active_task_id = db.Column(db.String(64), nullable=True)
+    last_tracking_status = db.Column(db.String(64), nullable=True)
+    last_tracking_error = db.Column(db.Text, nullable=True)
+    last_links_file = db.Column(db.String(512), nullable=True)
+    last_links_count = db.Column(db.Integer, nullable=True)
+    last_links_updated_at = db.Column(db.DateTime, nullable=True)
+    lease_expires_at = db.Column(db.DateTime, nullable=True)
+    first_seen = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_seen = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f'<ClientInstallation {self.installation_id} - {self.last_status}>'

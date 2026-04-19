@@ -70,8 +70,8 @@ _WM_COLOR_PRESETS = [
     ("Purple", "#B388FF"),
 ]
 
-_EDIT_MODE_LABELS = ["None", "Preset", "Split", "Split + Edit"]
-_EDIT_MODE_VALUES = ["none", "preset", "split", "split_edit"]
+_EDIT_MODE_LABELS = ["None", "Preset", "Split", "Parts", "Split + Edit"]
+_EDIT_MODE_VALUES = ["none", "preset", "split", "parts", "split_edit"]
 
 
 def _edit_mode_value(index: int) -> str:
@@ -385,6 +385,12 @@ class AddCreatorDialog(QDialog):
         self.n_spin.setValue(5)
         form.addRow("N Videos:", self.n_spin)
 
+        self.upload_spin = QSpinBox()
+        self.upload_spin.setRange(0, 500)
+        self.upload_spin.setValue(0)
+        self.upload_spin.setToolTip("Upload target per OneGo run (0 = skip)")
+        form.addRow("Upload Target:", self.upload_spin)
+
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(_EDIT_MODE_LABELS)
         self.mode_combo.currentIndexChanged.connect(self._on_mode_change)
@@ -399,6 +405,12 @@ class AddCreatorDialog(QDialog):
         self.split_spin.setValue(15.0)
         self.split_spin.setSuffix(" s")
         form.addRow("Split Duration:", self.split_spin)
+
+        self.parts_spin = QSpinBox()
+        self.parts_spin.setRange(2, 200)
+        self.parts_spin.setValue(2)
+        self.parts_spin.setSuffix(" parts")
+        form.addRow("Parts Count:", self.parts_spin)
 
         self.split_edit_btn = QPushButton("Configure Split + Edit")
         self.split_edit_btn.clicked.connect(self._open_split_edit_dialog)
@@ -695,11 +707,12 @@ class AddCreatorDialog(QDialog):
         self.name_edit.setText(_suggest_folder_name_from_url(url))
 
     def _on_mode_change(self):
-        idx = self.mode_combo.currentIndex()
-        self.preset_combo.setVisible(idx == 1)
-        self.split_spin.setVisible(idx in (2, 3))
-        self.split_edit_panel.setVisible(idx == 3)
-        if idx == 3:
+        mode = _edit_mode_value(self.mode_combo.currentIndex())
+        self.preset_combo.setVisible(mode == "preset")
+        self.split_spin.setVisible(mode in {"split", "split_edit"})
+        self.parts_spin.setVisible(mode == "parts")
+        self.split_edit_panel.setVisible(mode == "split_edit")
+        if mode == "split_edit":
             self._open_split_edit_dialog()
 
     def _refresh_split_edit_summary(self):
@@ -778,9 +791,11 @@ class AddCreatorDialog(QDialog):
         mode = _edit_mode_value(self.mode_combo.currentIndex())
         return {
             "n_videos": self.n_spin.value(),
+            "uploading_target": self.upload_spin.value(),
             "editing_mode": mode,
             "preset_name": self.preset_combo.currentText(),
             "split_duration": self.split_spin.value(),
+            "parts_count": self.parts_spin.value(),
             "split_edit_settings": self._split_edit_settings,
             "duplication_control": self.dup_check.isChecked(),
             "popular_fallback": self.pop_check.isChecked(),
@@ -1047,6 +1062,10 @@ class BulkAddDialog(QDialog):
         self.n_spin = QSpinBox()
         self.n_spin.setRange(1, 500)
         self.n_spin.setValue(5)
+        self.upload_spin = QSpinBox()
+        self.upload_spin.setRange(0, 500)
+        self.upload_spin.setValue(0)
+        self.upload_spin.setToolTip("Upload target per OneGo run (0 = skip)")
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(_EDIT_MODE_LABELS)
         self.mode_combo.currentIndexChanged.connect(self._on_mode_change)
@@ -1056,6 +1075,10 @@ class BulkAddDialog(QDialog):
         self.split_spin.setRange(1.0, 3600.0)
         self.split_spin.setValue(15.0)
         self.split_spin.setSuffix(" s")
+        self.parts_spin = QSpinBox()
+        self.parts_spin.setRange(2, 200)
+        self.parts_spin.setValue(2)
+        self.parts_spin.setSuffix(" parts")
         self.split_edit_btn = QPushButton("Configure Split + Edit")
         self.split_edit_btn.clicked.connect(self._open_split_edit_dialog)
         self.split_edit_summary_lbl = QLabel("")
@@ -1087,9 +1110,11 @@ class BulkAddDialog(QDialog):
         settings_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
         settings_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
         settings_form.addRow("N Videos:", self.n_spin)
+        settings_form.addRow("Upload Target:", self.upload_spin)
         settings_form.addRow("Editing Mode:", self.mode_combo)
         settings_form.addRow("Preset:", self.preset_combo)
         settings_form.addRow("Split Duration:", self.split_spin)
+        settings_form.addRow("Parts Count:", self.parts_spin)
         settings_form.addRow("Split + Edit:", self.split_edit_panel)
         settings_form.addRow("Duplication:", self.dup_check)
         settings_form.addRow("Popular Fallback:", self.pop_check)
@@ -1484,11 +1509,12 @@ class BulkAddDialog(QDialog):
             self.table.setItem(row, 2, custom_item)
 
     def _on_mode_change(self):
-        idx = self.mode_combo.currentIndex()
-        self.preset_combo.setVisible(idx == 1)
-        self.split_spin.setVisible(idx in (2, 3))
-        self.split_edit_panel.setVisible(idx == 3)
-        if idx == 3:
+        mode = _edit_mode_value(self.mode_combo.currentIndex())
+        self.preset_combo.setVisible(mode == "preset")
+        self.split_spin.setVisible(mode in {"split", "split_edit"})
+        self.parts_spin.setVisible(mode == "parts")
+        self.split_edit_panel.setVisible(mode == "split_edit")
+        if mode == "split_edit":
             self._open_split_edit_dialog()
 
     def _refresh_split_edit_summary(self):
@@ -1536,9 +1562,11 @@ class BulkAddDialog(QDialog):
         mode = _edit_mode_value(self.mode_combo.currentIndex())
         return {
             "n_videos": self.n_spin.value(),
+            "uploading_target": self.upload_spin.value(),
             "editing_mode": mode,
             "preset_name": self.preset_combo.currentText(),
             "split_duration": self.split_spin.value(),
+            "parts_count": self.parts_spin.value(),
             "split_edit_settings": self._split_edit_settings,
             "duplication_control": self.dup_check.isChecked(),
             "popular_fallback": self.pop_check.isChecked(),
@@ -1747,6 +1775,13 @@ class AllSettingsDialog(QDialog):
         self.split_spin.setSuffix(" s")
         self.split_spin.setMinimumWidth(170)
         settings_form.addRow("Split Duration:", self.split_spin)
+
+        self.parts_spin = QSpinBox()
+        self.parts_spin.setRange(2, 200)
+        self.parts_spin.setValue(2)
+        self.parts_spin.setSuffix(" parts")
+        self.parts_spin.setMinimumWidth(170)
+        settings_form.addRow("Parts Count:", self.parts_spin)
 
         self.split_edit_btn = QPushButton("Configure Split + Edit")
         self.split_edit_btn.clicked.connect(self._open_split_edit_dialog)
@@ -1998,7 +2033,7 @@ class AllSettingsDialog(QDialog):
         content.addStretch(1)
 
         for ctrl in (
-            self.n_spin, self.upload_spin, self.mode_combo, self.preset_combo, self.split_spin,
+            self.n_spin, self.upload_spin, self.mode_combo, self.preset_combo, self.split_spin, self.parts_spin,
             self.wm_text_edit, self.wm_txt_pos_cb, self.wm_txt_font_edit, self.wm_txt_color_preset_cb,
             self.wm_txt_size_sp, self.wm_txt_weight_cb, self.wm_txt_style_cb,
             self.wm_txt_render_style_cb, self.wm_txt_shadow_offset_sp, self.wm_txt_spacing_sp, self.wm_logo_path_edit,
@@ -2067,11 +2102,12 @@ class AllSettingsDialog(QDialog):
             self.wm_avatar_path_edit.setText(path)
 
     def _on_mode_change(self):
-        m = self.mode_combo.currentIndex()
-        self.preset_combo.setVisible(m == 1)
-        self.split_spin.setVisible(m in (2, 3))
-        self.split_edit_panel.setVisible(m == 3)
-        if m == 3 and not getattr(self, "_loading_settings", False):
+        mode = _edit_mode_value(self.mode_combo.currentIndex())
+        self.preset_combo.setVisible(mode == "preset")
+        self.split_spin.setVisible(mode in {"split", "split_edit"})
+        self.parts_spin.setVisible(mode == "parts")
+        self.split_edit_panel.setVisible(mode == "split_edit")
+        if mode == "split_edit" and not getattr(self, "_loading_settings", False):
             self._open_split_edit_dialog()
 
     def _load_from_config(self):
@@ -2083,6 +2119,7 @@ class AllSettingsDialog(QDialog):
         if c.preset_name and c.preset_name in self.preset_names:
             self.preset_combo.setCurrentText(c.preset_name)
         self.split_spin.setValue(c.split_duration)
+        self.parts_spin.setValue(c.parts_count)
         self._split_edit_settings = c.split_edit_settings
         self.dup_check.setChecked(c.duplication_control)
         self.pop_check.setChecked(c.popular_fallback)
@@ -2144,6 +2181,7 @@ class AllSettingsDialog(QDialog):
             "editing_mode": mode,
             "preset_name": self.preset_combo.currentText(),
             "split_duration": self.split_spin.value(),
+            "parts_count": self.parts_spin.value(),
             "split_edit_settings": self._split_edit_settings,
             "duplication_control": self.dup_check.isChecked(),
             "popular_fallback": self.pop_check.isChecked(),
@@ -2899,10 +2937,6 @@ class CreatorProfilesPage(QWidget):
         ]
         download_folders = list(selected_download_folders or card_folders)
 
-        # Download trigger: start the existing queue, signal OneGo when done
-        def download_trigger():
-            self._on_run_all(folders=download_folders)
-
         worker = OneGoWorker(
             mode=result["mode"],
             activity_enabled=result.get("activity_mode") != "disabled",
@@ -2912,7 +2946,7 @@ class CreatorProfilesPage(QWidget):
             profile_hint=result.get("profile_hint", ""),
             card_folders=card_folders,
             links_root=self.root,
-            download_trigger=download_trigger if result["mode"] == MODE_DOWNLOAD_UPLOAD else None,
+            download_folders=download_folders if result["mode"] == MODE_DOWNLOAD_UPLOAD else None,
             parent=self,
         )
 
@@ -2926,6 +2960,7 @@ class CreatorProfilesPage(QWidget):
             del self._onego_dl_done_cb
 
         if result["mode"] == MODE_DOWNLOAD_UPLOAD:
+            worker.download_requested.connect(self._on_onego_download_requested)
             def _on_dl_done(stopped: bool = False):
                 worker.mark_download_done(stopped=stopped)
             self._onego_dl_done_cb = _on_dl_done  # keep ref for later disconnect
@@ -2967,6 +3002,16 @@ class CreatorProfilesPage(QWidget):
         dlg = OneGoReportDialog(report, self)
         dlg.exec_()
         self._refresh_primary_run_controls()
+
+    def _on_onego_download_requested(self, folders: object):
+        folders = [Path(fp) for fp in (folders or [])]
+        if self._start_queue(folders=folders, allow_onego_active=True):
+            return
+        self.queue_status_lbl.setText("OneGo: Download phase could not start.")
+        self.queue_status_lbl.setVisible(True)
+        worker = getattr(self, "_onego_worker", None)
+        if worker:
+            worker.mark_download_done(stopped=True)
 
     def _any_manual_card_running(self) -> bool:
         return any(card.is_running() for card in self.cards.values())
@@ -3014,30 +3059,41 @@ class CreatorProfilesPage(QWidget):
                 card.set_selected(False)
         self._refresh_primary_run_controls()
 
-    def _on_run_all(self, folders=None):
-        """Start sequential queue using CreatorQueueManager."""
+    def _start_queue(self, folders=None, *, allow_onego_active: bool = False) -> bool:
+        """Internal queue starter shared by Run All and OneGo."""
         if not self.cards:
-            return
+            return False
         # Guard: prevent starting a new queue while one is already running.
         # Multiple concurrent queues cause the same creator to be processed
         # simultaneously, resulting in duplicate downloads and platform bans.
         if self._queue_manager.isRunning():
-            return
+            return False
         if self._any_manual_card_running():
-            QMessageBox.information(
-                self,
-                "Run In Progress",
-                "Wait for the current creator run to finish before starting Run All or Run Selected.",
-            )
-            return
-        if getattr(self, "_onego_worker", None) and self._onego_worker.isRunning():
-            return
+            if not allow_onego_active:
+                QMessageBox.information(
+                    self,
+                    "Run In Progress",
+                    "Wait for the current creator run to finish before starting Run All or Run Selected.",
+                )
+            return False
+        if (
+            not allow_onego_active
+            and getattr(self, "_onego_worker", None)
+            and self._onego_worker.isRunning()
+        ):
+            return False
+        # QPushButton.clicked can pass a checked-state bool; treat that like
+        # "no explicit folders provided" so Run All still targets every card.
+        if isinstance(folders, bool):
+            folders = None
         # If no specific folders passed, use all currently matched/loaded cards
         if folders is None:
             folders = list(self.cards.keys())
-        
+        else:
+            folders = [Path(fp) for fp in folders]
+
         if not folders:
-            return
+            return False
         self.summary_btn.setVisible(False)
         self._queue_stats = {"total": len(folders), "done": 0, "success": 0, "failed": 0}
         # visual mark cards in THIS queue as queued
@@ -3056,6 +3112,11 @@ class CreatorProfilesPage(QWidget):
             card.set_manual_run_locked(True)
         self._refresh_primary_run_controls()
         self._queue_manager.start_queue(folders)
+        return True
+
+    def _on_run_all(self, folders=None):
+        """Start sequential queue using CreatorQueueManager."""
+        self._start_queue(folders=folders, allow_onego_active=False)
 
     def _on_pause_all(self):
         """Pause the queue after current video finishes."""
@@ -3350,6 +3411,7 @@ class CreatorProfilesPage(QWidget):
                 "editing_mode":        cfg.editing_mode,
                 "preset_name":         cfg.preset_name,
                 "split_duration":      cfg.split_duration,
+                "parts_count":         cfg.parts_count,
                 "split_edit_settings": cfg.split_edit_settings,
                 "duplication_control": cfg.duplication_control,
                 "popular_fallback":    cfg.popular_fallback,
@@ -3388,7 +3450,7 @@ class CreatorProfilesPage(QWidget):
                 folder.mkdir(parents=True, exist_ok=True)
                 cfg = CreatorConfig(folder)
                 for key in ("creator_url", "n_videos", "editing_mode",
-                            "preset_name", "split_duration", "split_edit_settings", "duplication_control",
+                            "preset_name", "split_duration", "parts_count", "split_edit_settings", "duplication_control",
                             "popular_fallback", "prefer_popular_first", "randomize_links",
                             "keep_original_after_edit", "delete_before_download",
                             "yt_content_type", "uploading_target",

@@ -26,9 +26,23 @@ class ConfigManager:
             "first_run": True
         },
         "license": {
-            "server_url": "https://constant-myth-pens-courts.trycloudflare.com",
+            "provider": "firebase",
+            "server_url": "",
+            "server_fallback_urls": [],
+            "bootstrap_urls": [],
+            "remember_last_good_url": True,
+            "heartbeat_interval_seconds": 300,
+            "task_poll_interval_seconds": 60,
+            "online_window_seconds": 150,
+            "recent_window_seconds": 1800,
             "last_check": None,
-            "grace_period_days": 30
+            "grace_period_days": 7,
+            "firebase": {
+                "api_key": "AIzaSyCBpYIpstU3twq-oZ23LKByHHLYVqXHBYk",
+                "auth_domain": "onesoul-license-system.firebaseapp.com",
+                "project_id": "onesoul-license-system",
+                "app_id": "1:1085619842413:web:26209e6df4c3c4c98a3e64"
+            }
         },
         "paths": {
             "downloads": str(Path.home() / "Downloads" / "OneSoul"),
@@ -112,6 +126,9 @@ class ConfigManager:
 
                 # Merge with defaults (in case new keys were added)
                 config = self._merge_configs(self.DEFAULT_CONFIG, loaded_config)
+                config = self._migrate_license_config(config)
+                if config != loaded_config:
+                    self._save_config(config)
                 return config
             else:
                 # Create default config
@@ -128,6 +145,23 @@ class ConfigManager:
             config.setdefault("license", {})
             config["license"]["server_url"] = server_url_env
 
+        return config
+
+    def _migrate_license_config(self, config: Dict) -> Dict:
+        """Clean up old transient tunnel URLs so fixed endpoint config can take over."""
+        try:
+            license_config = config.setdefault("license", {})
+            server_url = str(license_config.get("server_url", "") or "").strip()
+            if server_url and "trycloudflare.com" in server_url.lower():
+                license_config["server_url"] = ""
+            license_config.setdefault("provider", "firebase")
+            firebase_config = license_config.setdefault("firebase", {})
+            default_firebase = self.DEFAULT_CONFIG["license"]["firebase"]
+            for key, default_value in default_firebase.items():
+                if not str(firebase_config.get(key, "") or "").strip():
+                    firebase_config[key] = default_value
+        except Exception:
+            pass
         return config
 
     def _merge_configs(self, default: Dict, loaded: Dict) -> Dict:

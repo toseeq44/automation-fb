@@ -42,6 +42,8 @@ _BORDER_HI = "rgba(0,212,255,0.5)"
 _CARD_BORDER = "#0B4355"    # default card border — white
 _CARD_BORDER_HI = "#F1CE04"                # hover card border  — yellow/gold
 _ICON_RING = "#00D4FF"
+_EDIT_MODE_LABELS = ["None", "Preset", "Split", "Parts", "Split + Edit"]
+_EDIT_MODE_VALUES = ["none", "preset", "split", "parts", "split_edit"]
 
 
 def _hex_to_rgba(hex_color: str, alpha: float) -> str:
@@ -109,6 +111,21 @@ def _lbl(text: str, size: int = 12, alpha: float = 0.6) -> QLabel:
         " font-weight:bold; background:transparent; border:none;"
     )
     return l
+
+
+def _edit_mode_value(index: int) -> str:
+    try:
+        return _EDIT_MODE_VALUES[int(index)]
+    except Exception:
+        return "none"
+
+
+def _edit_mode_index(value: str) -> int:
+    mode = str(value or "none").strip().lower()
+    try:
+        return _EDIT_MODE_VALUES.index(mode)
+    except ValueError:
+        return 0
 
 
 class _NoWheelSpinBox(QSpinBox):
@@ -548,7 +565,7 @@ class CreatorCard(QFrame):
         controls.addSpacing(8)
         controls.addWidget(_lbl("Editing:"))
         self.mode_cb = _NoWheelComboBox()
-        self.mode_cb.addItems(["None", "Preset", "Split", "Split + Edit"])
+        self.mode_cb.addItems(_EDIT_MODE_LABELS)
         self.mode_cb.setMinimumWidth(108)
         self.mode_cb.setMaximumWidth(150)
         self.mode_cb.setFixedHeight(30)
@@ -579,6 +596,15 @@ class CreatorCard(QFrame):
         self.split_sp.setStyleSheet(_input_ss())
         self.split_sp.valueChanged.connect(self._auto_save)
         edit_row.addWidget(self.split_sp)
+
+        self.parts_sp = _NoWheelSpinBox()
+        self.parts_sp.setRange(2, 200)
+        self.parts_sp.setSuffix(" parts")
+        self.parts_sp.setFixedWidth(96)
+        self.parts_sp.setStyleSheet(_input_ss())
+        self.parts_sp.setToolTip("Split the downloaded video into this many equal parts")
+        self.parts_sp.valueChanged.connect(self._auto_save)
+        edit_row.addWidget(self.parts_sp)
 
         self.split_edit_btn = card_btn("Options", "cyan")
         self.split_edit_btn.setFixedWidth(88)
@@ -765,24 +791,14 @@ class CreatorCard(QFrame):
     def _load_values(self):
         c = self.config
         c.ensure_creator_url()
-        mode_value = str(c.editing_mode).strip().lower()
-        mode_map = {
-            "none": 0,
-            "preset": 1,
-            "split": 2,
-            "split_edit": 3,
-            "0": 0,
-            "1": 1,
-            "2": 2,
-            "3": 3,
-        }
-        mode_index = mode_map.get(mode_value, 0)
+        mode_index = _edit_mode_index(c.editing_mode)
 
         # Prevent accidental autosave/overwrite while loading values into UI.
         widgets_to_block = [
             self.n_spin,
             self.upload_spin,
             self.split_sp,
+            self.parts_sp,
             self.mode_cb,
             self.preset_cb,
             self.dup_btn,
@@ -798,6 +814,7 @@ class CreatorCard(QFrame):
             self.n_spin.setValue(c.n_videos)
             self.upload_spin.setValue(c.uploading_target)
             self.split_sp.setValue(c.split_duration)
+            self.parts_sp.setValue(c.parts_count)
             self.mode_cb.setCurrentIndex(mode_index)
             if c.preset_name and c.preset_name in self.preset_names:
                 self.preset_cb.setCurrentText(c.preset_name)
@@ -841,7 +858,7 @@ class CreatorCard(QFrame):
                 ))
 
     def _auto_save(self):
-        mode = ["none", "preset", "split", "split_edit"][self.mode_cb.currentIndex()]
+        mode = _edit_mode_value(self.mode_cb.currentIndex())
         self.config.data.update(
             {
                 "n_videos": self.n_spin.value(),
@@ -849,6 +866,7 @@ class CreatorCard(QFrame):
                 "editing_mode": mode,
                 "preset_name": self.preset_cb.currentText(),
                 "split_duration": self.split_sp.value(),
+                "parts_count": self.parts_sp.value(),
                 "duplication_control": self.dup_btn.isChecked(),
                 "popular_fallback": self.pop_btn.isChecked(),
                 "prefer_popular_first": False,
@@ -864,16 +882,17 @@ class CreatorCard(QFrame):
     def _on_mode(self):
         self._update_edit_vis()
         self._auto_save()
-        if self.mode_cb.currentIndex() == 3 and not getattr(self, "_loading_values", False):
+        if _edit_mode_value(self.mode_cb.currentIndex()) == "split_edit" and not getattr(self, "_loading_values", False):
             self._open_split_edit_dialog()
 
     def _update_edit_vis(self):
-        m = self.mode_cb.currentIndex()
-        self.preset_cb.setVisible(m == 1)
-        self.split_sp.setVisible(m in (2, 3))
-        self.split_edit_btn.setVisible(m == 3)
+        mode = _edit_mode_value(self.mode_cb.currentIndex())
+        self.preset_cb.setVisible(mode == "preset")
+        self.split_sp.setVisible(mode in {"split", "split_edit"})
+        self.parts_sp.setVisible(mode == "parts")
+        self.split_edit_btn.setVisible(mode == "split_edit")
         if hasattr(self, "edit_extra_w"):
-            self.edit_extra_w.setVisible(m in (1, 2, 3))
+            self.edit_extra_w.setVisible(mode in {"preset", "split", "parts", "split_edit"})
 
     def _refresh_split_edit_button(self):
         settings = self.config.split_edit_settings

@@ -24,8 +24,6 @@ class ContentFlowLogger:
         """
         self.name = name
         self.log_dir = log_dir or (Path.home() / ".onesoul" / "logs")
-        self.log_dir.mkdir(parents=True, exist_ok=True)
-
         self.logger = logging.getLogger(name)
         self.logger.setLevel(logging.DEBUG)
         self.logger.propagate = False  # Avoid duplicate console output via root logger
@@ -33,6 +31,14 @@ class ContentFlowLogger:
         # Prevent duplicate handlers
         if self.logger.handlers:
             return
+
+        # PyInstaller's isolated helper process uses internal pipes for IPC.
+        # App-style logging there can interfere with the build, so keep it silent.
+        if getattr(sys, "_pyi_isolated_subprocess", False):
+            self.logger.addHandler(logging.NullHandler())
+            return
+
+        self.log_dir.mkdir(parents=True, exist_ok=True)
 
         # Create formatters
         detailed_formatter = logging.Formatter(
@@ -184,7 +190,6 @@ def get_logger(name: str = "ContentFlowPro") -> ContentFlowLogger:
     global _global_logger
     if _global_logger is None:
         _global_logger = ContentFlowLogger(name)
-        _global_logger.info("OneSoul application started", "App")
         _global_logger.cleanup_old_logs(days=30)
     return _global_logger
 

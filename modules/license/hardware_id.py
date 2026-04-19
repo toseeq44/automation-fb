@@ -3,8 +3,10 @@ Hardware ID Generation Module
 Generates a unique, persistent hardware fingerprint for license binding
 """
 import hashlib
+import ipaddress
 import platform
 import subprocess
+import socket
 import uuid
 from pathlib import Path
 
@@ -215,6 +217,59 @@ def get_device_name() -> str:
         return f"Device ({platform.system()})"
 
 
+def get_preferred_lan_ip() -> str:
+    """
+    Return the best-effort active LAN IPv4 for this machine.
+
+    This is useful for distinguishing multiple client PCs on the same Wi-Fi/LAN,
+    where the public IP may be identical due to NAT.
+    """
+    candidates = []
+
+    # Preferred: ask the OS which interface it would use for outbound traffic.
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            probe.connect(("8.8.8.8", 80))
+            candidates.append(probe.getsockname()[0])
+        finally:
+            probe.close()
+    except Exception:
+        pass
+
+    # Fallback: resolve hostname addresses.
+    try:
+        hostname = socket.gethostname()
+        for item in socket.gethostbyname_ex(hostname)[2]:
+            candidates.append(item)
+    except Exception:
+        pass
+
+    # Final fallback based on uuid.getnode-derived hostname lookup.
+    try:
+        candidates.append(socket.gethostbyname(socket.gethostname()))
+    except Exception:
+        pass
+
+    seen = set()
+    for candidate in candidates:
+        try:
+            ip = ipaddress.ip_address(str(candidate).strip())
+        except ValueError:
+            continue
+        if ip.version != 4:
+            continue
+        if ip.is_loopback or ip.is_unspecified or ip.is_multicast:
+            continue
+        normalized = str(ip)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        return normalized
+
+    return ""
+
+
 # Test function
 if __name__ == '__main__':
     print("Hardware ID Test")
@@ -224,6 +279,7 @@ if __name__ == '__main__':
     print(f"Disk Serial: {get_disk_serial()}")
     print(f"Motherboard: {get_motherboard_info()}")
     print(f"Device Name: {get_device_name()}")
+    print(f"Preferred LAN IP: {get_preferred_lan_ip()}")
     print("=" * 50)
     print(f"Hardware ID: {generate_hardware_id()}")
     print("=" * 50)

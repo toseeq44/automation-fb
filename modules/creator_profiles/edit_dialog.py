@@ -34,6 +34,24 @@ _WM_COLOR_PRESETS = [
     ("Purple", "#B388FF"),
 ]
 
+_EDIT_MODE_LABELS = ["None", "Preset", "Split", "Parts", "Split + Edit"]
+_EDIT_MODE_VALUES = ["none", "preset", "split", "parts", "split_edit"]
+
+
+def _edit_mode_value(index: int) -> str:
+    try:
+        return _EDIT_MODE_VALUES[int(index)]
+    except Exception:
+        return "none"
+
+
+def _edit_mode_index(value: str) -> int:
+    mode = str(value or "none").strip().lower()
+    try:
+        return _EDIT_MODE_VALUES.index(mode)
+    except ValueError:
+        return 0
+
 
 class EditCreatorDialog(QDialog):
 
@@ -135,7 +153,7 @@ class EditCreatorDialog(QDialog):
 
         # Editing mode
         self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["None", "Preset", "Split", "Split + Edit"])
+        self.mode_combo.addItems(_EDIT_MODE_LABELS)
         self.mode_combo.setFixedWidth(110)
         self.mode_combo.currentIndexChanged.connect(self._on_mode_change)
         form.addRow("Editing Mode:", self.mode_combo)
@@ -153,6 +171,14 @@ class EditCreatorDialog(QDialog):
         self.split_spin.setSuffix(" seconds")
         self.split_spin.setFixedWidth(140)
         form.addRow(self.split_lbl, self.split_spin)
+
+        self.parts_lbl = QLabel("Parts Count:")
+        self.parts_spin = QSpinBox()
+        self.parts_spin.setRange(2, 200)
+        self.parts_spin.setValue(2)
+        self.parts_spin.setSuffix(" parts")
+        self.parts_spin.setFixedWidth(140)
+        form.addRow(self.parts_lbl, self.parts_spin)
 
         self.split_edit_btn = QPushButton("Configure Split + Edit")
         self.split_edit_btn.clicked.connect(self._open_split_edit_dialog)
@@ -576,9 +602,8 @@ class EditCreatorDialog(QDialog):
         self.url_edit.setText(c.creator_url)
         self.n_spin.setValue(c.n_videos)
         self.split_spin.setValue(c.split_duration)
-        self.mode_combo.setCurrentIndex(
-            {"none": 0, "preset": 1, "split": 2, "split_edit": 3}.get(c.editing_mode, 0)
-        )
+        self.parts_spin.setValue(c.parts_count)
+        self.mode_combo.setCurrentIndex(_edit_mode_index(c.editing_mode))
         if c.preset_name and c.preset_name in self.preset_names:
             self.preset_combo.setCurrentText(c.preset_name)
         self._split_edit_settings = c.split_edit_settings
@@ -645,13 +670,15 @@ class EditCreatorDialog(QDialog):
         self._refresh_split_edit_summary()
 
     def _on_mode_change(self):
-        m = self.mode_combo.currentIndex()
-        self.preset_lbl.setVisible(m == 1)
-        self.preset_combo.setVisible(m == 1)
-        self.split_lbl.setVisible(m in (2, 3))
-        self.split_spin.setVisible(m in (2, 3))
-        self.split_edit_panel.setVisible(m == 3)
-        if m == 3 and not getattr(self, "_loading_settings", False):
+        mode = _edit_mode_value(self.mode_combo.currentIndex())
+        self.preset_lbl.setVisible(mode == "preset")
+        self.preset_combo.setVisible(mode == "preset")
+        self.split_lbl.setVisible(mode in {"split", "split_edit"})
+        self.split_spin.setVisible(mode in {"split", "split_edit"})
+        self.parts_lbl.setVisible(mode == "parts")
+        self.parts_spin.setVisible(mode == "parts")
+        self.split_edit_panel.setVisible(mode == "split_edit")
+        if mode == "split_edit" and not getattr(self, "_loading_settings", False):
             self._open_split_edit_dialog()
 
     def _refresh_split_edit_summary(self):
@@ -702,13 +729,14 @@ class EditCreatorDialog(QDialog):
             self.wm_avatar_path_edit.setText(path)
 
     def _save(self):
-        mode = ["none", "preset", "split", "split_edit"][self.mode_combo.currentIndex()]
+        mode = _edit_mode_value(self.mode_combo.currentIndex())
         self.config.data.update({
             "creator_url":         self.url_edit.text().strip(),
             "n_videos":            self.n_spin.value(),
             "editing_mode":        mode,
             "preset_name":         self.preset_combo.currentText(),
             "split_duration":      self.split_spin.value(),
+            "parts_count":         self.parts_spin.value(),
             "split_edit_settings": getattr(self, "_split_edit_settings", None),
             "duplication_control": self.dup_btn.isChecked(),
             "popular_fallback":    self.pop_btn.isChecked(),

@@ -1,0 +1,12 @@
+{
+  "primary_url": "http://toseeqonesoul5102.myftp.biz:5000",
+  "fallback_urls": [
+    "https://toseeqonesoul5102.myftp.biz",
+    "http://toseeqonesoul5102.myftp.biz:5000",
+    "http://toseeqonesoul5102.myftp.biz",
+    "http://127.0.0.1:5000",
+    "http://localhost:5000"
+  ],
+  "bootstrap_urls": [],
+  "remember_last_good_url": true
+}

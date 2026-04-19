@@ -16,7 +16,7 @@ from .scanner import VideoScanner
 from .renamer import VideoRenamer
 
 # Import with smart detection
-from . import ENHANCED_MODE, API_ENHANCED_MODE, get_generator, show_model_instructions, models_available
+from . import get_generator, get_runtime_capabilities, show_model_instructions
 
 logger = get_logger(__name__)
 
@@ -118,14 +118,16 @@ class TitleGeneratorDialog(QDialog):
         self.scanner = VideoScanner()
 
         # Smart generator selection (auto-detects models)
+        runtime_capabilities = get_runtime_capabilities()
         self.generator = get_generator(prefer_enhanced=True)
         self.renamer = VideoRenamer()
 
         self.videos = []
         self.processing_thread = None
         self.selected_platform = 'facebook'  # Default platform
-        self.api_enhanced_mode = API_ENHANCED_MODE
-        self.enhanced_mode = ENHANCED_MODE
+        self.api_enhanced_mode = runtime_capabilities.get("api_enhanced_mode", False)
+        self.enhanced_mode = runtime_capabilities.get("enhanced_mode", False)
+        self.models_available = runtime_capabilities.get("models_available", {})
 
         # LOG WHICH MODE IS ACTIVE
         logger.info("=" * 70)
@@ -136,7 +138,7 @@ class TitleGeneratorDialog(QDialog):
             logger.info("✅ Content-aware, multilingual title generation enabled")
         elif self.enhanced_mode:
             logger.info("🚀 TITLE GENERATOR: ENHANCED MODE ACTIVE (PyTorch-based)")
-            logger.info(f"📂 AI Models location: {models_available.get('base_path')}")
+            logger.info(f"📂 AI Models location: {self.models_available.get('base_path')}")
             logger.info("✅ Content-aware, multilingual title generation enabled")
         else:
             logger.warning("⚠️  TITLE GENERATOR: BASIC MODE (Limited Features)")

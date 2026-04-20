@@ -63,3 +63,7 @@ codex_pytest_tmp/
 tmp_onego_verify/
 tmp_onego_verify2/
 tests/
+
+# Local Nuitka experiment outputs
+.nuitka_critical/
+nuitka_critical/

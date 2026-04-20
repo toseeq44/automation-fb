@@ -35,6 +35,11 @@ else:
 from modules.logging import get_logger
 from modules.config import get_config
 from modules.license import LicenseManager, sync_all_plans
+from modules.security import (
+    build_user_safe_license_message,
+    run_security_preflight,
+    verify_runtime_integrity,
+)
 from modules.ui import LicenseActivationDialog
 
 
@@ -164,6 +169,18 @@ def main():
     # Ensure directories exist
     config.ensure_directories_exist()
 
+    security_ok, security_message, security_detail = run_security_preflight(config)
+    if not security_ok:
+        logger.error(f"Security preflight blocked startup: {security_detail}", "Security")
+        QMessageBox.critical(None, "Security Check Failed", security_message)
+        sys.exit(0)
+
+    integrity_ok, integrity_message, integrity_detail = verify_runtime_integrity(config)
+    if not integrity_ok:
+        logger.error(f"Runtime integrity check failed: {integrity_detail}", "Security")
+        QMessageBox.critical(None, "Integrity Check Failed", integrity_message)
+        sys.exit(0)
+
     # Initialize license manager
     server_url = config.get('license.server_url', 'http://localhost:5000')
     app_version = config.get('app.version', '1.0.0')
@@ -201,7 +218,8 @@ def main():
             title = "License Service Unavailable"
             if str(license_manager.last_status_code).strip().lower() == "firebase_config_missing":
                 title = "Firebase Configuration Missing"
-            QMessageBox.critical(None, title, f"{message}\n\nOneSoul will now close.")
+            safe_message = build_user_safe_license_message(license_manager.last_status_code, message)
+            QMessageBox.critical(None, title, f"{safe_message}\n\nOneSoul will now close.")
             sys.exit(0)
 
         # Show activation dialog for both no license and expired license
@@ -215,7 +233,7 @@ def main():
             QMessageBox.warning(
                 None,
                 "License Expired",
-                f"{message}\n\n"
+                f"{build_user_safe_license_message(license_manager.last_status_code, message)}\n\n"
                 "Your license has expired or is invalid.\n"
                 "Please activate a valid license to continue."
             )
@@ -243,7 +261,8 @@ def main():
                     title = "License Service Unavailable"
                     if str(license_manager.last_status_code).strip().lower() == "firebase_config_missing":
                         title = "Firebase Configuration Missing"
-                    QMessageBox.critical(None, title, f"{message}\n\nOneSoul will now close.")
+                    safe_message = build_user_safe_license_message(license_manager.last_status_code, message)
+                    QMessageBox.critical(None, title, f"{safe_message}\n\nOneSoul will now close.")
                     sys.exit(0)
                 logger.error("License activation succeeded but validation failed.", "License")
                 QMessageBox.critical(

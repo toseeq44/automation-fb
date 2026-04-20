@@ -15,6 +15,49 @@ from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, co
 
 block_cipher = None
 
+ENABLE_NUITKA_CRITICAL = os.environ.get('ONESOUL_ENABLE_NUITKA_CRITICAL', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+NUITKA_CRITICAL_ROOT = Path('.nuitka_critical')
+
+
+def collect_nuitka_critical_binaries():
+    if not ENABLE_NUITKA_CRITICAL:
+        print("INFO: Nuitka critical-module overlay disabled")
+        return [], []
+
+    if not NUITKA_CRITICAL_ROOT.exists():
+        print(f"WARNING: Nuitka critical-module overlay requested but not found at {NUITKA_CRITICAL_ROOT}")
+        return [], []
+
+    targets = [
+        ('modules/license', 'modules.license.hardware_id'),
+        ('modules/license', 'modules.license.firebase_license_manager'),
+        ('modules/license', 'modules.license.license_manager'),
+        ('modules/license', 'modules.license.creator_links_tracking'),
+        ('modules/license', 'modules.license.lease_crypto'),
+        ('modules/security', 'modules.security.hardening'),
+    ]
+
+    binaries = []
+    excludes = []
+
+    for relative_dir, module_name in targets:
+        module_basename = module_name.rsplit('.', 1)[-1]
+        source_dir = NUITKA_CRITICAL_ROOT / relative_dir
+        matches = sorted(source_dir.glob(f'{module_basename}*.pyd'))
+        if not matches:
+            print(f"WARNING: Nuitka compiled module missing for {module_name}")
+            continue
+
+        artifact = matches[0]
+        binaries.append((str(artifact), relative_dir))
+        excludes.append(module_name)
+        print(f"INFO: Using Nuitka compiled module for {module_name}: {artifact}")
+
+    return binaries, excludes
+
+
+nuitka_critical_binaries, nuitka_critical_excludes = collect_nuitka_critical_binaries()
+
 # Optional binaries - only include if they exist
 optional_binaries = []
 if os.path.exists('cloudflared.exe'):
@@ -105,7 +148,7 @@ except ImportError:
 a = Analysis(
     ['main.py'],
     pathex=['.'],
-    binaries=optional_binaries + [
+    binaries=optional_binaries + nuitka_critical_binaries + [
         ('bin/yt-dlp.exe', 'bin'),  # yt-dlp binary for Link Grabber
         ('bin/chromium/*', 'bin/chromium'),
     ],
@@ -232,6 +275,7 @@ a = Analysis(
         'hashlib',
         'hmac',
         'base64',
+        'modules.license.creator_links_tracking',
 
         # API Manager
         'google.auth',
@@ -287,7 +331,7 @@ a = Analysis(
         'test_*',  # Exclude test files
         '_pytest',
         'pytest',
-    ],
+    ] + nuitka_critical_excludes,
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

@@ -117,6 +117,15 @@ echo ============================================
 echo   BUILD SUCCESSFUL!
 echo ============================================
 echo.
+echo [Post] Generating runtime integrity manifest...
+%PYTHON_EXE% generate_runtime_manifest.py --dist-dir dist\OneSoul
+if errorlevel 1 (
+    echo [!] Failed to generate runtime manifest
+    pause
+    exit /b 1
+)
+echo     Runtime manifest ready
+echo.
 echo Output location: dist\OneSoul\
 echo Main executable: dist\OneSoul\OneSoul.exe
 echo.

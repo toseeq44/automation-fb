@@ -339,9 +339,14 @@ class FirestoreLicenseManager:
 
                 refresh_token = str(auth_state.get("refresh_token", "")).strip()
                 if refresh_token:
-                    refreshed = self._normalize_auth_payload(self._refresh_id_token(refresh_token), refreshed=True)
-                    self._save_auth_state(refreshed)
-                    return refreshed
+                    try:
+                        refreshed = self._normalize_auth_payload(self._refresh_id_token(refresh_token), refreshed=True)
+                        self._save_auth_state(refreshed)
+                        return refreshed
+                    except Exception:
+                        # If the refresh endpoint is temporarily failing, fall back
+                        # to a brand-new anonymous sign-in before giving up.
+                        pass
 
             fresh = self._normalize_auth_payload(self._sign_in_anonymously())
             self._save_auth_state(fresh)
@@ -480,6 +485,41 @@ class FirestoreLicenseManager:
         base = str(license_key or "").strip() or str(installation_id or "").strip() or self.installation_id
         return base.replace("/", "_")
 
+    def _cached_startup_grace_hours(self) -> int:
+        try:
+            raw = int(self._config.get("license.startup_offline_grace_hours", 72) or 72)
+        except Exception:
+            raw = 72
+        return max(0, raw)
+
+    def _can_use_cached_startup_license(self, local_license: Optional[Dict[str, Any]]) -> Tuple[bool, str]:
+        if not local_license:
+            return False, "No local license cache available."
+
+        cached_hardware_id = str(local_license.get("hardware_id", "") or "").strip()
+        current_hardware_id = generate_hardware_id()
+        if not cached_hardware_id or cached_hardware_id != current_hardware_id:
+            self.wipe_local_license_artifacts()
+            return False, "Cached license does not match this hardware anymore."
+
+        expiry_value = local_license.get("expiry_date")
+        if self._is_expired(expiry_value):
+            return False, "Cached license has expired."
+
+        last_validation = self._parse_iso_datetime(local_license.get("last_validation"))
+        if last_validation is None:
+            return False, "Cached license has no recent validation timestamp."
+
+        grace_hours = self._cached_startup_grace_hours()
+        if grace_hours <= 0:
+            return False, "Offline startup grace is disabled."
+
+        age = datetime.now(timezone.utc) - last_validation
+        if age > timedelta(hours=grace_hours):
+            return False, "Cached license validation is too old for offline startup."
+
+        return True, f"Using cached license because Firebase is temporarily unreachable. Last validation was {int(age.total_seconds() // 3600)} hour(s) ago."
+
     def _validate_remote_license_document(
         self,
         license_key: str,
@@ -538,12 +578,18 @@ class FirestoreLicenseManager:
             return False, message
 
     def validate_license(self, force_online: bool = False) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+        local_license = self._load_local_license()
         try:
             self._ensure_authenticated()
         except Exception as exc:
+            if not force_online and self.last_status_code in {"firebase_unreachable", "firebase_auth_failed"}:
+                can_use_cached, cached_message = self._can_use_cached_startup_license(local_license)
+                if can_use_cached:
+                    self._startup_validation_complete = True
+                    self._set_status("validated_cached_startup")
+                    return True, cached_message, self.get_license_info(local_license)
             return False, str(exc), None
 
-        local_license = self._load_local_license()
         if not local_license:
             self._set_status("no_license")
             return False, "No license found. Please activate a license first.", None

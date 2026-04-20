@@ -33,6 +33,7 @@ class ConfigManager:
             "remember_last_good_url": True,
             "heartbeat_interval_seconds": 300,
             "task_poll_interval_seconds": 60,
+            "startup_offline_grace_hours": 72,
             "online_window_seconds": 150,
             "recent_window_seconds": 1800,
             "last_check": None,
@@ -82,6 +83,31 @@ class ConfigManager:
             "level": "INFO",  # DEBUG, INFO, WARNING, ERROR
             "keep_days": 30,
             "console_output": True
+        },
+        "security": {
+            "enabled": True,
+            "require_runtime_manifest_in_frozen": True,
+            "block_on_debugger": True,
+            "block_on_suspicious_processes": True,
+            "allow_dev_bypass_env": True,
+            "suspicious_process_keywords": [
+                "x64dbg",
+                "x32dbg",
+                "ollydbg",
+                "ida",
+                "ida64",
+                "ida32",
+                "idaq",
+                "idaq64",
+                "ghidra",
+                "dnspy",
+                "ilspy",
+                "processhacker",
+                "httpdebugger",
+                "fiddler",
+                "wireshark",
+                "charles"
+            ]
         },
         "link_grabber": {
             "max_videos": 0,  # 0 = unlimited

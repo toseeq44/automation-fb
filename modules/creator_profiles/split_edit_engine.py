@@ -576,6 +576,159 @@ def _separate_vocals_with_demucs(
     return vocals_copy
 
 
+def apply_hq_cleanup(
+    input_path: Path,
+    output_folder: Path,
+    settings: dict,
+    ffmpeg: str = "ffmpeg",
+    progress_cb: Optional[Callable[[str], None]] = None,
+    start_time: Optional[float] = None,
+    duration: Optional[float] = None
+) -> Optional[Path]:
+    """
+    Advanced technical optimization to bypass Facebook's 'Blur Content' and 'Reuse' detection.
+    Applies subtle visual changes, metadata scrubbing, and professional re-encoding.
+    """
+    input_path = Path(input_path)
+    output_folder = Path(output_folder)
+    output_folder.mkdir(parents=True, exist_ok=True)
+
+    suffix = input_path.suffix or ".mp4"
+    if start_time is not None:
+        out_name = f"{input_path.stem}_part_{int(start_time)}{suffix}"
+    else:
+        out_name = f"{input_path.stem}_hq{suffix}"
+    
+    output_path = output_folder / out_name
+    flags = _creationflags()
+
+    # --- ADVANCED BYPASS LOGIC ---
+    # 1. Subtle Visual Modification: 1% zoom + brightness/contrast tweak to break pixel fingerprinting
+    # 2. Metadata Scrubbing: Remove all original markers and add professional decoy markers
+    # 3. Audio Tweak: 0.1% speed change (nearly inaudible) to break audio fingerprinting
+    
+    video_filters = [
+        "scale=iw*1.01:-1,crop=iw/1.01:ih/1.01", # 1% zoom
+        "eq=brightness=0.01:contrast=1.01",      # Subtle visual change
+        "setsar=1",
+        "format=yuv420p"
+    ]
+    
+    audio_filters = [
+        "atempo=1.001", # 0.1% faster (breaks audio match)
+        "aresample=44100"
+    ]
+
+    cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
+    
+    if start_time is not None:
+        cmd.extend(["-ss", str(start_time)])
+    if duration is not None:
+        cmd.extend(["-t", str(duration)])
+        
+    cmd.extend(["-i", str(input_path)])
+
+    # Video Encoding (High Quality)
+    cmd.extend([
+        "-vf", ",".join(video_filters),
+        "-c:v", "libx264",
+        "-preset", "slow",     # Better compression, avoids 'blur' artifacts
+        "-crf", "18",          # Visually lossless
+        "-tune", "film",
+    ])
+
+    # Audio Encoding
+    cmd.extend([
+        "-af", ",".join(audio_filters),
+        "-c:a", "aac",
+        "-b:a", "192k"
+    ])
+
+    # Metadata & Decoy Strategy
+    cmd.extend([
+        "-map_metadata", "-1",                 # Scrub original metadata
+        "-metadata", "title=",
+        "-metadata", "comment=Processed for High Fidelity",
+        "-metadata", "encoder=Adobe After Effects 2026 (Windows)", # Professional Decoy
+        "-movflags", "+faststart"
+    ])
+
+    cmd.append(str(output_path))
+
+    try:
+        _run_subprocess_safe(cmd, timeout=3600, creationflags=flags)
+        if output_path.exists() and output_path.stat().st_size > 0:
+            return output_path
+    except Exception as e:
+        if progress_cb: progress_cb(f"HQ Cleanup Error: {e}")
+    
+    return None
+
+def apply_facebook_bypass(
+    input_path: Path,
+    output_folder: Path,
+    ffmpeg: str = "ffmpeg",
+    progress_cb: Optional[Callable[[str], None]] = None,
+) -> Optional[Path]:
+    """
+    Advanced technical modification to bypass Facebook's 'Blur Content' and 'Reuse' detection.
+    Applies subtle visual/audio changes and professional metadata decoy.
+    """
+    input_path = Path(input_path)
+    output_folder = Path(output_folder)
+    output_folder.mkdir(parents=True, exist_ok=True)
+
+    output_path = output_folder / f"{input_path.stem}_hq{input_path.suffix or '.mp4'}"
+    flags = _creationflags()
+
+    # --- Studio Quality Bypass Logic (Enhanced) ---
+    # 1. Subtle Visual Change (1.1% zoom + brightness/contrast tweak)
+    # 2. Metadata Scrubbing + Decoy (Adobe After Effects)
+    # 3. Audio Fingerprint Break (0.1% speed shift)
+    # 4. Upscaling + Grain: Break pixel-perfect matching even further
+    
+    video_filters = [
+        "scale=iw*1.011:-1:flags=lanczos,crop=iw/1.011:ih/1.011", # Zoom + HQ Scale
+        "scale=w='if(gt(iw,ih),1920,-2)':h='if(gt(iw,ih),-2,1920)':flags=lanczos", # Upscale to 1080p if smaller
+        "eq=brightness=0.01:contrast=1.01:saturation=1.02", # Subtle color shift
+        "noise=alls=1:allf=t", # Add very subtle moving grain
+        "setsar=1",
+        "format=yuv420p"
+    ]
+    
+    audio_filters = [
+        "atempo=1.001",
+        "aresample=44100"
+    ]
+
+    cmd = [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+        "-i", str(input_path),
+        "-vf", ",".join(video_filters),
+        "-af", ",".join(audio_filters),
+        "-r", "30",            # Normalize frame rate to 30fps
+        "-c:v", "libx264",
+        "-preset", "slow",     # Slower encoding = better quality, avoids 'blur' artifacts
+        "-crf", "18",          # Visually lossless
+        "-tune", "film",
+        "-map_metadata", "-1", # Strip all original metadata
+        "-metadata", "title=",
+        "-metadata", "comment=Processed for High Fidelity",
+        "-metadata", "encoder=Adobe After Effects 2026 (Windows)", # Pro Decoy
+        "-movflags", "+faststart",
+        str(output_path)
+    ]
+
+    try:
+        _emit(progress_cb, f"  Studio-Quality Optimization: {input_path.name}")
+        result = _run_subprocess_safe(cmd, timeout=1800, creationflags=flags)
+        if result.returncode == 0 and output_path.exists() and output_path.stat().st_size > 0:
+            return output_path
+    except Exception as e:
+        _emit(progress_cb, f"  Optimization Error: {e}")
+    
+    return None
+
 def _build_video_filter(settings: dict) -> str:
     zoom = max(50, min(200, int(settings["zoom_percent"]))) / 100.0
     filters = []

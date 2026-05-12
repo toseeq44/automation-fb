@@ -1,6 +1,6 @@
 """
 gui_modern.py
-OneSoul Flow - Professional 3D Modern UI
+OneSol Flow - Professional 3D Modern UI
 Integrated with existing modules + Centralized theming
 """
 
@@ -44,7 +44,7 @@ from modules.creator_profiles.page import CreatorProfilesPage
 
 # ==================== CENTRALIZED THEME SYSTEM ====================
 
-class OneSoulTheme:
+class OneSolTheme:
     """
     CENTRALIZED THEME - Change colors here, applies everywhere!
     Single source of truth for entire application
@@ -56,7 +56,7 @@ class OneSoulTheme:
     BG_ELEVATED = "#161b22"         # Raised elements (cards, panels)
     BG_ELEVATED_HOVER = "#1c2128"   # Hover state for cards
 
-    # Accent Colors (from OneSoul logo)
+    # Accent Colors (from OneSol logo)
     CYAN = "#00d4ff"                # Primary accent
     MAGENTA = "#ff00ff"             # Secondary accent
     GOLD = "#ffd700"                # Highlights
@@ -88,7 +88,7 @@ class OneSoulTheme:
     # Size Constants
     SIDEBAR_EXPANDED = 250
     SIDEBAR_COLLAPSED = 60
-    TOPBAR_HEIGHT = 120  # Height for logo area with OneSoul text visible
+    TOPBAR_HEIGHT = 120  # Height for logo area with OneSol text visible
     LOGO_SIZE = 80  # 2x original (was 40)
 
     @staticmethod
@@ -100,70 +100,70 @@ class OneSoulTheme:
         return f"""
             /* ========== GLOBAL STYLES ========== */
             QMainWindow, QWidget {{
-                background: {OneSoulTheme.BG_PRIMARY};
-                color: {OneSoulTheme.TEXT_PRIMARY};
+                background: {OneSolTheme.BG_PRIMARY};
+                color: {OneSolTheme.TEXT_PRIMARY};
                 font-family: 'Segoe UI', Arial, sans-serif;
                 font-size: 14px;
             }}
 
             /* ========== LABELS ========== */
             QLabel {{
-                color: {OneSoulTheme.TEXT_PRIMARY};
+                color: {OneSolTheme.TEXT_PRIMARY};
                 background: transparent;
             }}
 
             /* ========== BUTTONS ========== */
             QPushButton {{
-                background: {OneSoulTheme.BG_ELEVATED};
-                color: {OneSoulTheme.TEXT_PRIMARY};
-                border: 1px solid {OneSoulTheme.BORDER_PRIMARY};
+                background: {OneSolTheme.BG_ELEVATED};
+                color: {OneSolTheme.TEXT_PRIMARY};
+                border: 1px solid {OneSolTheme.BORDER_PRIMARY};
                 border-radius: 6px;
                 padding: 10px 20px;
                 font-weight: bold;
             }}
 
             QPushButton:hover {{
-                background: {OneSoulTheme.BG_ELEVATED_HOVER};
-                border-color: {OneSoulTheme.CYAN};
+                background: {OneSolTheme.BG_ELEVATED_HOVER};
+                border-color: {OneSolTheme.CYAN};
             }}
 
             QPushButton:pressed {{
-                background: {OneSoulTheme.BG_ACTIVE};
+                background: {OneSolTheme.BG_ACTIVE};
             }}
 
             QPushButton:disabled {{
-                background: {OneSoulTheme.BG_SIDEBAR};
-                color: {OneSoulTheme.TEXT_MUTED};
-                border-color: {OneSoulTheme.TEXT_MUTED};
+                background: {OneSolTheme.BG_SIDEBAR};
+                color: {OneSolTheme.TEXT_MUTED};
+                border-color: {OneSolTheme.TEXT_MUTED};
             }}
 
             /* ========== INPUT FIELDS ========== */
             QLineEdit, QTextEdit, QPlainTextEdit {{
-                background: {OneSoulTheme.BG_ELEVATED};
-                color: {OneSoulTheme.TEXT_PRIMARY};
-                border: 1px solid {OneSoulTheme.BORDER_PRIMARY};
+                background: {OneSolTheme.BG_ELEVATED};
+                color: {OneSolTheme.TEXT_PRIMARY};
+                border: 1px solid {OneSolTheme.BORDER_PRIMARY};
                 border-radius: 4px;
                 padding: 8px;
-                selection-background-color: {OneSoulTheme.CYAN};
-                selection-color: {OneSoulTheme.BG_PRIMARY};
+                selection-background-color: {OneSolTheme.CYAN};
+                selection-color: {OneSolTheme.BG_PRIMARY};
             }}
 
             QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {{
-                border: 2px solid {OneSoulTheme.CYAN};
+                border: 2px solid {OneSolTheme.CYAN};
                 padding: 7px;
             }}
 
             /* ========== COMBO BOXES ========== */
             QComboBox {{
-                background: {OneSoulTheme.BG_ELEVATED};
-                color: {OneSoulTheme.TEXT_PRIMARY};
-                border: 1px solid {OneSoulTheme.BORDER_PRIMARY};
+                background: {OneSolTheme.BG_ELEVATED};
+                color: {OneSolTheme.TEXT_PRIMARY};
+                border: 1px solid {OneSolTheme.BORDER_PRIMARY};
                 border-radius: 4px;
                 padding: 8px;
             }}
 
             QComboBox:hover {{
-                border-color: {OneSoulTheme.CYAN};
+                border-color: {OneSolTheme.CYAN};
             }}
 
             QComboBox::drop-down {{
@@ -171,59 +171,59 @@ class OneSoulTheme:
             }}
 
             QComboBox QAbstractItemView {{
-                background: {OneSoulTheme.BG_ELEVATED};
-                color: {OneSoulTheme.TEXT_PRIMARY};
-                border: 1px solid {OneSoulTheme.CYAN};
-                selection-background-color: {OneSoulTheme.BG_ACTIVE};
-                selection-color: {OneSoulTheme.TEXT_GOLD};
+                background: {OneSolTheme.BG_ELEVATED};
+                color: {OneSolTheme.TEXT_PRIMARY};
+                border: 1px solid {OneSolTheme.CYAN};
+                selection-background-color: {OneSolTheme.BG_ACTIVE};
+                selection-color: {OneSolTheme.TEXT_GOLD};
             }}
 
             /* ========== PROGRESS BARS ========== */
             QProgressBar {{
-                background: {OneSoulTheme.BG_ELEVATED};
-                border: 1px solid {OneSoulTheme.BORDER_PRIMARY};
+                background: {OneSolTheme.BG_ELEVATED};
+                border: 1px solid {OneSolTheme.BORDER_PRIMARY};
                 border-radius: 4px;
                 text-align: center;
-                color: {OneSoulTheme.TEXT_PRIMARY};
+                color: {OneSolTheme.TEXT_PRIMARY};
             }}
 
             QProgressBar::chunk {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 {OneSoulTheme.CYAN}, stop:1 {OneSoulTheme.MAGENTA});
+                    stop:0 {OneSolTheme.CYAN}, stop:1 {OneSolTheme.MAGENTA});
                 border-radius: 4px;
             }}
 
             /* ========== SCROLLBARS ========== */
             QScrollBar:vertical {{
-                background: {OneSoulTheme.BG_SIDEBAR};
+                background: {OneSolTheme.BG_SIDEBAR};
                 width: 12px;
                 border-radius: 6px;
             }}
 
             QScrollBar::handle:vertical {{
-                background: {OneSoulTheme.BORDER_GLOW};
+                background: {OneSolTheme.BORDER_GLOW};
                 border-radius: 6px;
                 min-height: 20px;
             }}
 
             QScrollBar::handle:vertical:hover {{
-                background: {OneSoulTheme.CYAN};
+                background: {OneSolTheme.CYAN};
             }}
 
             QScrollBar:horizontal {{
-                background: {OneSoulTheme.BG_SIDEBAR};
+                background: {OneSolTheme.BG_SIDEBAR};
                 height: 12px;
                 border-radius: 6px;
             }}
 
             QScrollBar::handle:horizontal {{
-                background: {OneSoulTheme.BORDER_GLOW};
+                background: {OneSolTheme.BORDER_GLOW};
                 border-radius: 6px;
                 min-width: 20px;
             }}
 
             QScrollBar::handle:horizontal:hover {{
-                background: {OneSoulTheme.CYAN};
+                background: {OneSolTheme.CYAN};
             }}
 
             QScrollBar::add-line, QScrollBar::sub-line {{
@@ -233,9 +233,9 @@ class OneSoulTheme:
 
             /* ========== LIST WIDGETS ========== */
             QListWidget {{
-                background: {OneSoulTheme.BG_ELEVATED};
-                color: {OneSoulTheme.TEXT_PRIMARY};
-                border: 1px solid {OneSoulTheme.BORDER_PRIMARY};
+                background: {OneSolTheme.BG_ELEVATED};
+                color: {OneSolTheme.TEXT_PRIMARY};
+                border: 1px solid {OneSolTheme.BORDER_PRIMARY};
                 border-radius: 4px;
             }}
 
@@ -244,20 +244,20 @@ class OneSoulTheme:
             }}
 
             QListWidget::item:hover {{
-                background: {OneSoulTheme.BG_HOVER};
+                background: {OneSolTheme.BG_HOVER};
             }}
 
             QListWidget::item:selected {{
-                background: {OneSoulTheme.BG_ACTIVE};
-                color: {OneSoulTheme.TEXT_GOLD};
+                background: {OneSolTheme.BG_ACTIVE};
+                color: {OneSolTheme.TEXT_GOLD};
             }}
 
             /* ========== TABLES ========== */
             QTableWidget {{
-                background: {OneSoulTheme.BG_ELEVATED};
-                color: {OneSoulTheme.TEXT_PRIMARY};
-                gridline-color: {OneSoulTheme.BORDER_PRIMARY};
-                border: 1px solid {OneSoulTheme.BORDER_PRIMARY};
+                background: {OneSolTheme.BG_ELEVATED};
+                color: {OneSolTheme.TEXT_PRIMARY};
+                gridline-color: {OneSolTheme.BORDER_PRIMARY};
+                border: 1px solid {OneSolTheme.BORDER_PRIMARY};
                 border-radius: 4px;
             }}
 
@@ -266,45 +266,45 @@ class OneSoulTheme:
             }}
 
             QTableWidget::item:hover {{
-                background: {OneSoulTheme.BG_HOVER};
+                background: {OneSolTheme.BG_HOVER};
             }}
 
             QTableWidget::item:selected {{
-                background: {OneSoulTheme.BG_ACTIVE};
-                color: {OneSoulTheme.TEXT_GOLD};
+                background: {OneSolTheme.BG_ACTIVE};
+                color: {OneSolTheme.TEXT_GOLD};
             }}
 
             QHeaderView::section {{
-                background: {OneSoulTheme.BG_SIDEBAR};
-                color: {OneSoulTheme.TEXT_CYAN};
+                background: {OneSolTheme.BG_SIDEBAR};
+                color: {OneSolTheme.TEXT_CYAN};
                 padding: 8px;
                 border: none;
-                border-bottom: 2px solid {OneSoulTheme.CYAN};
+                border-bottom: 2px solid {OneSolTheme.CYAN};
                 font-weight: bold;
             }}
 
             /* ========== DIALOGS ========== */
             QDialog {{
-                background: {OneSoulTheme.BG_PRIMARY};
-                color: {OneSoulTheme.TEXT_PRIMARY};
+                background: {OneSolTheme.BG_PRIMARY};
+                color: {OneSolTheme.TEXT_PRIMARY};
             }}
 
             QMessageBox {{
-                background: {OneSoulTheme.BG_PRIMARY};
+                background: {OneSolTheme.BG_PRIMARY};
             }}
 
             /* ========== TOOLTIPS ========== */
             QToolTip {{
-                background: {OneSoulTheme.BG_ELEVATED};
-                color: {OneSoulTheme.TEXT_PRIMARY};
-                border: 1px solid {OneSoulTheme.CYAN};
+                background: {OneSolTheme.BG_ELEVATED};
+                color: {OneSolTheme.TEXT_PRIMARY};
+                border: 1px solid {OneSolTheme.CYAN};
                 padding: 5px;
                 border-radius: 4px;
             }}
 
             /* ========== STACKED WIDGET ========== */
             QStackedWidget {{
-                background: {OneSoulTheme.BG_PRIMARY};
+                background: {OneSolTheme.BG_PRIMARY};
             }}
         """
 
@@ -344,17 +344,17 @@ class Modern3DSidebar(QWidget):
 
         # Toggle button
         self.toggle_btn = QPushButton("☰")
-        self.toggle_btn.setFixedHeight(OneSoulTheme.TOPBAR_HEIGHT)
+        self.toggle_btn.setFixedHeight(OneSolTheme.TOPBAR_HEIGHT)
         self.toggle_btn.setCursor(Qt.PointingHandCursor)
         self.toggle_btn.setStyleSheet(f"""
             QPushButton {{
                 background: transparent;
                 border: none;
-                color: {OneSoulTheme.TEXT_CYAN};
+                color: {OneSolTheme.TEXT_CYAN};
                 font-size: 24px;
             }}
             QPushButton:hover {{
-                background: {OneSoulTheme.BG_HOVER};
+                background: {OneSolTheme.BG_HOVER};
             }}
         """)
         self.toggle_btn.clicked.connect(self.toggle_sidebar)
@@ -376,22 +376,22 @@ class Modern3DSidebar(QWidget):
 
         layout.addStretch()
         self.setLayout(layout)
-        self.setFixedWidth(OneSoulTheme.SIDEBAR_EXPANDED)
+        self.setFixedWidth(OneSolTheme.SIDEBAR_EXPANDED)
 
     def apply_3d_styles(self):
         """Apply 3D depth styles to sidebar"""
         self.setStyleSheet(f"""
             QWidget {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 {OneSoulTheme.BG_SIDEBAR},
-                    stop:0.95 {OneSoulTheme.BG_SIDEBAR},
+                    stop:0 {OneSolTheme.BG_SIDEBAR},
+                    stop:0.95 {OneSolTheme.BG_SIDEBAR},
                     stop:1 rgba(0, 212, 255, 0.1));
-                border-right: 2px solid {OneSoulTheme.BORDER_GLOW};
+                border-right: 2px solid {OneSolTheme.BORDER_GLOW};
             }}
 
             QPushButton {{
                 background: transparent;
-                color: {OneSoulTheme.TEXT_SECONDARY};
+                color: {OneSolTheme.TEXT_SECONDARY};
                 border: none;
                 border-left: 4px solid transparent;
                 border-radius: 0px;
@@ -403,19 +403,19 @@ class Modern3DSidebar(QWidget):
 
             QPushButton:hover {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 {OneSoulTheme.BG_HOVER},
-                    stop:1 {OneSoulTheme.BG_ACTIVE});
-                color: {OneSoulTheme.TEXT_PRIMARY};
-                border-left: 4px solid {OneSoulTheme.CYAN};
+                    stop:0 {OneSolTheme.BG_HOVER},
+                    stop:1 {OneSolTheme.BG_ACTIVE});
+                color: {OneSolTheme.TEXT_PRIMARY};
+                border-left: 4px solid {OneSolTheme.CYAN};
             }}
 
             QPushButton[active="true"] {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 {OneSoulTheme.BG_ACTIVE},
-                    stop:0.5 {OneSoulTheme.BG_ACTIVE},
+                    stop:0 {OneSolTheme.BG_ACTIVE},
+                    stop:0.5 {OneSolTheme.BG_ACTIVE},
                     stop:1 rgba(0, 212, 255, 0.2));
-                color: {OneSoulTheme.TEXT_GOLD};
-                border-left: 4px solid {OneSoulTheme.GOLD};
+                color: {OneSolTheme.TEXT_GOLD};
+                border-left: 4px solid {OneSolTheme.GOLD};
                 font-weight: bold;
             }}
         """)
@@ -431,7 +431,7 @@ class Modern3DSidebar(QWidget):
     def toggle_sidebar(self):
         """Toggle sidebar with animation"""
         self.is_collapsed = not self.is_collapsed
-        target_width = OneSoulTheme.SIDEBAR_COLLAPSED if self.is_collapsed else OneSoulTheme.SIDEBAR_EXPANDED
+        target_width = OneSolTheme.SIDEBAR_COLLAPSED if self.is_collapsed else OneSolTheme.SIDEBAR_EXPANDED
 
         # Animate width
         self.anim = QPropertyAnimation(self, b"minimumWidth")
@@ -586,21 +586,21 @@ class ModernTopBar(QWidget):
 
     def init_ui(self):
         """Initialize top bar"""
-        self.setFixedHeight(OneSoulTheme.TOPBAR_HEIGHT)
+        self.setFixedHeight(OneSolTheme.TOPBAR_HEIGHT)
 
         layout = QHBoxLayout()
         layout.setContentsMargins(20, 8, 20, 8)
 
         # Left: ANIMATED Logo (2x size, no text)
-        animated_logo_path = asset_path("onesoul_animated_logo.html")
-        static_logo_path = asset_path("onesoul_logo.svg")
+        animated_logo_path = asset_path("onesol_animated_logo.html")
+        static_logo_path = asset_path("onesol_logo.svg")
 
         # Try animated HTML logo first (if QWebEngineView available)
         allow_web_engine_logo = USE_ANIMATED_LOGO and HAS_WEB_ENGINE and os.path.exists(animated_logo_path)
 
         if allow_web_engine_logo:
             self.logo = QWebEngineView()
-            self.logo.setFixedSize(240, 145)  # Increased height for OneSoul text visibility
+            self.logo.setFixedSize(240, 145)  # Increased height for OneSol text visibility
 
             # Make background transparent
             self.logo.setStyleSheet("background: transparent;")
@@ -621,9 +621,9 @@ class ModernTopBar(QWidget):
             layout.addWidget(self.logo)
         else:
             # Final fallback: text logo
-            logo_text = QLabel("◈ ONESOUL")
+            logo_text = QLabel("◈ ONESOL")
             logo_text.setStyleSheet(f"""
-                color: {OneSoulTheme.TEXT_GOLD};
+                color: {OneSolTheme.TEXT_GOLD};
                 font-size: 28px;
                 font-weight: bold;
                 letter-spacing: 6px;
@@ -655,9 +655,9 @@ class ModernTopBar(QWidget):
         self.setStyleSheet(f"""
             QWidget {{
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 {OneSoulTheme.BG_SIDEBAR},
+                    stop:0 {OneSolTheme.BG_SIDEBAR},
                     stop:1 rgba(5, 7, 18, 0.95));
-                border-bottom: 2px solid {OneSoulTheme.BORDER_GLOW};
+                border-bottom: 2px solid {OneSolTheme.BORDER_GLOW};
             }}
         """)
 
@@ -674,16 +674,16 @@ class ModernTopBar(QWidget):
         self.license_label.setText(status_text)
 
         if "✅" in status_text:
-            color = OneSoulTheme.CYAN
+            color = OneSolTheme.CYAN
         else:
-            color = OneSoulTheme.BTN_DANGER
+            color = OneSolTheme.BTN_DANGER
 
         self.license_label.setStyleSheet(f"""
             color: {color};
             font-weight: bold;
             font-size: 11px;
             padding: 4px 24px;
-            background: {OneSoulTheme.BG_ELEVATED};
+            background: {OneSolTheme.BG_ELEVATED};
             border: 1px solid {color};
             border-radius: 4px;
         """)
@@ -692,11 +692,11 @@ class ModernTopBar(QWidget):
         brand_html = (
             "<div style='text-align:center; line-height:145%;'>"
             "<span style='color:#EAC502;'>Powerd By</span>"
-            "<span style='color:#00D4FF;'> : OneSoul From The House Of MuskanWaves</span>"
+            "<span style='color:#00D4FF;'> : OneSol</span>"
             "<br/>"
             "<span style='color:#EAC502;'>Email  </span>"
             "<span style='color:#EAC502;'>: </span> "
-            "<span style='color:#00D4FF;'>onesoulforeveryone@gmail.com</span>"
+            "<span style='color:#00D4FF;'>onesolforeveryone@gmail.com</span>"
             "<span style='color:#EAC502;'>  |  Contact  </span>"
             "<span style='color:#EAC502;'>: </span> "
             "<span style='color:#00D4FF;'>+92 3077361139 & +92 3026768888</span>"
@@ -707,7 +707,7 @@ class ModernTopBar(QWidget):
             font-size: 11px;
             font-weight: bold;
             padding: 6px 30px;
-            background: {OneSoulTheme.BG_ELEVATED};
+            background: {OneSolTheme.BG_ELEVATED};
             border: none;
             border-radius: 6px;
         """)
@@ -739,9 +739,9 @@ class Content3DWrapper(QWidget):
         card.setStyleSheet(f"""
             QWidget {{
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 {OneSoulTheme.BG_ELEVATED},
+                    stop:0 {OneSolTheme.BG_ELEVATED},
                     stop:1 rgba(22, 27, 34, 0.8));
-                border: 1px solid {OneSoulTheme.BORDER_GLOW};
+                border: 1px solid {OneSolTheme.BORDER_GLOW};
                 border-radius: 12px;
             }}
         """)
@@ -768,7 +768,7 @@ class Content3DWrapper(QWidget):
 # ==================== MAIN WINDOW ====================
 
 class VideoToolSuiteGUI(QMainWindow):
-    """OneSoul Flow - Professional 3D Modern UI"""
+    """OneSol Flow - Professional 3D Modern UI"""
 
     def __init__(self, license_manager, config):
         super().__init__()
@@ -792,10 +792,10 @@ class VideoToolSuiteGUI(QMainWindow):
 
     def init_ui(self):
         """Initialize UI"""
-        self.setWindowTitle("OneSoul Flow - Video Automation Suite")
+        self.setWindowTitle("OneSol Flow - Video Automation Suite")
         self.setGeometry(100, 100, 1400, 900)
         self.setMinimumSize(1024, 768)
-        self.setWindowIcon(QIcon(asset_path("onesoul_logo.ico")))
+        self.setWindowIcon(QIcon(asset_path("onesol_logo.ico")))
 
         # Central widget
         central = QWidget()
@@ -879,7 +879,7 @@ class VideoToolSuiteGUI(QMainWindow):
         title_lbl = QLabel(title)
         title_lbl.setAlignment(Qt.AlignCenter)
         title_lbl.setStyleSheet(
-            f"color: {OneSoulTheme.TEXT_CYAN}; font-size: 24px; font-weight: bold;"
+            f"color: {OneSolTheme.TEXT_CYAN}; font-size: 24px; font-weight: bold;"
         )
         layout.addWidget(title_lbl)
 
@@ -887,7 +887,7 @@ class VideoToolSuiteGUI(QMainWindow):
         subtitle_lbl.setAlignment(Qt.AlignCenter)
         subtitle_lbl.setWordWrap(True)
         subtitle_lbl.setStyleSheet(
-            f"color: {OneSoulTheme.TEXT_SECONDARY}; font-size: 14px;"
+            f"color: {OneSolTheme.TEXT_SECONDARY}; font-size: 14px;"
         )
         layout.addWidget(subtitle_lbl)
         layout.addStretch(1)
@@ -915,7 +915,7 @@ class VideoToolSuiteGUI(QMainWindow):
     def apply_global_theme(self):
         """Apply centralized theme to entire app"""
         # Apply global stylesheet
-        self.setStyleSheet(OneSoulTheme.get_global_stylesheet())
+        self.setStyleSheet(OneSolTheme.get_global_stylesheet())
 
         # Set Fusion style for modern look
         QApplication.setStyle("Fusion")
@@ -986,6 +986,6 @@ class VideoToolSuiteGUI(QMainWindow):
         from modules.ui import LicenseInfoDialog
         dialog = LicenseInfoDialog(self.license_manager, self)
         # Apply theme to dialog
-        dialog.setStyleSheet(OneSoulTheme.get_global_stylesheet())
+        dialog.setStyleSheet(OneSolTheme.get_global_stylesheet())
         dialog.exec_()
         self.update_license_status()

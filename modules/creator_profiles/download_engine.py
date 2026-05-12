@@ -463,11 +463,12 @@ def _is_profile_listing_url(platform_key: str, url: str) -> bool:
 
 # Ã¢â€â‚¬Ã¢â€â‚¬ Video Download (method3-style: UA rotation + Chrome 120 headers) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
-# Smart format: prefer mp4+m4a merge, fallback to best available
+# Smart format: prefer 1080p/720p mp4+m4a merge, fallback to best available
 _SMART_FORMAT = (
-    "bestvideo[ext=mp4]+bestaudio[ext=m4a]"
-    "/bestvideo+bestaudio"
-    "/best[ext=mp4]"
+    "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]"
+    "/bestvideo[height<=1080]+bestaudio"
+    "/best[height<=1080][ext=mp4]"
+    "/best[height<=1080]"
     "/best"
 )
 
@@ -3718,6 +3719,31 @@ class CreatorDownloadWorker(QThread):
                 print(f"[CreatorProfile] CRITICAL: No working ffmpeg found - skipping all post-processing")
             else:
                 self.progress.emit(f"ffmpeg OK: {self.ffmpeg}")
+
+            # --- Universal Facebook Policy Bypass (Apply to all platforms) ---
+            if ffmpeg_ok:
+                from .split_edit_engine import apply_facebook_bypass
+                self.progress.emit("Applying Universal Facebook-Safe Optimization (Studio-Quality)...")
+                processed_downloads = []
+                for fp in downloads:
+                    if self._stop: break
+                    # Apply bypass to ensure content is safe for Facebook upload regardless of source
+                    hq_path = apply_facebook_bypass(fp, self.creator_folder, self.ffmpeg, self.progress.emit)
+                    if hq_path and hq_path.exists():
+                        # Replace the original with the bypassed high-quality version
+                        # Rename hq_path to original name to ensure all downstream logic uses it
+                        final_target = fp
+                        try:
+                            if fp.exists(): fp.unlink()
+                            shutil.move(str(hq_path), str(final_target))
+                            processed_downloads.append(final_target)
+                            self.progress.emit(f"  HQ Replacement Success: {final_target.name}")
+                        except Exception as e:
+                            self.progress.emit(f"  HQ Move Error: {e}")
+                            processed_downloads.append(hq_path if hq_path.exists() else fp)
+                    else:
+                        processed_downloads.append(fp)
+                downloads = processed_downloads
 
             from .watermark_engine import apply_watermark_inplace
 
